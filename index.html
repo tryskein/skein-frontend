@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Favicon — a ball of yarn (sk-550), the same drawing as the header
+         mark (`src/pages/shell/SkeinMark.tsx`). The SVG scales to any size
+         and follows the OS light/dark scheme; the ICO (16/32/48, rendered
+         from the SVG) is the fallback for UAs without SVG icons. The ICO
+         had been lost once already: a zero-byte copy on one branch was
+         deleted as "empty" and the deletion won the merge over the real
+         file on the other — regenerate it from the SVG, never leave the
+         link pointing at nothing. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Theme-color drives the mobile address-bar / desktop title-bar tint.
+         Paired with media queries so dark-theme users see the dark
+         palette in browser chrome instead of a flash of light orange. -->
+    <meta name="theme-color" content="#fdf6e3" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#002b36" media="(prefers-color-scheme: dark)" />
+    <!-- Tells the UA that scrollbars + form controls should follow the
+         page theme. CSS already sets `color-scheme` on <html> per
+         data-theme; this meta is informational mirroring for UAs that
+         consult the document head before computing styles. -->
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Skein — centralized task tracker for solo developers and small teams"
+    />
+    <title>skein</title>
+    <!-- External theme-boot script keeps strict CSP `script-src 'self'`
+         intact (no inline 'unsafe-inline' required). Loaded
+         synchronously so <html data-theme> lands before React mounts
+         and we never flash the wrong palette. -->
+    <script src="/theme-boot.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

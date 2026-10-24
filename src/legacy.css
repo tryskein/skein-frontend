@@ -1,0 +1,161 @@
+/*
+ * Skein ember palette — warm 80s CRT terminal aesthetic.
+ *
+ * sk-303.15 removed the `/legacy/*` route tree wholesale, but a handful
+ * of components that route tree used are still reused verbatim by the
+ * new shell (ErrorFrame, AttachmentDropzone, AttachmentList,
+ * UserMention, CommentsThread) plus the login page — this file is their
+ * base stylesheet, on the original `--skein-*` tokens.
+ *
+ * TerminalFrame used to be on that list. sk-414.2 dropped it from the
+ * three card sections and deleted the component, which left
+ * `.skein-terminal-frame` / `-title` here with nothing to render them;
+ * sk-414.6 removed both rules and the frame's line in the
+ * `forced-colors` block.
+ *
+ * sk-418 finished that sweep. Counting consumers across the whole tree
+ * — not just `.tsx`, and not with `grep`, which reports a file with a
+ * Unicode mark in it as binary and says nothing — found seven more
+ * rules with no `className` reaching them anywhere: `.skein-frame`,
+ * `.skein-frame-bright`, `.skein-prompt`, `.skein-dim`, `.skein-box`,
+ * `.skein-cursor` (with its `@keyframes skein-blink` and both of its
+ * media rules) and `.skein-dropzone` (with its four state rules). The
+ * dropzone is the instructive one: `AttachmentDropzone.tsx` renders
+ * `detail-dropzone`, an index.css class, and has done since the shell
+ * took the widget over — `index.css` nevertheless still carried a
+ * `.col-details .skein-dropzone[data-state='dragover']` repaint, which
+ * is what «somebody thought this was alive» looks like from the inside.
+ *
+ * What is left is exactly what the new shell renders: `.skein-error-frame`
+ * / `-title` (ErrorFrame.tsx), `.skein-highlight b` (SearchHighlight.tsx),
+ * `.skein-mention` (UserMention.tsx), `.skein-sr-only`
+ * (AttachmentDropzone.tsx).
+ *
+ * The new UI runs on the Stage 2.2 role dictionary (see src/index.css) —
+ * a neutral ramp `--n-50…--n-900` with the surface,
+ * ink and semantic roles cut from it (`--bg`, `--surface`, `--ink*`,
+ * `--primary*`, `--secondary`, `--accent`, `--ok` / `--warn` / `--err`
+ * / `--info`, `--violet`, `--focus`). It replaced the
+ * Solarized-descended `--bg-*` / `--fg-*` dictionary this note used to
+ * name, and those prefixes no longer exist. The legacy tokens remain on
+ * `--skein-*`, so the two families still cannot collide.
+ *
+ * `index.css` layers `.col-details`-scoped overrides on top (rebinding
+ * the `--skein-*` custom properties, see the "Legacy widgets re-skinned
+ * for the new shell" section there) so these components read Solarized
+ * inside the Details column while the login page keeps the ember look.
+ *
+ * Imported globally from src/main.tsx so these components keep working
+ * anywhere they're rendered.
+ */
+
+:root {
+  --skein-bg: #1a1410;
+  --skein-bg-elev: #221814;
+  --skein-bg-elev-2: #2a1f18;
+  --skein-fg: #e8d5b7;
+  --skein-fg-dim: #a89377;
+  /* Bumped from #7a6a55 to give a safety margin over WCAG AA 4.5:1 on
+   * --skein-bg-elev (#221814) — meta lines render at 11px, where the
+   * old ratio (~4.6) sat right at the boundary. */
+  --skein-fg-muted: #8a7a65;
+  --skein-accent: #ff7a3d;
+  --skein-accent-bright: #ff8c4a;
+  --skein-accent-dim: #cc4d1c;
+  --skein-border: #3d2a1f;
+  --skein-border-bright: #574739;
+  --skein-error: #e85d3d;
+}
+
+/* Windows High Contrast Mode / forced-colors — system overrides our
+ * palette. Restore visible borders on container chrome and use system
+ * link/text colours so the UI stays parsable when the warm-orange
+ * theme collapses. */
+@media (forced-colors: active) {
+  .skein-error-frame {
+    border: 1px solid CanvasText;
+  }
+  .skein-highlight b {
+    color: LinkText;
+  }
+  /* Mantine Radio/Checkbox checked state collapses to system colors —
+   * pin the filled indicator to Highlight so selected state remains
+   * visually distinct from unselected. */
+  .mantine-Radio-radio:checked,
+  .mantine-Checkbox-input:checked {
+    background-color: Highlight;
+    border-color: Highlight;
+  }
+  .mantine-Radio-icon,
+  .mantine-Checkbox-icon {
+    color: HighlightText;
+  }
+}
+
+/* ────────────── Error frame ────────────── */
+.skein-error-frame {
+  border: 1px solid var(--skein-error);
+  background: color-mix(in srgb, var(--skein-error) 8%, transparent);
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--skein-error);
+}
+
+.skein-error-frame-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+/* ────────────── Search highlight ────────────── */
+/*
+ * `<b>` inside ts_headline output rendered via SearchHighlight (used by
+ * the project/task rows in the new shell). This ember-accent rule is
+ * overridden by index.css's own `.skein-highlight b` for the Solarized
+ * look; it survives here for the `forced-colors` fallback above, which
+ * index.css does not duplicate.
+ */
+.skein-highlight b {
+  color: var(--skein-accent);
+  font-weight: 700;
+  background: transparent;
+}
+
+/* User mention */
+.skein-mention {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+}
+.skein-mention:hover {
+  text-decoration-color: currentColor;
+}
+.skein-mention:focus-visible {
+  outline: 2px solid var(--skein-accent);
+  outline-offset: 2px;
+  text-decoration-color: currentColor;
+}
+@media (forced-colors: active) {
+  .skein-mention {
+    color: LinkText;
+  }
+  .skein-mention:focus-visible {
+    outline-color: LinkText;
+  }
+}
+
+/* ────────────── Visually hidden (ember-surface alias) ────────────── */
+.skein-sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

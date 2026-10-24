@@ -1,0 +1,35 @@
+# Build outputs (rebuilt inside container)
+dist/
+node_modules/
+
+# IDE/editor noise
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env files
+.env
+.env.*
+
+# Git metadata
+.git/
+.gitignore
+
+# Docker metadata
+Dockerfile
+.dockerignore
+
+# Documentation
+README.md
+*.md
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Mutation-testing sandbox and test reports (Stryker copies the project into
+# .stryker-tmp while it runs; e2e builds this image from the working tree and
+# must not pick the sandbox up)
+.stryker-tmp/
+reports/

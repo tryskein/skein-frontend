@@ -1,0 +1,65 @@
+name: CI
+
+# Type check and unit tests. e2e (Playwright against the live stack) and
+# mutation testing are run by hand and are not part of this workflow.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Typecheck (tsc -b and the browser project)
+        run: npm run typecheck
+      - name: Check the test-group registry and the Playwright pin
+        run: node scripts/check-test-groups.mjs ""
+
+  unit:
+    name: Unit tests (vitest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Run vitest
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test -- --run 2>&1 | tee vitest.out
+          # Strip ANSI colour codes before reading the summary lines.
+          sed 's/\x1b\[[0-9;]*m//g' vitest.out > vitest-plain.out
+          if ! grep -Eq 'Tests[[:space:]]+[1-9][0-9]* passed' vitest-plain.out; then
+            echo "::error::zero vitest tests passed or the suite did not run"
+            exit 1
+          fi
+          if grep -Eq 'Tests[[:space:]]+0 passed|No test files found' vitest-plain.out; then
+            echo "::error::empty vitest run"
+            exit 1
+          fi
+          if grep -Eq 'Test Files.*[1-9][0-9]* failed' vitest-plain.out; then
+            echo "::error::vitest reported failures"
+            exit 1
+          fi

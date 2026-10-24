@@ -1,0 +1,47 @@
+<!--
+  Skein favicon: a ball of yarn (sk-550). The SAME drawing as
+  src/pages/shell/SkeinMark.tsx; redraw one, redraw the other.
+
+  NO DOUBLE HYPHEN ANYWHERE IN THIS COMMENT: XML forbids the sequence
+  inside a comment and Chromium then refuses the whole file.
+
+  A favicon is fetched as its own document, so the page's theme variables
+  never reach it. The colours are therefore written out: the light theme's
+  accent (#d2521a) with wraps and sheen mixed from it the way index.css
+  mixes them for the header, and the dark theme's accent (#f0834d) under
+  prefers-color-scheme, which the browser evaluates for the tab.
+
+  favicon.ico is built from this file in its light colours: render it to
+  16, 32 and 48 px PNGs in Chromium (the Playwright one in node_modules),
+  then pack them with ImageMagick:
+    convert fav16.png fav32.png fav48.png public/favicon.ico
+  Do NOT let ImageMagick render the SVG itself: its built in renderer
+  ignores the clip path and paints the wraps outside the ball.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <style>
+    @media (prefers-color-scheme: dark) {
+      .ball { fill: #f0834d; }
+      .thread { stroke: #f0834d; }
+      .wrap { stroke: #955130; }
+      .sheen { stroke: #f4a67f; }
+    }
+  </style>
+  <defs>
+    <clipPath id="ball">
+      <circle cx="10.8" cy="10.4" r="9.2"/>
+    </clipPath>
+  </defs>
+  <g transform="translate(0.48 0.84) scale(0.9)">
+    <circle class="ball" cx="10.8" cy="10.4" r="9.2" fill="#d2521a"/>
+    <g class="wrap" clip-path="url(#ball)" fill="none" stroke="#823310" stroke-width="1.25" stroke-linecap="round">
+      <path d="M2.2 8.2 C 6.5 4.6, 13.5 4.9, 19.6 9.4"/>
+      <path d="M1.8 11.6 C 7.5 13.2, 13.8 13.4, 19.9 11.9"/>
+      <path d="M3.0 15.4 C 8 19.0, 13.5 19.2, 18.4 15.8"/>
+      <path d="M7.6 1.6 C 9.4 7.5, 9.2 13.8, 7.4 19.6"/>
+      <path d="M14.4 1.8 C 13.4 7.8, 13.6 13.4, 15.2 19.2"/>
+    </g>
+    <path class="sheen" d="M4.6 7.0 C 5.6 5.2, 7.2 3.9, 9.2 3.3" fill="none" stroke="#de825a" stroke-width="1.15" stroke-linecap="round" opacity="0.9"/>
+  </g>
+  <path class="thread" d="M17.2 6.2 C 20.6 6.4, 22.4 8.6, 21.0 11.0 C 19.6 13.4, 22.8 15.0, 21.0 18.2 C 19.0 21.6, 12.0 22.8, 6.4 21.4 C 3.8 20.8, 2.4 21.8, 1.2 23.0" fill="none" stroke="#d2521a" stroke-width="1.4" stroke-linecap="round"/>
+</svg>

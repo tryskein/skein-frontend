@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# TypeScript / Vite cache
+*.tsbuildinfo
+.vite/
+
+# Local env (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+
+# tsc build artifacts (vite.config.ts → .js + .d.ts when tsc -b runs)
+vite.config.js
+vite.config.d.ts
+
+# Mutation testing (Stryker) — sandbox copy + generated HTML report
+.stryker-tmp/
+reports/
+
+# Local environment — real values and secrets never go into git.
+.env.*
+!.env.example
+!.env.*.example
+
+# AI agent local settings (per-developer, may hold tokens).
+.claude/settings.local.json
+.mcp.json
+CLAUDE.local.md
+docs/coderev/
+docs/research/
+docs/plan/
+docs/tasks/

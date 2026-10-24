@@ -1,0 +1,22 @@
+{
+  // sk-443 — types of the browser checks. A standalone tsc project (not
+  // a reference of the root `tsc -b`: a composite project would require keeping the whole
+  // `src/` under its rootDir, which the specs import for API types and
+  // locale objects). Checked by the script `npm run typecheck` — that is,
+  // by the `lint` job; it does not touch the app build (`npm run build`).
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["**/*.ts", "**/*.mjs"]
+}
