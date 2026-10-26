@@ -79,7 +79,8 @@ whoever builds or deploys the image will come across them.
   substitutable placeholder. Changing `PORT` therefore does **not** change the
   port nginx binds. Publish a different host port instead (`-p 8080:5102`).
 - **`NODE_ENV`, `CHOKIDAR_USEPOLLING`** — set on the optional
-  `skein-frontend-dev` container in the root `docker-compose.local.yml`. They are
+  `skein-frontend-dev` container of the development overlay
+  `docker-compose.local.build.yml` in the root repository. They are
   consumed by Node and by the file watcher, not by this project's code.
   `CHOKIDAR_USEPOLLING=true` is on because bind mounts on WSL2 / Docker Desktop
   do not deliver inotify events reliably.
