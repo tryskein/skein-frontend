@@ -52,6 +52,7 @@ reports/
 .claude/settings.local.json
 .mcp.json
 CLAUDE.local.md
+AGENTS.local.md
 docs/coderev/
 docs/research/
 docs/plan/

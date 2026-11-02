@@ -99,8 +99,8 @@ npm run test:mutation    # mutation testing (StrykerJS), advisory
 
 The end-to-end suite covers the whole product. It lives in `browser/e2e/` and
 runs from the umbrella with `./scripts/e2e-test.sh`. Commands, narrowed runs
-and prerequisites are in the [`## Testing`](CLAUDE.md#testing) section of
-`CLAUDE.md`.
+and prerequisites are in the [`## Testing`](AGENTS.md#testing) section of
+`AGENTS.md`.
 
 ## Contributing
 
