@@ -522,9 +522,11 @@ function closedWithCommitsOf(m: MatrixUserRow): number {
  * five. The maintainers want five rows (2026-10-03): whoever closed in the
  * window WITHOUT a commit joins with a count of 0.
  *
- * The population is `matrixUsers` of the same response — the matrix is
- * not capped and carries every closer with their commit-backed closes —
- * so the backend is untouched. The board itself is capped
+ * The population is `matrixUsers` of the same response, which carries
+ * each closer with their commit-backed closes but only for the first 50
+ * actors by closed human + directed tasks (`store.go#matrixRowCap`): a
+ * closer past that cap without a place on the board is not topped up.
+ * The board itself is capped
  * (`store.go#scoringLeaderboardLimit`, ten rows ordered by name on a
  * tie): ranking only what it returned would drop a person past the cap
  * who wins on the tie-break below (sk-551.2). A person
@@ -536,7 +538,11 @@ function closedWithCommitsOf(m: MatrixUserRow): number {
  */
 function rankClosedWithCommits(scoring: ScoringResult | undefined): LeaderboardEntry[] {
   if (!scoring) return [];
-  const matrix = new Map((scoring.matrixUsers ?? []).map((m) => [m.username, m]));
+  // The tie-break reads all closes through `matrixFor`, as the cards do, so
+  // a board person past the 50-row matrix cap ties on their real closes
+  // rather than on 0 (sk-192). The population below stays `matrixUsers`
+  // closers plus the board.
+  const allClosed = (username: string) => totalClosedOf(matrixFor(scoring, username));
   const counts = new Map<string, number>();
   for (const m of scoring.matrixUsers ?? []) {
     if (totalClosedOf(m) > 0) counts.set(m.username, closedWithCommitsOf(m));
@@ -547,7 +553,7 @@ function rankClosedWithCommits(scoring: ScoringResult | undefined): LeaderboardE
     .sort(
       (a, b) =>
         b.count - a.count ||
-        totalClosedOf(matrix.get(b.username)) - totalClosedOf(matrix.get(a.username)) ||
+        allClosed(b.username) - allClosed(a.username) ||
         (a.username < b.username ? -1 : a.username > b.username ? 1 : 0),
     );
 }
@@ -566,10 +572,21 @@ function podiumTop3(scoring: ScoringResult | undefined): LeaderboardEntry[] {
     .slice(0, 3);
 }
 
-/** Resolve a username to its per-axis closed counts via the matrix. */
+/**
+ * Resolve a leaderboard person to their per-axis breakdown.
+ *
+ * sk-192 — `matrixUsers` stops at the first 50 actors by closed human +
+ * directed tasks, so a hero ranked on commit-backed autonomous closes can
+ * be missing from it. `leaderboardUsers` carries the breakdown of everyone
+ * on a leaderboard and is read first; `matrixUsers` stays the fallback for
+ * an API that does not send it.
+ */
 function matrixFor(scoring: ScoringResult | undefined, username: string): MatrixUserRow | undefined {
   if (!scoring) return undefined;
-  return scoring.matrixUsers?.find((r) => r.username === username);
+  return (
+    scoring.leaderboardUsers?.find((r) => r.username === username) ??
+    scoring.matrixUsers?.find((r) => r.username === username)
+  );
 }
 
 // ───────────────────────── Components ─────────────────────────

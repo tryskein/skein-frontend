@@ -114,6 +114,7 @@ import {
   getDashboardScoring,
   type AgentsResult,
   type DashboardFeedResponse,
+  type MatrixUserRow,
   type ProjectsResult,
   type ScoringResult,
 } from '../../api/dashboard';
@@ -1766,6 +1767,180 @@ describe('ActivityDashboard — sk-551.2 closed-with-commits top-up', () => {
     await waitFor(() =>
       expect(board().map((r) => r.name)).toEqual(['ann', 'cid', 'ben', 'hal', '—']),
     );
+  });
+});
+
+/* ═════════════════════════════════════════════════════════════════════
+ * sk-192 — a hero past the 50-row matrix cap still shows real stats.
+ *
+ * Reference — sk-192: the podium ranks by closed_with_commits but read a
+ * hero's created / closed / commits / comments from `matrixUsers`, which
+ * the backend caps at the first 50 actors by closed_human_driven. A hero
+ * whose commit-backed closes are on autonomous tasks falls past that cap,
+ * and the card showed the hero's points next to zeros. The response now
+ * carries `leaderboardUsers` — the same breakdown for everyone on a
+ * leaderboard — and the per-user table keeps reading `matrixUsers` alone.
+ * ═════════════════════════════════════════════════════════════════════ */
+describe('ActivityDashboard — sk-192 leaderboard stats past the matrix cap', () => {
+  function row(username: string, over: Partial<MatrixUserRow>): MatrixUserRow {
+    return {
+      username,
+      issuesCreatedHuman: 0,
+      issuesCreatedDirected: 0,
+      issuesCreatedAutonomous: 0,
+      issuesClosedHuman: 0,
+      issuesClosedDirected: 0,
+      issuesClosedAutonomous: 0,
+      closedWithCommitsHuman: 0,
+      closedWithCommitsDir: 0,
+      closedWithCommitsAuto: 0,
+      commentsHuman: 0,
+      commentsDirected: 0,
+      commentsAutonomous: 0,
+      closedHumanDriven: 0,
+      ...over,
+    };
+  }
+
+  // 50 busier human-driven closers fill the capped matrix; none has a
+  // commit-backed close, so none reaches the podium.
+  const fillers = Array.from({ length: 50 }, (_, i) =>
+    row(`f${String(i + 1).padStart(2, '0')}`, { issuesClosedHuman: 2, closedHumanDriven: 2, commentsHuman: 1 }),
+  );
+  // zoe: 4 created, 3 closed — all autonomous, all with a commit — and
+  // 5 human + 2 autonomous comments. closed_human_driven 0.
+  const zoe = row('zoe', {
+    issuesCreatedAutonomous: 4,
+    issuesClosedAutonomous: 3,
+    closedWithCommitsAuto: 3,
+    commentsHuman: 5,
+    commentsAutonomous: 2,
+  });
+
+  function capped(withLeaderboardUsers: boolean): ScoringResult {
+    return {
+      ...scoring(),
+      leaderboards: {
+        closed_human_driven: fillers.slice(0, 10).map((f) => ({ username: f.username, count: 2 })),
+        closed_with_commits: [{ username: 'zoe', count: 3 }],
+      },
+      matrixUsers: fillers,
+      ...(withLeaderboardUsers
+        ? { leaderboardUsers: [...fillers.slice(0, 10), zoe] }
+        : {}),
+    };
+  }
+
+  const text = (el: Element | null | undefined) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+  async function renderWith(res: ScoringResult) {
+    mockedScoring.mockResolvedValue(res);
+    mockedFeed.mockResolvedValue(feedSample());
+    render(
+      <Wrap>
+        <ActivityDashboard />
+      </Wrap>,
+    );
+    await waitFor(() => {
+      if (!document.querySelector('.activity-podium-card')) throw new Error('podium not rendered yet');
+    });
+    return document.querySelector('.activity-podium-card')!;
+  }
+
+  function stats(card: Element): Record<string, string> {
+    return Object.fromEntries(
+      [...card.querySelectorAll('.activity-podium-stat')].map((r) => [
+        text(r.querySelector('.activity-podium-stat-label')),
+        text(r.querySelector('.activity-podium-stat-value')),
+      ]),
+    );
+  }
+
+  function boardDetail(name: string): string {
+    const list = screen.getByText('Top 5 · closed with commits').closest('.activity-leaderboard')!;
+    const li = [...list.querySelectorAll('li')].find(
+      (l) => text(l.querySelector('.activity-leaderboard-name')) === name,
+    );
+    return text(li?.querySelector('.activity-leaderboard-detail'));
+  }
+
+  function tableUsers(): string[] {
+    const table = screen.getByRole('table', { name: 'Per-user metrics matrix' });
+    return within(table)
+      .getAllByRole('rowheader')
+      .map((h) => text(h));
+  }
+
+  test('the hero card and the board read the hero from leaderboardUsers', async () => {
+    const card = await renderWith(capped(true));
+    expect(text(card.querySelector('.activity-podium-name'))).toBe('zoe');
+    expect(text(card.querySelector('.activity-podium-rank-score'))).toBe('3 pts');
+    expect(stats(card)).toEqual({
+      closed: '3',
+      '+w/commits': '3',
+      created: '4',
+      comments: '7',
+      '🤖 autonomous': '3',
+    });
+    const closedSplit = card.querySelector('.activity-podium-stat .activity-podium-stat-breakdown')!;
+    expect([...closedSplit.querySelectorAll('.axis-h, .axis-d, .axis-a')].map((e) => e.textContent)).toEqual([
+      'h 0',
+      'd 0',
+      'a 3',
+    ]);
+    expect(boardDetail('zoe')).toBe('3/3 closes · 100%');
+  });
+
+  test('the per-user table still lists matrixUsers only, whatever the sort', async () => {
+    await renderWith(capped(true));
+    const firstTen = fillers.slice(0, 10).map((f) => f.username);
+    expect(tableUsers()).toEqual(firstTen);
+    // Sorted by human comments zoe (5) would lead if the table read
+    // leaderboardUsers; it does not, so the fillers (1 each) stay.
+    const table = screen.getByRole('table', { name: 'Per-user metrics matrix' });
+    fireEvent.click(within(table).getByRole('button', { name: /comments/ }));
+    expect(tableUsers()).not.toContain('zoe');
+    expect(tableUsers()).toEqual(firstTen);
+  });
+
+  test('a tie on commit-backed closes resolves by all closes for a hero past the cap too', async () => {
+    // Reference — the acceptance of sk-551.2: commit-backed closes ↓, then
+    // all closes in the window ↓, then the name. amy (inside the matrix) and
+    // zoe (past the cap, only in leaderboardUsers) both have 3; zoe closed
+    // 5 in the window, amy 4, so zoe ranks first on the podium and the board.
+    const amy = row('amy', { issuesClosedHuman: 4, closedWithCommitsHuman: 3, closedHumanDriven: 4 });
+    const zoe5 = row('zoe', { issuesClosedAutonomous: 5, closedWithCommitsAuto: 3 });
+    const res: ScoringResult = {
+      ...scoring(),
+      leaderboards: {
+        closed_human_driven: [amy, ...fillers.slice(0, 9)].map((r) => ({ username: r.username, count: r.closedHumanDriven })),
+        // The backend's own tie order (`actor ASC`): amy before zoe.
+        closed_with_commits: [
+          { username: 'amy', count: 3 },
+          { username: 'zoe', count: 3 },
+        ],
+      },
+      matrixUsers: [amy, ...fillers.slice(0, 49)],
+      leaderboardUsers: [amy, ...fillers.slice(0, 9), zoe5],
+    };
+    await renderWith(res);
+    const podium = [...document.querySelectorAll('.activity-podium-card .activity-podium-name')].map((n) => text(n));
+    expect(podium).toEqual(['zoe', 'amy']);
+    const list = screen.getByText('Top 5 · closed with commits').closest('.activity-leaderboard')!;
+    const board = [...list.querySelectorAll('li')].map((l) => text(l.querySelector('.activity-leaderboard-name')));
+    expect(board.slice(0, 2)).toEqual(['zoe', 'amy']);
+    expect(boardDetail('zoe')).toBe('3/5 closes · 60%');
+  });
+
+  test('a response without leaderboardUsers falls back to matrixUsers', async () => {
+    // An API from before sk-192: no leaderboardUsers. The hero is inside
+    // the matrix there, and the card reads him from it as before.
+    const old = capped(false);
+    old.matrixUsers = [...fillers.slice(0, 49), zoe];
+    const card = await renderWith(old);
+    expect(text(card.querySelector('.activity-podium-name'))).toBe('zoe');
+    expect(stats(card)).toMatchObject({ closed: '3', '+w/commits': '3', created: '4', comments: '7' });
+    expect(boardDetail('zoe')).toBe('3/3 closes · 100%');
   });
 });
 

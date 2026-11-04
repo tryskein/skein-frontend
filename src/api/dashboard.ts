@@ -66,7 +66,14 @@ export interface ScoringResult {
   scope: MetricScope;
   metrics: MetricRow[];
   leaderboards: Record<string, LeaderboardEntry[]>;
+  /** The per-user breakdown of the first 50 actors by `closedHumanDriven`. */
   matrixUsers: MatrixUserRow[];
+  /**
+   * sk-192 — the same breakdown for every person on any of `leaderboards`,
+   * including those past the 50-row `matrixUsers` cap. Absent from an API
+   * older than sk-192; `matrixUsers` is the fallback then.
+   */
+  leaderboardUsers?: MatrixUserRow[];
 }
 
 export interface ScoringQuery {
