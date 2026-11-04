@@ -64,6 +64,8 @@ const P = '11111111-2222-3333-4444-555555555555';
 const page = () => ({ pages: [{ items: [], hasMore: false }], pageParams: [undefined] });
 const projectList = (lens: string, status: string) =>
   ['tasks', 'project', P, lens, status, 'all', 'all', 'all', '', '', 'updated', ''];
+const searchList = (lens: string) =>
+  ['tasks', 'search', P, 'active', 'all', 'all', 'all', '', 'needle', '', '', lens];
 
 /** Keys personal screens and their neighbours read. */
 const KEYS = {
@@ -79,6 +81,9 @@ const KEYS = {
   tasksP: projectList('all', 'active'),
   tasksPUnreviewed: projectList('all', 'unreviewed'),
   tasksAll: ['tasks', 'all', 'cross-project', 'active', 'all', 'all', 'all', '', 'updated', ''],
+  searchAll: searchList('all'),
+  searchDelegated: searchList('outbox'),
+  searchOnMe: searchList('on-me'),
   detail: ['issues', 'detail', 'sk-1'],
   projectsLookup: ['projects', 'list', 'shell'],
   projectsInfinite: ['projects', 'list', 'shell', 'infinite', '', 'all'],
@@ -99,7 +104,7 @@ type KeyName = keyof typeof KEYS;
 
 const INFINITE: KeyName[] = [
   'tasksOnMe', 'tasksCreatedBy', 'tasksUnreviewed', 'tasksPOutbox', 'tasksP', 'tasksPUnreviewed',
-  'tasksAll', 'projectsInfinite', 'projectsInfiniteLens',
+  'tasksAll', 'searchAll', 'searchDelegated', 'searchOnMe', 'projectsInfinite', 'projectsInfiniteLens',
 ];
 
 let qc: QueryClient;
@@ -158,7 +163,7 @@ describe('No. 75 — a personal signal re-reads exactly the keys of its areas', 
     ['lens', ['counts', 'projectsInfiniteLens', 'componentsPLens']],
     // membership of the personal task lists: "assigned to me", "created by me" and
     // the project lists under a lens — not the plain lists
-    ['tasks', ['tasksOnMe', 'tasksCreatedBy', 'tasksUnreviewed', 'tasksPOutbox']],
+    ['tasks', ['tasksOnMe', 'tasksCreatedBy', 'tasksUnreviewed', 'tasksPOutbox', 'searchDelegated', 'searchOnMe']],
     // counters, the lists filtered by «unreviewed», the open card's private fields
     ['unreviewed', ['counts', 'tasksUnreviewed', 'tasksPUnreviewed', 'detail']],
     ['projects', ['projectsLookup', 'projectsInfinite', 'projectsInfiniteLens', 'membersP']],

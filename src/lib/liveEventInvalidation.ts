@@ -951,7 +951,7 @@ export interface TasksListInfo {
   kind: 'project' | 'search' | 'all' | 'me';
   /** Project UUID, `'all'`, or the lens of a `'me'` surface. */
   scope: unknown;
-  /** `'all'` / `'outbox'` / `'on-me'` on project lists; undefined elsewhere. */
+  /** `'all'` / `'outbox'` / `'on-me'` on project and search lists. */
   lens: unknown;
   /** Status filter of the column (`'blocked'`, `'unreviewed'`, …). */
   status: unknown;
@@ -971,7 +971,7 @@ export function tasksListInfo(key: readonly unknown[]): TasksListInfo | null {
     case 'project':
       return { kind: 'project', scope: key[2], lens: key[3], status: key[4], search: str(key[9]) };
     case 'search':
-      return { kind: 'search', scope: key[2], lens: undefined, status: key[3], search: str(key[8]) };
+      return { kind: 'search', scope: key[2], lens: key[11], status: key[3], search: str(key[8]) };
     case 'all':
       return { kind: 'all', scope: 'all', lens: undefined, status: key[3], search: str(key[7]) };
     case 'me':

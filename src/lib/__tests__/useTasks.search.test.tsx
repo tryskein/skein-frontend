@@ -3,9 +3,10 @@
  *
  * Asserts that a non-empty search box on the project-scoped and "All
  * projects" surfaces routes to the hybrid `globalSearch` (RRF) endpoint
- * instead of the legacy `text=` / `q=` list paths, and that the lens
- * surfaces (outbox / on-me) deliberately STAY on their list endpoints
- * with client-side search. Also covers `degraded:true` handling and the
+ * instead of the legacy `text=` / `q=` list paths. Project-scoped lenses
+ * use hybrid search with ownership predicates; cross-project outbox /
+ * on-me surfaces retain their list endpoints and client-side title search.
+ * Also covers `degraded:true` handling and the
  * `total` = loaded-row-count policy in search mode.
  *
  * We render a tiny harness that calls `useTasks` and capture the wire
@@ -31,6 +32,7 @@ import type {
   TasksSortKey,
 } from '../../api/issues';
 import type { SearchParams, SearchResponse, SearchItem } from '../../api/search';
+import { ApiError } from '../../api/client';
 import type { UseTasksResult } from '../useTasks';
 
 const listIssuesSpy = vi.fn<(projectId: string, params?: ListIssuesParams) => Promise<ListIssuesResult>>();
@@ -74,6 +76,7 @@ vi.mock('../useProjectByHandle', () => {
 });
 
 import { useTasks } from '../useTasks';
+import { invalidateForSignal } from '../livePersonalSignal';
 
 function emptyResult(): ListIssuesResult {
   return { items: [], total: 0, hasMore: false, nextCursor: null };
@@ -125,6 +128,7 @@ afterEach(() => cleanup());
 
 interface HarnessProps {
   selectedProject: string | null;
+  selectedComponent?: string | null;
   outboxMode?: boolean;
   onMeMode?: boolean;
   search: string;
@@ -141,7 +145,7 @@ let lastResult: UseTasksResult | null = null;
 function Harness(props: HarnessProps) {
   lastResult = useTasks({
     selectedProject: props.selectedProject,
-    selectedComponent: null,
+    selectedComponent: props.selectedComponent ?? null,
     outboxMode: props.outboxMode ?? false,
     onMeMode: props.onMeMode ?? false,
     statusFilter: props.statusFilter ?? 'all',
@@ -155,8 +159,8 @@ function Harness(props: HarnessProps) {
   return null;
 }
 
-function Wrapper({ children }: { children: ReactNode }) {
-  const qc = new QueryClient({
+function Wrapper({ children, client }: { children: ReactNode; client?: QueryClient }) {
+  const qc = client ?? new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return (
@@ -169,6 +173,328 @@ function Wrapper({ children }: { children: ReactNode }) {
 }
 
 describe('useTasks — sk-44.2 hybrid RRF search routing', () => {
+  test.each([
+    { surface: 'project list', selectedProject: 'test', search: '' },
+    { surface: 'cross-project list with text', selectedProject: null, search: 'lookup' },
+    { surface: 'project hybrid search', selectedProject: 'test', search: 'lookup' },
+  ])('sk-346 — Delegated and Blocked survive on $surface', async ({ selectedProject, search }) => {
+    render(
+      <Wrapper>
+        <Harness
+          selectedProject={selectedProject}
+          outboxMode
+          statusFilter="blocked"
+          search={search}
+        />
+      </Wrapper>,
+    );
+
+    if (selectedProject === null) {
+      // The endpoint itself supplies the caller's Delegated scope.
+      await waitFor(() => expect(listCreatedByMeSpy).toHaveBeenCalled());
+      expect(listCreatedByMeSpy.mock.calls[0][0]).toEqual(expect.objectContaining({ isBlocked: true }));
+      expect(globalSearchSpy).not.toHaveBeenCalled();
+    } else if (search === '') {
+      await waitFor(() => expect(listIssuesSpy).toHaveBeenCalled());
+      expect(listIssuesSpy.mock.calls[0][1]).toEqual(expect.objectContaining({
+        createdBy: 'me',
+        isBlocked: true,
+      }));
+    } else {
+      // Both predicates must reach the search service before its ranking
+      // and result cap; filtering the returned page would lose matches.
+      await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
+      expect(globalSearchSpy.mock.calls[0][0]).toEqual(expect.objectContaining({
+        createdBy: 'me',
+        isBlocked: true,
+      }));
+    }
+  });
+
+  test('sk-346 — hybrid carries component, origin, type, priority and delegatee together', async () => {
+    render(
+      <Wrapper>
+        <Harness
+          selectedProject="test"
+          selectedComponent="component-uuid"
+          outboxMode
+          statusFilter="open"
+          originFilter="human-driven"
+          typeFilter="bug"
+          priorityFilter="2"
+          assigneeFilter="carol"
+          search="lookup"
+        />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
+    expect(globalSearchSpy.mock.calls[0][0]).toEqual(expect.objectContaining({
+      project: 'proj-uuid-test',
+      createdBy: 'me',
+      componentId: 'component-uuid',
+      assignee: 'carol',
+      status: ['open'],
+      type: 'bug',
+      priority: 2,
+      origin: ['human-driven'],
+    }));
+  });
+
+  test.each([
+    { statusFilter: 'active', isBlocked: undefined },
+    { statusFilter: 'blocked', isBlocked: true },
+  ] as const)('sk-346 — $statusFilter excludes closed before search ranking', async ({ statusFilter, isBlocked }) => {
+    render(
+      <Wrapper>
+        <Harness selectedProject="test" search="lookup" statusFilter={statusFilter} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
+    const params = globalSearchSpy.mock.calls[0][0];
+    expect(params.status).toEqual(['open', 'in_progress', 'deferred', 'standing']);
+    expect(params.isBlocked).toBe(isBlocked);
+  });
+
+  test('sk-346 — On me hybrid preserves assignment, authorship and acceptance', async () => {
+    render(
+      <Wrapper>
+        <Harness selectedProject="test" onMeMode search="lookup" />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
+    expect(globalSearchSpy.mock.calls[0][0]).toEqual(expect.objectContaining({
+      assignee: 'me',
+      createdBy: 'not-me',
+      acceptedAt: 'not-null',
+    }));
+  });
+
+  test('sk-346 — changing a lens with the same query never reuses another lens page', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'all-1', title: 'all scope' })]))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'delegated-1', title: 'delegated scope' })]))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'onme-1', title: 'accepted scope' })]));
+    const host = (lens: 'all' | 'outbox' | 'on-me') => (
+      <Wrapper client={client}>
+        <Harness selectedProject="test" search="lookup" outboxMode={lens === 'outbox'} onMeMode={lens === 'on-me'} />
+      </Wrapper>
+    );
+    const { rerender } = render(host('all'));
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['all-1']));
+    rerender(host('outbox'));
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['delegated-1']));
+    expect(globalSearchSpy.mock.calls.at(-1)?.[0].createdBy).toBe('me');
+    rerender(host('on-me'));
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['onme-1']));
+    expect(globalSearchSpy.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
+      createdBy: 'not-me', assignee: 'me', acceptedAt: 'not-null',
+    }));
+    rerender(host('all'));
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['all-1']));
+  });
+
+  test.each([
+    { lens: 'outbox', outboxMode: true, onMeMode: false, invalidated: true },
+    { lens: 'on-me', outboxMode: false, onMeMode: true, invalidated: true },
+    { lens: 'all', outboxMode: false, onMeMode: false, invalidated: false },
+  ])('sk-346 — personal tasks signal targets the real $lens hybrid cache entry', async ({ outboxMode, onMeMode, invalidated }) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const { unmount } = render(
+      <Wrapper client={client}>
+        <Harness selectedProject="test" search="lookup" outboxMode={outboxMode} onMeMode={onMeMode} />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(lastResult?.data).toEqual([]));
+    const key = lastResult!.cacheKey;
+    expect(client.getQueryState(key)).toBeDefined();
+    expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+    // Keep the actual hook-created cache entry, without an active reader
+    // immediately refetching it and clearing the invalidation under test.
+    unmount();
+    await act(async () => {
+      invalidateForSignal(client, { areas: ['tasks'], sentAt: '2026-11-04T10:00:00Z' });
+    });
+    expect(client.getQueryState(key)?.isInvalidated).toBe(invalidated);
+  });
+
+  test('sk-346 — later search pages retain the complete narrowing', async () => {
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([], { hasMore: true, nextCursor: 'continuation' }))
+      .mockResolvedValueOnce(searchResponse([]));
+    render(
+      <Wrapper>
+        <Harness selectedProject="test" selectedComponent="component-uuid" outboxMode
+          statusFilter="blocked" originFilter="human-driven" typeFilter="bug" priorityFilter="1"
+          assigneeFilter="carol" search="lookup" />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(lastResult?.hasNextPage).toBe(true));
+    await act(async () => { await lastResult!.fetchNextPage(); });
+    expect(globalSearchSpy.mock.calls[1][0]).toEqual(expect.objectContaining({
+      cursor: 'continuation', project: 'proj-uuid-test', componentId: 'component-uuid',
+      createdBy: 'me', isBlocked: true, assignee: 'carol', origin: ['human-driven'],
+      status: ['open', 'in_progress', 'deferred', 'standing'], type: 'bug', priority: 1,
+    }));
+  });
+
+  test('sk-346 — expired hybrid cursor restarts the current scope without old pages or offsets', async () => {
+    let resolveFresh!: (response: SearchResponse) => void;
+    const freshPage = new Promise<SearchResponse>((resolve) => { resolveFresh = resolve; });
+    const hit = (id: string, title: string) => searchItem({ id, title, type: 'bug', priority: 1, assignee: 'carol' });
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([hit('old-1', 'old first')], { hasMore: true, nextCursor: 'old-next' }))
+      .mockResolvedValueOnce(searchResponse([hit('old-2', 'old second')], { hasMore: true, nextCursor: 'expired' }))
+      .mockRejectedValueOnce(new ApiError(400, 'snapshot unavailable', 'invalid_cursor'))
+      .mockReturnValueOnce(freshPage)
+      .mockResolvedValueOnce(searchResponse([hit('fresh-2', 'fresh second')]));
+    render(
+      <Wrapper>
+        <Harness selectedProject="test" selectedComponent="component-uuid" outboxMode
+          statusFilter="blocked" originFilter="human-driven" typeFilter="bug" priorityFilter="1"
+          assigneeFilter="carol" search="lookup" />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['old-1']));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['old-1', 'old-2']));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(globalSearchSpy.mock.calls[3]?.[0]).toEqual(expect.objectContaining({
+      cursor: undefined, q: 'lookup', project: 'proj-uuid-test', componentId: 'component-uuid',
+      createdBy: 'me', isBlocked: true, assignee: 'carol', origin: ['human-driven'],
+      status: ['open', 'in_progress', 'deferred', 'standing'], type: 'bug', priority: 1,
+    })));
+    await waitFor(() => expect(lastResult?.isLoading).toBe(true));
+    expect(lastResult?.emptyReason).toBeNull();
+    await act(async () => {
+      resolveFresh(searchResponse([hit('fresh-1', 'fresh first')], { hasMore: true, nextCursor: 'fresh-next' }));
+    });
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['fresh-1']));
+    expect(lastResult?.error).toBeNull();
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['fresh-1', 'fresh-2']));
+    expect(globalSearchSpy.mock.calls[4][0].cursor).toBe('fresh-next');
+  });
+
+  test('sk-346 — a second cursor expiry without a successful continuation remains an error', async () => {
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'old-1', title: 'old' })], { hasMore: true, nextCursor: 'expired-old' }))
+      .mockRejectedValueOnce(new ApiError(400, '', 'invalid_cursor'))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'fresh-1', title: 'fresh' })], { hasMore: true, nextCursor: 'expired-fresh' }))
+      .mockRejectedValueOnce(new ApiError(400, '', 'invalid_cursor'));
+    render(<Wrapper><Harness selectedProject="test" search="lookup" /></Wrapper>);
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('old-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('fresh-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.error).toMatchObject({ statusCode: 400, code: 'invalid_cursor' }));
+    expect(lastResult?.isLoading).toBe(false);
+    expect(globalSearchSpy).toHaveBeenCalledTimes(4);
+  });
+
+  test('sk-346 — failure of the restarted first page stays visible without another restart', async () => {
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'old-1', title: 'old' })], { hasMore: true, nextCursor: 'expired' }))
+      .mockRejectedValueOnce(new ApiError(400, '', 'invalid_cursor'))
+      .mockRejectedValueOnce(new ApiError(500, '', 'internal_error'));
+    render(<Wrapper><Harness selectedProject="test" search="lookup" /></Wrapper>);
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('old-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.error).toMatchObject({ statusCode: 500, code: 'internal_error' }));
+    expect(lastResult?.isLoading).toBe(false);
+    expect(lastResult?.emptyReason).toBeNull();
+    expect(lastResult?.data).toBeUndefined();
+    expect(globalSearchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  test('sk-346 — an old in-flight cursor rejection cannot reset the newly selected scope', async () => {
+    let rejectOld!: (error: Error) => void;
+    const oldContinuation = new Promise<SearchResponse>((_resolve, reject) => { rejectOld = reject; });
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'old-1', title: 'old' })], { hasMore: true, nextCursor: 'expired' }))
+      .mockReturnValueOnce(oldContinuation)
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'new-1', title: 'new scope' })]));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const host = (search: string) => <Wrapper client={client}><Harness selectedProject="test" search={search} /></Wrapper>;
+    const { rerender } = render(host('old query'));
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('old-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(globalSearchSpy).toHaveBeenCalledTimes(2));
+    rerender(host('new query'));
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['new-1']));
+    await act(async () => { rejectOld(new ApiError(400, '', 'invalid_cursor')); });
+    expect(lastResult?.data?.map((i) => i.id)).toEqual(['new-1']);
+    expect(lastResult?.error).toBeNull();
+    expect(globalSearchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  test.each([
+    { status: 500, code: 'internal_error' },
+    { status: 400, code: 'invalid_query' },
+    { status: 422, code: 'invalid_cursor' },
+  ])('sk-346 — hybrid $status/$code is not treated as an expired continuation', async ({ status, code }) => {
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'old-1', title: 'old' })], { hasMore: true, nextCursor: 'next' }))
+      .mockRejectedValueOnce(new ApiError(status, '', code));
+    render(<Wrapper><Harness selectedProject="test" search="lookup" /></Wrapper>);
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('old-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.error).toMatchObject({ statusCode: status, code }));
+    expect(globalSearchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  test('sk-346 — a list endpoint cursor error does not trigger hybrid recovery', async () => {
+    listIssuesSpy
+      .mockResolvedValueOnce({ items: [issueSummary('old-1', 'carol')], total: 2, hasMore: true, nextCursor: 'next' })
+      .mockRejectedValueOnce(new ApiError(400, '', 'invalid_cursor'));
+    render(<Wrapper><Harness selectedProject="test" search="" /></Wrapper>);
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('old-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.error).toMatchObject({ statusCode: 400, code: 'invalid_cursor' }));
+    expect(listIssuesSpy).toHaveBeenCalledTimes(2);
+    expect(globalSearchSpy).not.toHaveBeenCalled();
+  });
+
+  test('sk-346 — a successful continuation rearms recovery for a later expiry', async () => {
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'old-1', title: 'old' })], { hasMore: true, nextCursor: 'expired-old' }))
+      .mockRejectedValueOnce(new ApiError(400, '', 'invalid_cursor'))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'fresh-1', title: 'fresh first' })], { hasMore: true, nextCursor: 'fresh-next' }))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'fresh-2', title: 'fresh second' })], { hasMore: true, nextCursor: 'expired-later' }))
+      .mockRejectedValueOnce(new ApiError(400, '', 'invalid_cursor'))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'latest-1', title: 'new generation' })]));
+    render(<Wrapper><Harness selectedProject="test" search="lookup" /></Wrapper>);
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('old-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.data?.[0]?.id).toBe('fresh-1'));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['fresh-1', 'fresh-2']));
+    act(() => lastResult!.fetchNextPage());
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['latest-1']));
+    expect(globalSearchSpy.mock.calls[5][0].cursor).toBeUndefined();
+  });
+
+  test('sk-346 — wire-filtered search keeps the previously loaded assignee options', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    globalSearchSpy
+      .mockResolvedValueOnce(searchResponse([
+        searchItem({ id: 'sk-1', title: 'first', assignee: 'bob' }),
+        searchItem({ id: 'sk-2', title: 'second', assignee: 'carol' }),
+      ]))
+      .mockResolvedValueOnce(searchResponse([searchItem({ id: 'sk-1', title: 'first', assignee: 'bob' })]));
+    const host = (assigneeFilter: string | null) => (
+      <Wrapper client={client}>
+        <Harness selectedProject="test" outboxMode search="lookup" assigneeFilter={assigneeFilter} />
+      </Wrapper>
+    );
+    const { rerender } = render(host(null));
+    await waitFor(() => expect(lastResult?.loadedAssignees.map((a) => a.username)).toEqual(['bob', 'carol']));
+    rerender(host('bob'));
+    await waitFor(() => expect(globalSearchSpy.mock.calls.at(-1)?.[0].assignee).toBe('bob'));
+    await waitFor(() => expect(lastResult?.data?.map((i) => i.id)).toEqual(['sk-1']));
+    expect(lastResult?.loadedAssignees.map((a) => a.username)).toEqual(['bob', 'carol']);
+  });
+
   test('project-scoped + non-empty search → globalSearch(project=uuid, kind=[issue])', async () => {
     globalSearchSpy.mockResolvedValue(
       searchResponse([searchItem({ id: 'sk-14', title: 'hit' })]),
@@ -227,12 +553,12 @@ describe('useTasks — sk-44.2 hybrid RRF search routing', () => {
       </Wrapper>,
     );
     await waitFor(() => expect(listCreatedByMeSpy).toHaveBeenCalled());
-    // RRF must NOT be used for the ownership lens — it can't express
-    // createdBy=me.
+    // Cross-project Delegated retains its existing list/title-search path;
+    // project-scoped Delegated is covered by the hybrid cases above.
     expect(globalSearchSpy).not.toHaveBeenCalled();
   });
 
-  test('forwards status/type/source filters to globalSearch', async () => {
+  test('forwards status/type/origin filters to globalSearch', async () => {
     render(
       <Wrapper>
         <Harness
@@ -248,13 +574,11 @@ describe('useTasks — sk-44.2 hybrid RRF search routing', () => {
     const [params] = globalSearchSpy.mock.calls[0];
     expect(params.status).toEqual(['open']);
     expect(params.type).toBe('bug');
-    // sk-421.1 US-11 / SC-010 — deliberate expectation change: the old
-    // `'agent'` is outside the server's closed set and got 400
-    // invalid_source; "agents" now sends `agent_autonomous`.
-    expect(params.source).toBe('agent_autonomous');
+    expect(params.origin).toEqual(['agent-autonomous']);
+    expect(params.source).toBeUndefined();
   });
 
-  test('origin human-driven maps to source=human on globalSearch (sk-421.1 US-11)', async () => {
+  test('human-driven search uses the complete origin group, including directed agents', async () => {
     render(
       <Wrapper>
         <Harness selectedProject="test" search="x" originFilter="human-driven" />
@@ -262,10 +586,11 @@ describe('useTasks — sk-44.2 hybrid RRF search routing', () => {
     );
     await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
     const [params] = globalSearchSpy.mock.calls[0];
-    expect(params.source).toBe('human');
+    expect(params.origin).toEqual(['human-driven']);
+    expect(params.source).toBeUndefined();
   });
 
-  test('origin all sends no source filter on globalSearch (sk-421.1 US-11)', async () => {
+  test('origin all leaves search origins unrestricted', async () => {
     render(
       <Wrapper>
         <Harness selectedProject="test" search="x" originFilter="all" />
@@ -273,9 +598,7 @@ describe('useTasks — sk-44.2 hybrid RRF search routing', () => {
     );
     await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
     const [params] = globalSearchSpy.mock.calls[0];
-    // The key is present with value `undefined` (see useTasks.ts
-    // `source: originToSource(...)`); `buildSearchQuery` drops it from
-    // the wire via `if (p.source)`.
+    expect(params.origin).toBeUndefined();
     expect(params.source).toBeUndefined();
   });
 
@@ -547,24 +870,14 @@ describe('useTasks — sk-79 assignee filter', () => {
     expect(params?.assignee).toBeUndefined();
   });
 
-  test('search mode (RRF has no assignee param) post-filters rows client-side by assignee', async () => {
-    // Two search hits with different assignees; the picked assignee must be
-    // the only survivor since globalSearch can't filter on the wire.
-    globalSearchSpy.mockResolvedValue(
-      searchResponse([
-        searchItem({ id: 'sk-1', title: 'a', assignee: 'carol' }),
-        searchItem({ id: 'sk-2', title: 'b', assignee: 'dave' }),
-      ]),
-    );
+  test('search carries the picked assignee before the server result cap', async () => {
     render(
       <Wrapper>
         <Harness selectedProject="test" search="q" assigneeFilter="dave" />
       </Wrapper>,
     );
-    await waitFor(() => expect(lastResult?.data?.length).toBe(1));
-    expect(lastResult?.data?.[0].id).toBe('sk-2');
-    // (RRF's SearchParams has no assignee field — the type system already
-    // guarantees the wire can't carry it; the narrowing is purely client-side.)
+    await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
+    expect(globalSearchSpy.mock.calls[0][0].assignee).toBe('dave');
   });
 });
 

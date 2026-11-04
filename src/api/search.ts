@@ -14,14 +14,14 @@
  *   - 200 with `degraded: true` → Ollama down, only FTS results returned;
  *     UI must surface this to the user.
  *
- * Filter parameters status / priority / type / label are silently ignored
- * by the server when `kind` doesn't include `issue`. The client passes
+ * Issue-only filter parameters are ignored by the server when `kind`
+ * doesn't include `issue`. The client passes
  * them through unchanged — explicit user choice still survives a
  * hypothetical future where the backend grows comment/project filters.
  */
 
 import { apiJson } from './client';
-import type { IssueSource, IssueStatus, IssueType } from './issues';
+import type { IssueSource, IssueStatus, IssueType, OriginFilter } from './issues';
 
 // ───────────────────────── Wire enums ─────────────────────────
 
@@ -117,6 +117,18 @@ export interface SearchParams {
    * else; silently dropped server-side when kind excludes 'issue'.
    */
   source?: IssueSource;
+  /** List-compatible origin groups, combined with source when both are set. */
+  origin?: OriginFilter[];
+  /** Caller-relative ownership selection, using the list endpoint's semantics. */
+  createdBy?: 'me' | 'not-me';
+  /** 'me' resolves to the caller; other handles match case-insensitively. */
+  assignee?: string;
+  /** Acceptance selection, using the list endpoint's wire vocabulary. */
+  acceptedAt?: 'null' | 'not-null';
+  /** Reader-scoped derived blocked-ness; false is an explicit filter too. */
+  isBlocked?: boolean;
+  /** Component UUID; membership is filtered before ranking and pagination. */
+  componentId?: string;
   /** sk-674.18 (T031) — only that space (short id). Without it: every visible space. */
   space?: string | null;
 }
@@ -141,6 +153,12 @@ function buildSearchQuery(p: SearchParams): string {
   if (p.type) push('type', p.type);
   if (p.labels) for (const l of p.labels) push('label', l);
   if (p.source) push('source', p.source);
+  if (p.origin?.length) push('origin', p.origin.join(','));
+  if (p.createdBy) push('createdBy', p.createdBy);
+  if (p.assignee) push('assignee', p.assignee);
+  if (p.acceptedAt) push('acceptedAt', p.acceptedAt);
+  if (p.isBlocked !== undefined) push('isBlocked', p.isBlocked);
+  if (p.componentId) push('componentId', p.componentId);
   if (p.space) push('space', p.space);
 
   return `?${parts.join('&')}`;

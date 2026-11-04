@@ -84,13 +84,13 @@ export function invalidateForSignal(qc: LiveInvalidationTarget, signal: Personal
       case 'tasks':
         // Membership of the personal task lists — "assigned to me", "delegated",
         // "created by me": the cross-project `/me` surfaces and the project
-        // lists under a lens. From the first page (K21).
+        // lists and hybrid searches under a lens. From the first page (K21).
         qc.invalidateQueries({
           predicate: (q) => {
             const info = tasksListInfo(q.queryKey);
             if (info === null) return false;
             if (info.kind === 'me') return true;
-            return info.kind === 'project' && isLensSegment(info.lens);
+            return (info.kind === 'project' || info.kind === 'search') && isLensSegment(info.lens);
           },
           firstPageOnly: true,
         });

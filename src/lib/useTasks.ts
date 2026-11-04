@@ -59,12 +59,9 @@
  *     = every visible project. The legacy `text=` (B1) and `q=` (B2)
  *     search branches were removed.
  *   - The cross-project lens surfaces (`/me/created-by` outbox,
- *     `/me/assigned-to` on-me) STAY client-side: RRF can't express the
- *     `createdBy=me` / `assignee=me` ownership predicate those lenses
- *     are built on (the /search wire shape has no createdBy/assignee
- *     filter), so routing them to RRF would silently drop the lens.
- *     `clientSearch` over the fetched lens rows preserves the ownership
- *     scope.
+ *     `/me/assigned-to` on-me) retain their existing client-side title
+ *     search over the fetched lens rows. Project-scoped lenses use the
+ *     hybrid endpoint with the same ownership predicates as their lists.
  *
  * Project alias → projectId resolution:
  *   - `useProjectsList()` already runs at the Shell level so its cache
@@ -104,13 +101,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { ApiError } from '../api/client';
 import {
   listAllIssues,
   listAssignedToMe,
   listCreatedByMe,
   listIssues,
-  type IssueSource,
   type IssueStatus,
   type IssueSummary,
   type OriginFilter,
@@ -164,6 +161,18 @@ const PAGE_SIZE = 500;
  * sentinel pages the rest in.
  */
 const PAGE_SIZE_SEARCH = 100;
+
+// The active search surface excludes only closed issues. Exhaustiveness
+// forces a decision here whenever the wire IssueStatus vocabulary grows.
+const SEARCH_STATUS_ACTIVE = {
+  open: true,
+  in_progress: true,
+  deferred: true,
+  standing: true,
+  closed: false,
+} satisfies Record<IssueStatus, boolean>;
+const ACTIVE_SEARCH_STATUSES = (Object.keys(SEARCH_STATUS_ACTIVE) as IssueStatus[])
+  .filter((status) => SEARCH_STATUS_ACTIVE[status]);
 
 export interface UseTasksArgs {
   /** Alias / idPrefix from the URL (or null = "All projects" pseudo). */
@@ -246,14 +255,10 @@ export interface UseTasksArgs {
   sort: TasksSortKey;
   /**
    * sk-79 — assignee filter (username) or null for "anyone". Forwarded as
-   * `assignee=<username>` to the project-scoped (`listIssues`) and
-   * cross-project (`listAllIssues`) list surfaces, which the backend
-   * filters server-side. The hybrid `/search` (RRF) endpoint has no
-   * assignee param, so in search mode it is realised client-side over the
-   * fetched rows (`item.assignee`). The caller (TasksColumn) only ever
-   * supplies a non-null value on the non-lens surfaces where the avatar
-   * picker is shown — under the outbox / on-me lenses the picker is
-   * hidden and this stays null.
+   * `assignee=<username>` to project, cross-project and hybrid searches
+   * before pagination. Delegated list surfaces keep their client-side
+   * delegatee selection; hybrid search narrows before ranking. On me
+   * supplies null because the caller is already the assignee.
    */
   assigneeFilter: string | null;
 }
@@ -344,9 +349,9 @@ export interface UseTasksResult {
   /**
    * sk-84 — distinct assignees of the loaded delegated tasks (the people the
    * caller delegated to). Populated only under the Delegated lens
-   * (outboxMode); empty otherwise. Derived from the list BEFORE the
-   * client-side assignee filter, so it stays complete regardless of the
-   * currently-picked delegatee. TasksColumn turns this into the chip row.
+   * (outboxMode); empty otherwise. Uses the un-narrowed list or the search
+   * assignee snapshot so picking a delegatee keeps the other known people.
+   * TasksColumn turns this into the chip row.
    */
   delegateeAssignees: LoadedAssignee[];
   /**
@@ -357,8 +362,8 @@ export interface UseTasksResult {
    *
    * Stays complete while an assignee is picked, by two different means
    * depending on the surface (review F1): where the assignee filter is
-   * applied client-side (search mode, Delegated lens) the rows in hand are
-   * already un-narrowed; where it goes on the wire (the list surfaces) this
+   * applied client-side (Delegated list surfaces) the rows in hand are
+   * already un-narrowed; where it goes on the wire (including search) this
    * serves the last set observed while NOTHING was picked. Either way,
    * picking one person never collapses the chip row to that one person.
    *
@@ -634,29 +639,6 @@ function clientSearch(items: IssueSummary[], query: string): IssueSummary[] {
 }
 
 /**
- * sk-44.2 — map the column's `OriginFilter` onto the hybrid `/search`
- * endpoint's `source` param. `/search`'s `source` filters on the
- * creator-set `issues.source` column (closed set `human` /
- * `agent_directed` / `agent_autonomous`), whereas the column's origin
- * chips are the broader `human-driven` / `agent-autonomous` grouping.
- * The closest honest mapping (sk-421.1 US-11):
- *   human-driven      → human             (issues a person created)
- *   agent-autonomous  → agent_autonomous  (self-spawned agent traffic)
- *   all               → undefined         (no filter)
- * This is an approximation: `agent_directed` issues count as
- * `human-driven` in the column but a single `source` value cannot
- * express `human ∪ agent_directed`, so they fall out of the search-mode
- * "people" filter — slightly coarser than the non-search list filter.
- * Documented as a known edge — full parity needs an `origin=` param on
- * /search server-side.
- */
-function originToSource(origin: OriginFilter): IssueSource | undefined {
-  if (origin === 'human-driven') return 'human';
-  if (origin === 'agent-autonomous') return 'agent_autonomous';
-  return undefined;
-}
-
-/**
  * sk-44.2 — adapt a hybrid-search `SearchItem` (kind=issue) into the
  * `IssueSummary` shape the Tasks-column row renderers (`TaskCard`,
  * `TaskTreeNode`) consume. The `/search` projection is leaner than the
@@ -750,9 +732,8 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   // sk-44.2 — search mode discriminator. A non-empty search box routes
   // the project-scoped + "All projects" surfaces to the hybrid
   // `globalSearch` (RRF) endpoint. The cross-project lens surfaces
-  // (outbox / on-me) deliberately stay OUT of search mode — RRF can't
-  // express their createdBy/assignee ownership predicate — so they keep
-  // their existing endpoint + client-side `clientSearch`.
+  // (outbox / on-me) retain their existing endpoint + client-side title
+  // search. Project-scoped lenses carry their ownership to hybrid search.
   const trimmedSearch = search.trim();
   const searchMode =
     trimmedSearch !== '' && !crossProjectOutbox && !crossProjectOnMe;
@@ -799,14 +780,13 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
         priorityFilter,
         selectedComponent ?? '',
         trimmedSearch,
-        // sk-79 — search mode applies assignee client-side; key on it so
-        // the post-filtered slice is cached per assignee selection.
+        // The assignee is a search wire filter too.
         assigneeFilter ?? '',
-        // sk-674.18 T052 — the place «space» narrows the search too. LAST,
-        // like on every cross-project key: the positions before it are
-        // decoded by `tasksListServerShape` and
-        // `liveEventInvalidation.ts#tasksListInfo`.
+        // Keep positions read by lib/useTasks.ts#tasksListServerShape and
+        // lib/liveEventInvalidation.ts#tasksListInfo stable; append the lens.
         selectedSpace ?? '',
+        // Ownership partitions search pages just as it does list pages.
+        lens,
       ] as const;
     }
     if (resolvedProjectId !== null) {
@@ -903,6 +883,13 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   const wireIsBlocked: boolean | undefined =
     statusFilter === 'blocked' ? true : undefined;
 
+  // The existing active/blocked surface excludes closed issues. Apply it
+  // before the search candidate limit, rather than dropping capped hits.
+  const searchStatuses: IssueStatus[] | undefined =
+    statusFilter === 'active' || statusFilter === 'blocked'
+      ? ACTIVE_SEARCH_STATUSES
+      : wireStatus ? [wireStatus] : undefined;
+
   // sk-303.14 (T025, contract C3) — wire-side unreviewed selection. Set on
   // BOTH halves of the Delegated surface: the project-scoped
   // `listIssues(createdBy='me')` and the cross-project `/me/created-by`.
@@ -941,6 +928,15 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
     && !spaceResolving
     && (resolvedProjectId !== null || selectedProject === null);
 
+  const queryClient = useQueryClient();
+  const cursorRecoveryScope = JSON.stringify(cacheKey);
+  const cursorRecovery = useRef({ scope: cursorRecoveryScope, used: false });
+  useEffect(() => {
+    if (cursorRecovery.current.scope !== cursorRecoveryScope) {
+      cursorRecovery.current = { scope: cursorRecoveryScope, used: false };
+    }
+  }, [cursorRecoveryScope]);
+
   const query = useInfiniteQuery<TasksPage>({
     queryKey: cacheKey,
     enabled,
@@ -957,8 +953,8 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
       // surface (project=<uuid>) and the "All projects" surface (no
       // project). kind=['issue'] so the column only sees issue rows
       // (the endpoint can also return comment/project/component rows
-      // which the Tasks column has no renderer for). Status / type /
-      // source filters are forwarded so the chip row still narrows
+      // which the Tasks column has no renderer for). Active filters and
+      // ownership predicates are forwarded so the chip row still narrows
       // results when "within filters" mode is on (sub-task 3 re-applies
       // them; when off the filters are cleared upstream so this passes
       // undefined). `degraded:true` (embedder down → FTS-only) is
@@ -970,11 +966,16 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
           project: resolvedProjectId ?? undefined,
           space: spaceParam,
           kind: ['issue'],
-          status: wireStatus ? [wireStatus] : undefined,
+          status: searchStatuses,
           type: typeFilter === 'all' ? undefined : typeFilter,
           // sk-86 — priority is a wire filter on /search.
           priority: wirePriority,
-          source: originToSource(originFilter),
+          origin: wireOrigin ? [wireOrigin] : undefined,
+          createdBy: onMeMode ? 'not-me' : outboxMode ? 'me' : undefined,
+          assignee: onMeMode ? 'me' : assigneeFilter ?? undefined,
+          acceptedAt: onMeMode ? 'not-null' : undefined,
+          isBlocked: wireIsBlocked,
+          componentId: resolvedProjectId !== null ? selectedComponent ?? undefined : undefined,
           cursor,
           limit: PAGE_SIZE_SEARCH,
         });
@@ -1180,11 +1181,11 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   //
   // Whether `flatItems` is a valid chip source depends on the surface:
   //
-  //   - Delegated lens (outboxMode) and search mode filter the assignee
-  //     CLIENT-side (see the `data` memo and the `listIssues` comment), so
+  //   - Delegated list surfaces filter the assignee CLIENT-side
+  //     (see the `data` memo and the `listIssues` comment), so
   //     the rows in hand are the un-narrowed set — deriving from them is
   //     already complete.
-  //   - The cross-project "All projects" and project list paths send the
+  //   - Hybrid search, cross-project "All projects" and project lists send the
   //     picked assignee ON THE WIRE (it is part of `cacheKey`, so picking
   //     one refetches). There `flatItems` holds ONLY that assignee's rows;
   //     deriving the chips from it would leave exactly one chip and no way
@@ -1194,7 +1195,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   //     the compensation is a SNAPSHOT instead: remember the last set seen
   //     while nothing was picked, and keep serving that while a pick is
   //     active.
-  const assigneeNarrowedOnWire = assigneeFilter !== null && !searchMode && !outboxMode;
+  const assigneeNarrowedOnWire = assigneeFilter !== null && (searchMode || !outboxMode);
 
   // Identity of the board the snapshot describes: every wire input EXCEPT
   // the assignee. When it changes the snapshot is about a different board
@@ -1280,18 +1281,16 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   // is the priority sort + the optional search on /me/created-by +
   // type post-filter on /me/created-by.
   //
-  // sk-31 wire-mapping note: when statusFilter === 'blocked' the
-  // upstream wire query passes `isBlocked=true` without a status
-  // constraint — the server returns every blocked row including
-  // closed-with-residual-blockers. The UI excludes the closed rows
-  // here to stay consistent with the `'active'` lens semantics
-  // (a closed issue is terminal regardless of dep state, never
-  // "actionable blocked work" the lens is meant to surface).
+  // sk-31 wire-mapping note: list paths send `isBlocked=true` without a
+  // status constraint, then exclude closed rows here. Hybrid search sends
+  // both `isBlocked=true` and ACTIVE_SEARCH_STATUSES before the candidate
+  // cap; the same client-side exclusion is defensive on that path.
   const data = useMemo<IssueSummary[] | undefined>(() => {
     if (!query.data) return undefined;
     let items = flatItems;
-    // `active` UI filter = "everything except closed". The wire status
-    // param is omitted upstream; the closed rows are dropped here.
+    // `active` excludes closed. List paths omit the wire status and filter
+    // here; hybrid already sends ACTIVE_SEARCH_STATUSES before the cap,
+    // so this check is defensive for its response.
     if (statusFilter === 'active') {
       items = items.filter((i) => i.status !== 'closed');
     }
@@ -1335,7 +1334,6 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
     }
     // Assignee filter applied CLIENT-side. Surfaces that need it (their wire
     // shape has no assignee param, OR we deliberately don't wire-filter):
-    //   - sk-79: SEARCH mode (the RRF `/search` endpoint).
     //   - sk-84: Delegated lens (outboxMode) — BOTH the project (`listIssues
     //     createdBy=me`) and cross-project (`/me/created-by`) paths. We keep
     //     the wire un-narrowed so the chip set ("who I delegated to") can be
@@ -1343,7 +1341,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
     //     filter to the picked delegatee here.
     // Rows carry `assignee` (display handle); match case-insensitively
     // against the picked username. No-op when no assignee is picked.
-    if ((searchMode || outboxMode) && assigneeFilter) {
+    if (!searchMode && outboxMode && assigneeFilter) {
       const want = assigneeFilter.toLowerCase();
       items = items.filter((i) => (i.assignee ?? '').toLowerCase() === want);
     }
@@ -1455,7 +1453,28 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
       // useInfiniteQuery's fetchNextPage returns a promise; we don't
       // need to await it from callers (the IntersectionObserver
       // doesn't care when it lands, only that it was kicked off).
-      void query.fetchNextPage();
+      const hadNextPage = query.hasNextPage;
+      void query.fetchNextPage().then((result) => {
+        const recovery = cursorRecovery.current;
+        if (!searchMode || !hadNextPage || recovery.scope !== cursorRecoveryScope) return;
+        // Only a successful continuation rearms recovery. A fresh first
+        // page alone must not permit an automatic restart loop.
+        if (result.isSuccess && result.data.pages.length > 1) {
+          recovery.used = false;
+          return;
+        }
+        if (
+          recovery.used
+          || !result.isFetchNextPageError
+          || !(result.error instanceof ApiError)
+          || result.error.statusCode !== 400
+          || result.error.code !== 'invalid_cursor'
+        ) return;
+        recovery.used = true;
+        // Restart this exact search, without replaying the expired offset
+        // or appending a new generation to the old infinite-query pages.
+        return queryClient.resetQueries({ queryKey: cacheKey, exact: true });
+      });
     },
     isLoading,
     error: query.error,
