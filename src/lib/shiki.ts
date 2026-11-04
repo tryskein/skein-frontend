@@ -80,7 +80,7 @@ export type ShikiLanguage =
  * right one at paint time.
  */
 export const SHIKI_LIGHT_THEME = 'github-light';
-export const SHIKI_DARK_THEME = 'github-dark';
+export const SHIKI_DARK_THEME = 'github-dark-default';
 
 /**
  * Dynamic loader map. Each entry is a thunk returning the
@@ -126,7 +126,7 @@ export function getHighlighter(): Promise<HighlighterCore> {
   highlighterPromise = createHighlighterCore({
     themes: [
       import('@shikijs/themes/github-light'),
-      import('@shikijs/themes/github-dark'),
+      import('@shikijs/themes/github-dark-default'),
     ],
     langs: Object.values(LANG_LOADERS),
     engine: createOnigurumaEngine(() => import('shiki/wasm')),

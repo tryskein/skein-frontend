@@ -22,9 +22,9 @@
  *   - `markdown` → MarkdownView pipeline (markdown-it + DOMPurify + the
  *      shiki plugin once it lazy-loads).
  *   - `text` → monospace `<pre>` with no highlighting.
- *   - `code` → Shiki standalone render under the dual github-light /
- *      github-dark themes. The Shiki `lang` is the value of `language`
- *      on this object.
+ *   - `code` → Shiki standalone render using the active scheme's theme
+ *      from lib/shiki.ts#SHIKI_LIGHT_THEME or lib/shiki.ts#SHIKI_DARK_THEME.
+ *      The Shiki `lang` is the value of `language` on this object.
  */
 export interface ViewableKind {
   /** Lower-case file extension WITHOUT the leading dot. */

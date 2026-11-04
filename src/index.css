@@ -13150,6 +13150,23 @@ a.search-result-title:focus-visible {
   font-family: var(--font-mono);
 }
 
+/* Shiki owns the fenced block's palette; inline-code chips must not
+ * paint a second ground over its highlighted text. */
+.markdown-render pre.shiki > code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* The app's Mantine scheme follows the active Skein theme, including a
+ * custom theme's base (main.tsx#readColorScheme). Shiki defaults to its
+ * inline light palette, so both the block and its tokens need overrides. */
+html[data-mantine-color-scheme='dark'] .markdown-render .shiki,
+html[data-mantine-color-scheme='dark'] .markdown-render .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+}
+
 .markdown-render blockquote {
   border-left: 2px solid var(--line);
   padding-left: var(--space-2);
