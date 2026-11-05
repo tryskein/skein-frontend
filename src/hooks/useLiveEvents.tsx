@@ -305,9 +305,9 @@ export function LiveEventsProvider({ children }: LiveEventsProviderProps) {
     // the window and why). Per connection (the dedup map is per tab); disposed in
     // the cleanup below once the connection has stopped. Theme frames go
     // through it too; only the preview, which touches no cache, does not.
-    // sk-763 — with the reading hold: a shown task list of several pages is
-    // not reset under its reader; its owed reset is marked instead
-    // (`liveListDirty.ts`).
+    // sk-763 — with the reading hold: a task list the column shows is not
+    // reset or re-read under its reader, whatever its size; its owed reset is
+    // marked instead (`liveListDirty.ts`).
     const batcher = createLiveInvalidationBatcher(queryClient, undefined, undefined, readingListHold);
 
     // sk-622.21 T043 — hidden tab, focus, visibility, navigation (K22):

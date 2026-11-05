@@ -294,10 +294,12 @@ describe('No. 75 — personal lists are re-read from the first page (K21)', () =
     unsubscribe();
   });
 
+  // A list the column does not show (sk-763: a shown one is held, above):
+  // K21 — re-read from its first page.
   test.each<[string, KeyName]>([
     ['tasks', 'tasksOnMe'],
     ['unreviewed', 'tasksUnreviewed'],
-  ])('area %s: a shown list of one page, read from its start, is re-read from the first page', async (area, name) => {
+  ])('area %s: a list of one page the column does not show is re-read from the first page', async (area, name) => {
     await mountProvider();
     const fetched: unknown[] = [];
     qc.setQueryData(KEYS[name], {

@@ -22,8 +22,8 @@
 
 import { createElement, type ReactNode } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { DepType } from '../../api/dependencies';
 import { fetchIssueTree } from '../../api/issues';
 import { layeredTreeQueryKey, useLayeredTree } from '../useLayeredTree';
@@ -225,6 +225,39 @@ describe('useLayeredTree — the blockers flag reaches the request (row 25 (c))'
     );
     await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1));
     expect(mockedFetch.mock.calls[0][0].includeBlockers).not.toBe(true);
+    client.clear();
+  });
+});
+
+// sk-763 — the Tasks column turns off the re-read of its own shown tree when
+// the network comes back (that tree is held; the live connection's return
+// reads it through the live layer). Every other user of the hook — an epic
+// section, a subtree rooted at an epic — keeps the re-read it had.
+describe('useLayeredTree — the network back re-reads a stale tree by default', () => {
+  const mockedFetch = vi.mocked(fetchIssueTree);
+
+  afterEach(() => {
+    mockedFetch.mockClear();
+    vi.useRealTimers();
+  });
+
+  test('a subtree rooted at an epic, stale: the network back reads it again', async () => {
+    vi.useFakeTimers();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
+    renderHook(() => useLayeredTree({ project: 'proj-uuid', rootId: 'sk-42', types: ['parent-child', 'blocks'] }), { wrapper });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    try {
+      act(() => { onlineManager.setOnline(false); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    } finally {
+      act(() => { onlineManager.setOnline(true); });
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
     client.clear();
   });
 });

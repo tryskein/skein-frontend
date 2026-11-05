@@ -21,6 +21,7 @@ import {
   type LiveInvalidationBatcher,
 } from './liveInvalidationBatcher';
 import { readingListHold } from './liveListDirty';
+import { layeredTreeQueryKey } from './useLayeredTree';
 import { showReadingList } from '../test/showReadingList';
 
 const W = LIVE_INVALIDATION_WINDOW_MS;
@@ -829,6 +830,38 @@ describe('sk-763 — the reading hold', () => {
     params.splice(0);
     await vi.advanceTimersByTimeAsync(W);
     expect(params).toEqual([0, 1]);
+  });
+
+  // sk-763 — the layered tree the Tasks column shows (a link lens beyond
+  // parent-child) is the list being read: shown and answered — even with no
+  // row — it is held, its reset owed as the mark. A rooted subtree (an epic
+  // drilled into, or an epic section), the cross-project tree and a reset
+  // that purges data of a lost access are not held: they are read as before.
+  test.each<[string, readonly unknown[], { rows: unknown[] }, boolean, boolean]>([
+    ['the column tree of a project, with rows: held', layeredTreeQueryKey('p-1', null, ['blocks', 'parent-child']), { rows: [{ item: { id: 'p-1' } }] }, false, true],
+    ['the column tree of a project, answered empty: held', layeredTreeQueryKey('p-1', null, ['blocks', 'parent-child']), { rows: [] }, false, true],
+    ['the column tree of a project, reset by an access purge: read', layeredTreeQueryKey('p-1', null, ['blocks', 'parent-child']), { rows: [] }, true, false],
+    ['a subtree rooted at an epic: read', layeredTreeQueryKey('p-1', 'p-9', ['blocks', 'parent-child']), { rows: [] }, false, false],
+    ['the cross-project tree: read', layeredTreeQueryKey(null, null, ['blocks', 'parent-child']), { rows: [] }, false, false],
+  ])('with the real hold, shown: %s', async (_n, key, data, accessPurge, held) => {
+    const b = createLiveInvalidationBatcher(qc, W, () => false, readingListHold);
+    unsubscribers.push(() => b.dispose());
+    qc.setQueryData(key, { ...data, requestedAt: 0 });
+    let reads = 0;
+    const obs = new QueryObserver(qc, {
+      queryKey: key,
+      queryFn: async () => { reads += 1; return { ...data, requestedAt: 1 }; },
+      staleTime: Infinity,
+    });
+    unsubscribers.push(obs.subscribe(() => {}));
+    showReadingList(qc, key);
+
+    void b.invalidateQueries({ queryKey: key, accessPurge });
+    await vi.advanceTimersByTimeAsync(W);
+
+    const q = qc.getQueryCache().find({ queryKey: key, exact: true })!;
+    expect(reads).toBe(held ? 0 : 1);
+    expect(readingListHold.marked(q)).toBe(held);
   });
 
   test('with the real hold: a marked list nobody shows any more is cut as before (K21); its return reads one page and drops the mark', async () => {

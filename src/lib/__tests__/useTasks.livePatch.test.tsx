@@ -206,7 +206,18 @@ interface HarnessArgs {
   sort?: TasksSortKey;
   onMeMode?: boolean;
   search?: string;
+  /** Whether the column shows the list (sk-763); default {@link columnShowsList}. */
+  shown?: boolean;
 }
+
+/**
+ * sk-763 — whether the harness reports the list as the one the column shows.
+ * A list the column shows is held (owner's decision: its membership changes
+ * wait for «Updates available»). The K21 block below describes the lists the
+ * column does NOT show — observed under another surface, a lens or folded —
+ * which are still re-read from their first page, so it sets this to false.
+ */
+let columnShowsList = true;
 
 let last: UseTasksResult | null = null;
 let qc: QueryClient;
@@ -225,11 +236,11 @@ function Harness(args: HarnessArgs) {
     sort: args.sort ?? 'updated',
     assigneeFilter: args.assigneeFilter ?? null,
   });
-  // sk-763 — what the column does for this list: report that it shows it
-  // and where its reader is (its body is the scroll container), and offer
+  // sk-763 — what the column does for this list: report whether it shows it
+  // (its body is the scroll container the reader moves in), and offer
   // «Updates available».
   const root = useRef<HTMLDivElement | null>(null);
-  useReportReadingPosition(last.cacheKey, { shown: true, root });
+  useReportReadingPosition(last.cacheKey, { shown: args.shown ?? columnShowsList, root });
   return (
     <div ref={root}>
       <div className="col-body tasks-body" data-testid="column-body" />
@@ -296,6 +307,7 @@ beforeEach(() => {
   listAssignedToMeSpy.mockResolvedValue({ items: [], total: 0, hasMore: false, nextCursor: null });
   last = null;
   calls = [];
+  columnShowsList = true;
 });
 
 afterEach(() => {
@@ -306,6 +318,13 @@ afterEach(() => {
 });
 
 describe('No. 88 — membership and continuation (US-15, K21)', () => {
+  // K21 is the norm of the task lists the column does not show (sk-763: a
+  // shown list is held — the sk-763 block below). Each list here is observed
+  // but not shown, unless a test says otherwise.
+  beforeEach(() => {
+    columnShowsList = false;
+  });
+
   test('two pages loaded: an edit that moves the server order but not the screen order (priority sort) — continuation without gaps or repeats', async () => {
     // Server order before: A(9) B(8) | C(7) D(6) | E(5); screen: by priority.
     const A = summary('sk-a', { priority: 0, updatedAt: ts(9) });
@@ -763,7 +782,7 @@ describe('No. 88 — membership and continuation (US-15, K21)', () => {
       c1: { items: [B, C], total: 3, hasMore: false, nextCursor: null },
     };
     serveFrom();
-    await mount({ selectedProject: null, outboxMode: true }, 2);
+    await mount({ selectedProject: null, outboxMode: true, shown: true }, 2);
 
     await deliver(envelope('issue.updated', 'sk-b', {
       changedFields: ['title'],
@@ -894,10 +913,21 @@ describe('sk-763 — a list being read keeps its loaded pages; the rest waits fo
     expect(ids()).toEqual(['sk-n', 'sk-a', 'sk-b', 'sk-c']);
   });
 
-  test('a row that left the list by a condition the row answers goes at once, with no request', async () => {
-    threePages();
+  /** All five rows on ONE page, the list read from its start. */
+  function onePageOfAll(): void {
+    pages = { [FIRST]: { items: [A, B, C, D, E], total: 5, hasMore: false, nextCursor: null } };
+  }
+
+  /** The two loaded shapes a shown list may have (both are held). */
+  const shapes: Array<[string, () => void, number]> = [
+    ['one page, read from its start', onePageOfAll, 1],
+    ['three pages', threePages, 3],
+  ];
+
+  test.each(shapes)('%s: a row that left the list by a condition the row answers goes at once, with no request', async (_n, fill, loaded) => {
+    fill();
     serveFrom();
-    await mount({ statusFilter: 'open', sort: 'created' }, 3);
+    await mount({ statusFilter: 'open', sort: 'created' }, loaded);
 
     await deliver(envelope('issue.closed', 'sk-d', {
       row: rowFrom(D, { status: 'closed', closeOutcome: 'done', updatedAt: ts(11), rowSeq: 41 }),
@@ -907,10 +937,10 @@ describe('sk-763 — a list being read keeps its loaded pages; the rest waits fo
     expect(ids()).toEqual(['sk-a', 'sk-b', 'sk-c', 'sk-e']);
   });
 
-  test('a status change of a shown row (blocked markers of others may move) sends nothing and offers the updates', async () => {
-    threePages();
+  test.each(shapes)('%s: a status change of a shown row (blocked markers of others may move) sends nothing and offers the updates', async (_n, fill, loaded) => {
+    fill();
     serveFrom();
-    await mount({ sort: 'created' }, 3);
+    await mount({ sort: 'created' }, loaded);
 
     await deliver(envelope('issue.status_changed', 'sk-c', {
       row: rowFrom(C, { status: 'in_progress', updatedAt: ts(11), rowSeq: 41 }),
@@ -1024,7 +1054,7 @@ describe('sk-763 — a list being read keeps its loaded pages; the rest waits fo
     expect(updatesButton()).toBeNull();
   });
 
-  test('an event during the read the button started is not swallowed: it is applied when that read ends', async () => {
+  test('an event during the read the button started is not swallowed: it is offered when that read ends', async () => {
     threePages();
     serveFrom();
     await mount({ sort: 'created' }, 3);
@@ -1045,10 +1075,12 @@ describe('sk-763 — a list being read keeps its loaded pages; the rest waits fo
     answer();
     await advance(LIVE_INVALIDATION_WINDOW_MS + 300);
 
-    // The button's read (started before the event), then the event's own
-    // read of the one page now shown from its start.
-    expect(listCalls()).toEqual([undefined, undefined]);
-    expect(ids()).toEqual(['sk-n', 'sk-a']);
+    // The button's read, started before the event, does not cover it: the
+    // list it leaves (one page, shown) is held, so the event is owed as
+    // «Updates available» — not read, not lost.
+    expect(listCalls()).toEqual([undefined]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(updatesButton()).not.toBeNull();
   });
 
   test('another list is another mark: switching the filter shows no offer, switching back shows its own', async () => {
@@ -1354,14 +1386,30 @@ describe('sk-763 — a list being read keeps its loaded pages; the rest waits fo
     expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
   });
 
-  test('a list of one page is re-read from its first page as before: nothing of it is lost', async () => {
+  // The owner's decision: a list the column shows is held whatever its size
+  // and wherever its reader is — one page, at its start, too. Its membership
+  // changes wait for the button, which reads the first page once.
+  test('a list of one page, read from its start: the return to the tab sends nothing and offers the updates; the button reads the first page once', async () => {
     pages = { [FIRST]: { items: [A, B], total: 2, hasMore: false, nextCursor: null } };
     serveFrom();
     await mount({ sort: 'created' });
 
     await returnToTab();
 
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(updatesButton()).not.toBeNull();
+
+    const N = summary('sk-n', { createdAt: ts(10), updatedAt: ts(10) });
+    pages = { [FIRST]: { items: [N, A, B], total: 3, hasMore: false, nextCursor: null } };
+    await deliver(envelope('issue.created', 'sk-n', { row: rowFrom(N, { rowSeq: 41 }) }));
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
     expect(listCalls()).toEqual([undefined]);
+    expect(ids()).toEqual(['sk-n', 'sk-a', 'sk-b']);
     expect(updatesButton()).toBeNull();
   });
 });

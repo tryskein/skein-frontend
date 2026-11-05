@@ -25,8 +25,11 @@
  * what is on screen: rows rendered from a stale response look
  * exactly like fresh ones, and a markup comparison would pass even without the fix. So
  * the stand keeps `fetchIssueTree` on a manual brake (each call returns a
- * promise that the test itself resolves) and counts the calls — so "one
- * catch-up read" is distinguishable from "none" and from "two".
+ * promise that the test itself resolves) and counts the calls — so "no
+ * catch-up read under the hold" is distinguishable from "one" and from "two".
+ * What the reads deliver is checked where it must show: the read the
+ * reader applies has to bring a new row of the fixture (`NEW_ROWS`) on
+ * screen — the old rows alone would look the same either way.
  *
  * The clock and the request time are both taken via `Date.now()`, and equality is not
  * staleness (a request made IN THE SAME millisecond already
@@ -37,10 +40,29 @@
  * twice" — is guarded by `EpicChildBlockers.live.test.tsx` ("exactly one
  * `fetchIssueTree` read per event"), which this change does not touch: the two
  * surfaces have their own clocks and their own keys.
+ *
+ * ─── sk-763: the tree the column shows is held ─────────────────────
+ *
+ * The owner's decision (`lib/liveListDirty.ts`, module header): the list the
+ * column shows — here the project's layered tree — is not read again by the
+ * background; a change it cannot apply in place is offered as «Updates
+ * available», and the reader's press reads it once. So the reads that can be
+ * in flight under an event are the tree's FIRST read and the read the button
+ * started; the catch-up of an event that came during one of them is the
+ * offer, not a read of its own. Events reach the column as in the app:
+ * through the live coalescer with the reading hold
+ * (`useLiveEvents.tsx` → `createLiveInvalidationBatcher(…, readingListHold)`),
+ * not straight into the client — the hold lives in the coalescer, and so
+ * does the release of the offer by the read that delivers it.
+ *
+ * The coalescer's window is 1 ms here (its public parameter), not 1.5 s: a
+ * wave then runs before the stand's next macrotask boundary
+ * (`commitNotifications`), since Node runs a 0 ms timer as a 1 ms one, in
+ * the order the timers were set.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import {
   QueryClient,
@@ -55,6 +77,7 @@ import type {
   IssueSummary,
   IssueTreeNode,
 } from '../../../api/issues';
+import i18n from '../../../i18n/config';
 import { classifyEvent, type ClassifiedEvent } from '../../../lib/eventClassify';
 import type { EventEnvelope } from '../../../lib/eventEnvelope';
 import { LayoutProvider } from '../../../lib/useLayoutState';
@@ -165,6 +188,8 @@ vi.mock('../../../auth/AuthContext', () => ({
 
 import { fetchIssueTree } from '../../../api/issues';
 import { invalidateForEvent } from '../../../lib/liveEventInvalidation';
+import { createLiveInvalidationBatcher, type LiveInvalidationBatcher } from '../../../lib/liveInvalidationBatcher';
+import { readingListHold } from '../../../lib/liveListDirty';
 import { TasksColumn } from '../TasksColumn';
 
 const fetchMock = vi.mocked(fetchIssueTree);
@@ -219,8 +244,9 @@ function installDeferredFetch(): void {
  * macrotask on its own), and the column's catch-up check runs only when the
  * response is COMMITTED. So the old stand sometimes committed read No. 1 after
  * event A had already started read No. 2 — a different scenario from the one
- * the test describes, and one that exposed a real product defect (see the
- * regression test below).
+ * the test describes, and one that exposed a real product defect (sk-545).
+ * Under the hold (sk-763) that late commit only marks the shown tree
+ * (`TasksColumn.tsx`, `readingListHold.mark`): it starts or cancels no read.
  *
  * Here notifications are queued and delivered only by `commitNotifications`,
  * so every step states which responses the column has seen.
@@ -255,15 +281,46 @@ async function commitNotifications(): Promise<void> {
   }
 }
 
-/** Finish read No. `index` (0-based) and let the column commit its response. */
-async function settle(index: number): Promise<void> {
-  pending[index](ROWS);
+/** Finish read No. `index` (0-based) with `rows` and let the column commit its response. */
+async function settle(index: number, rows: IssueTreeNode[] = ROWS): Promise<void> {
+  pending[index](rows);
   await commitNotifications();
 }
+
+/** The tree after a change: a second root row. */
+const NEW_ROWS: IssueTreeNode[] = [
+  ...ROWS,
+  { item: issue('demo-2'), depth: 0, parentRef: null, isReference: false, firstSeenAt: null },
+];
 
 // ───────────────────────── The event ─────────────────────────
 
 let seq = 0;
+
+/** The live coalescer of the stand, with the reading hold, as the app wires it. */
+let batcher: LiveInvalidationBatcher | null = null;
+
+function liveCoalescer(qc: QueryClient): LiveInvalidationBatcher {
+  batcher = createLiveInvalidationBatcher(qc, 1, () => false, readingListHold);
+  return batcher;
+}
+
+/** The event `entityId` as the live layer delivers it to the column. */
+async function deliver(target: LiveInvalidationBatcher, entityId: string): Promise<void> {
+  const [ev, env] = issueEvent(entityId);
+  act(() => {
+    invalidateForEvent(target, ev, env, { isAdmin: false, currentUserId: 'u-1' });
+  });
+  await commitNotifications();
+}
+
+const offer = () => screen.queryByRole('button', { name: i18n.t('tasks:updatesAvailable') });
+
+/** The updates button in any of its states — offered, applying, failed — or null. */
+const updatesButton = () =>
+  (['updatesAvailable', 'updatesApplying', 'updatesFailed'] as const)
+    .map((k) => screen.queryByRole('button', { name: i18n.t(`tasks:${k}`) }))
+    .find((b) => b !== null) ?? null;
 
 /**
  * sk-622.21 No. 79 — a compact browser envelope (US-12): a status change
@@ -333,112 +390,110 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  batcher?.dispose();
+  batcher = null;
   cleanup();
   notifyManager.setScheduler(defaultScheduler);
   vi.restoreAllMocks();
 });
 
-describe('sk-429 — an event during a walk in progress is caught up by one read', () => {
-  test('an event that arrived in flight gives EXACTLY one repeated read after it', async () => {
+describe('sk-429 — an event during a walk in progress is caught up, as the offer of the held tree', () => {
+  test('an event during the tree\'s first read is offered when the read ends — not read again; the button reads once', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const live = liveCoalescer(qc);
     renderColumn(qc);
 
-    // Read No. 1 — the first render of the tree.
+    // Read No. 1 — the first render of the tree, requested at +0.
     await waitFor(() => expect(pending.length).toBe(1));
-    now = base + 1_000;
-    await settle(0);
 
-    // Event A: the key is marked stale, read No. 2 starts.
+    // Event A arrives WHILE read No. 1 is in flight: no second read starts.
     now = base + 2_000;
-    const [evA, envA] = issueEvent('demo-1');
-    act(() => {
-      invalidateForEvent(qc, evA, envA, { isAdmin: false, currentUserId: 'u-1' });
-    });
-    await waitFor(() => expect(pending.length).toBe(2));
+    await deliver(live, 'demo-1');
+    expect(pending.length).toBe(1);
 
-    // Event B arrives WHILE read No. 2 is in flight. `cancelRefetch: false`
-    // does not start a third read here — and must not: otherwise a series of
-    // events would cancel the walk endlessly.
+    // Read No. 1 ends. It was requested before event A, so the shown rows
+    // know nothing about A: the tree is offered, not read again.
     now = base + 3_000;
-    const [evB, envB] = issueEvent('demo-1');
-    act(() => {
-      invalidateForEvent(qc, evB, envB, { isAdmin: false, currentUserId: 'u-1' });
-    });
-    expect(pending.length).toBe(2);
+    await settle(0);
+    expect(offer()).not.toBeNull();
+    expect(pending.length).toBe(1);
 
-    // Read No. 2 finishes. It was REQUESTED at mark +2000 —
-    // before event B (+3000), so the shown rows know nothing about B. Here the
-    // catch-up read No. 3 must happen; before the fix there were two of them.
+    // The reader applies it: one read, requested after the event.
     now = base + 4_000;
-    await settle(1);
-    await waitFor(() => expect(pending.length).toBe(3));
-
-    // Read No. 3 is requested at +4000 — later than the clock (+3000). No loop: after
-    // it nothing more is read.
+    await act(async () => { fireEvent.click(offer()!); });
+    await waitFor(() => expect(pending.length).toBe(2));
     now = base + 5_000;
-    await settle(2);
-    expect(pending.length).toBe(3);
+    await settle(1, NEW_ROWS);
+
+    expect(screen.queryByText('title demo-2')).not.toBeNull();
+    expect(updatesButton()).toBeNull();
+    expect(pending.length).toBe(2);
   });
 
-  test('with no event in flight there is no catch-up read', async () => {
-    // The flip side: the check must STAY SILENT when there is nothing to catch up.
-    // Without this case "always read once more" would pass the first test.
+  test('with no event in flight there is no catch-up: the read the button started ends the offer, and nothing more is read', async () => {
+    // The flip side: a first read with no event in flight is not offered, an
+    // event on the shown tree is offered without a read, and the read the
+    // button starts — with nothing arriving during it — ends the offer.
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const live = liveCoalescer(qc);
     renderColumn(qc);
 
     await waitFor(() => expect(pending.length).toBe(1));
     now = base + 1_000;
     await settle(0);
+    expect(offer()).toBeNull();
 
+    // Event A on the shown tree: offered, not read.
     now = base + 2_000;
-    const [ev, env] = issueEvent('demo-1');
-    act(() => {
-      invalidateForEvent(qc, ev, env, { isAdmin: false, currentUserId: 'u-1' });
-    });
-    await waitFor(() => expect(pending.length).toBe(2));
+    await deliver(live, 'demo-1');
+    await waitFor(() => expect(offer()).not.toBeNull());
+    expect(pending.length).toBe(1);
 
-    // Nothing arrives in flight — read No. 2 settles the question.
+    // Nothing arrives during the read the button starts — it settles the question.
     now = base + 3_000;
-    await settle(1);
+    await act(async () => { fireEvent.click(offer()!); });
+    await waitFor(() => expect(pending.length).toBe(2));
+    now = base + 4_000;
+    await settle(1, NEW_ROWS);
+
+    expect(screen.queryByText('title demo-2')).not.toBeNull();
+    expect(updatesButton()).toBeNull();
     expect(pending.length).toBe(2);
   });
 
-  test('a response committed after a later read started does not cancel or repeat that read', async () => {
-    // sk-545 — the product defect behind the flaky first test. Read No. 1 is
-    // finished, but the column has not committed it yet when event A starts
-    // read No. 2. When the column then commits read No. 1, its requestedAt is
-    // earlier than the clock, so the catch-up check fires. Read No. 2, already
-    // requested AFTER event A, answers that event; the catch-up must not
-    // cancel it and start read No. 3. Before the fix the catch-up invalidated
-    // with the library default `cancelRefetch: true` and did exactly that.
+  test('an event during the read the button started neither cancels nor repeats it: the event is offered after it', async () => {
+    // sk-545 — the catch-up of an event must not cancel a read already in
+    // flight and start another. Under the hold the event during the read the
+    // button started is owed as the offer: that read goes on, and ends.
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const live = liveCoalescer(qc);
     renderColumn(qc);
 
     await waitFor(() => expect(pending.length).toBe(1));
     now = base + 1_000;
-    pending[0](ROWS);
-    // Read No. 1 reaches the cache; the column is not told yet.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(queuedNotifications.length).toBeGreaterThan(0);
-
+    await settle(0);
     now = base + 2_000;
-    const [evA, envA] = issueEvent('demo-1');
-    act(() => {
-      invalidateForEvent(qc, evA, envA, { isAdmin: false, currentUserId: 'u-1' });
-    });
-    expect(pending.length).toBe(2);
+    await deliver(live, 'demo-1');
+    await waitFor(() => expect(offer()).not.toBeNull());
 
-    // The column now commits read No. 1 (requested at +0, older than the clock).
-    await commitNotifications();
+    // The button's read No. 2, requested at +3000.
+    now = base + 3_000;
+    await act(async () => { fireEvent.click(offer()!); });
+    await waitFor(() => expect(pending.length).toBe(2));
+
+    // Event B arrives WHILE read No. 2 is in flight.
+    now = base + 4_000;
+    await deliver(live, 'demo-1');
     expect(pending.length).toBe(2);
     expect(signals[1]?.aborted).toBe(false);
 
-    // Read No. 2 was requested at +2000, not earlier than the clock: nothing to
-    // catch up after it either.
-    now = base + 3_000;
-    await settle(1);
+    // Read No. 2 ends; it knows nothing about B: B is offered, not read.
+    now = base + 5_000;
+    await settle(1, NEW_ROWS);
+
+    expect(screen.queryByText('title demo-2')).not.toBeNull();
+    expect(offer()).not.toBeNull();
     expect(pending.length).toBe(2);
+    expect(signals[1]?.aborted).toBe(false);
   });
 });

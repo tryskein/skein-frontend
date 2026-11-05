@@ -3,7 +3,7 @@
  *
  * Mounts a tiny component that reports, through the column's real hook
  * (`lib/liveListDirty.ts#useReportReadingPosition`), that the list `key` is
- * shown as the column's ordinary list, read from its start. Used by tests
+ * shown as the column's ordinary list. Used by tests
  * that drive a list with a bare query observer instead of the column.
  */
 import { createElement, useRef } from 'react';

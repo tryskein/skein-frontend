@@ -1,12 +1,14 @@
 /**
- * sk-763 — the real Tasks column holds the list its reader is in, offers
- * «Updates available» where the reader can reach it, and applies it with
- * one read of the first page.
+ * sk-763 — the real Tasks column holds the list it shows, offers «Updates
+ * available» where the reader can reach it, and applies it with one read of
+ * the first page.
  *
  * The reference is the owner's decision for sk-763 (see
- * `lib/liveListDirty.ts`): a list being read is not reset under its reader;
- * the reader applies the owed updates with one click — the first page, one
- * request — and is shown the list from its start.
+ * `lib/liveListDirty.ts`): the list the column shows is not reset or re-read
+ * by the background, whatever its size and wherever its reader is; changes of
+ * its rows the client can apply are applied in place, and the reader applies
+ * the owed membership changes with one click — the first page, one request —
+ * and is shown the list from its start.
  *
  * The real `TasksColumn`, `useTasks` and `LiveEventsProvider` run on a fake
  * hub; the list endpoint is a literal server answered by cursor. jsdom has
@@ -18,22 +20,25 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import * as signalr from '@microsoft/signalr';
+import i18n from '../../../i18n/config';
 
-import type { IssueSummary, ListIssuesParams, ListIssuesResult } from '../../../api/issues';
+import type { FetchIssueTreeArgs, IssueSummary, IssueTreeResponse, ListIssuesParams, ListIssuesResult } from '../../../api/issues';
 
 const P = 'proj-uuid-1';
 
 const listIssuesSpy = vi.fn<(projectId: string, params?: ListIssuesParams) => Promise<ListIssuesResult>>();
+/** The tree endpoint (`GET …/issues/tree`), the column's layered tree reads it. */
+const fetchIssueTreeSpy = vi.fn<(args: FetchIssueTreeArgs) => Promise<IssueTreeResponse>>();
 
 vi.mock('../../../api/issues', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api/issues')>();
   return {
     ...actual,
     listIssues: (...args: [string, ListIssuesParams?]) => listIssuesSpy(...args),
-    fetchIssueTree: vi.fn(async () => ({ items: [] })),
+    fetchIssueTree: (args: FetchIssueTreeArgs) => fetchIssueTreeSpy(args),
   };
 });
 
@@ -107,6 +112,7 @@ const { LayoutProvider } = await import('../../../lib/useLayoutState');
 const { TasksUiStateProvider, useTasksUiState } = await import('../../../lib/useTasksUiState');
 const { TasksColumn } = await import('../TasksColumn');
 const { setViewportWidth } = await import('../../../test/viewport');
+const { resetTasksColumnTreeClockForTests } = await import('../../../lib/tasksColumnTreeClock');
 
 const hub = (signalr as unknown as { __mock: { handlers: Map<string, (payload: unknown) => void> } }).__mock;
 
@@ -269,12 +275,18 @@ const updatesButton = () => screen.queryByRole('button', { name: 'Updates availa
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // The column tree's clock is the tab's (module state): a case's fake time
+  // starts at the real now again, so an event stamped by the case before
+  // would lie in this case's future and make its first answer stale.
+  resetTasksColumnTreeClockForTests();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = FakeIntersectionObserver;
   observers.splice(0);
   window.localStorage.clear();
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   listIssuesSpy.mockReset();
+  fetchIssueTreeSpy.mockReset();
+  fetchIssueTreeSpy.mockImplementation(async () => ({ items: [] }));
   calls = [];
 });
 
@@ -546,15 +558,12 @@ describe('sk-763 — the Tasks column applies the updates of a held list', () =>
     expect(calls).toEqual([undefined]);
   });
 
-  // sk-763 — the column showing the list on another surface — another view,
-  // or the board grouped by another field — shows it from the start of the
-  // new surface's scroll containers: what makes a list of one page held is
-  // that its reader is away from its start ON THE SURFACE SHOWN NOW. A
-  // one-page list the reader left at the start of the new surface is re-read
-  // on a wave as before (K21): one read of its first page, no offer. A list
-  // that owes its updates, or has more than one page loaded, stays held
-  // across the change — the change takes nothing of either. The change of
-  // surface itself reads nothing.
+  // sk-763 (owner's decision) — the list the column shows is held whatever
+  // its size and wherever its reader is: one page at its start too. A change
+  // of membership waits for «Updates available», which reads the first page
+  // once. Another surface — another view, or the board grouped by another
+  // field — shows the same list, and it stays held: the change of surface
+  // takes neither the mark nor the pages, and itself reads nothing.
 
   type Surface = 'tree' | 'kanban';
 
@@ -647,7 +656,31 @@ describe('sk-763 — the Tasks column applies the updates of a held list', () =>
     expect(calls).toEqual(before);
   }
 
-  test.each(changeNames)('a one-page list read away from its start, %s shown from its start: a created issue re-reads the one page, with no offer', async (name) => {
+  test.each<[string, 'tree' | 'cards' | 'kanban']>([
+    ['the tree', 'tree'],
+    ['the cards', 'cards'],
+    ['the board', 'kanban'],
+  ])('%s, one page read from its start: a created issue sends nothing and is offered; the button reads the first page once', async (_n, view) => {
+    window.localStorage.setItem('skein.tasks.view', view);
+    server(1, 30);
+    pages[FIRST] = { ...pages[FIRST], hasMore: true, nextCursor: 'c1' };
+    serve();
+    await act(async () => { render(column('/projects/demo')); });
+    await advance(500);
+    expect(calls).toEqual([undefined]);
+    calls = [];
+
+    await issueCreated('demo-new');
+    expect(calls).toEqual([]);
+    expect(updatesButton()).not.toBeNull();
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(calls).toEqual([undefined]);
+    expect(updatesButton()).toBeNull();
+  });
+
+  test.each(changeNames)('a one-page list read away from its start, %s shown from its start: the list stays held — a created issue sends nothing and is offered', async (name) => {
     await onePageReadAwayFromStart(changes[name].from);
     expect(calls).toEqual([undefined]);
     await changeSurface(name);
@@ -655,8 +688,8 @@ describe('sk-763 — the Tasks column applies the updates of a held list', () =>
 
     await issueCreated('demo-new');
 
-    expect(calls).toEqual([undefined]);
-    expect(updatesButton()).toBeNull();
+    expect(calls).toEqual([]);
+    expect(updatesButton()).not.toBeNull();
   });
 
   test.each(changeNames)('a one-page list that owes its updates, %s: the list stays held and the offer stays', async (name) => {
@@ -681,6 +714,463 @@ describe('sk-763 — the Tasks column applies the updates of a held list', () =>
 
     expect(calls).toEqual([]);
     expect(updatesButton()).not.toBeNull();
+  });
+
+  // sk-763 — the tree with a link lens beyond parent-child (here «blocks»)
+  // draws its rows from the project's layered tree (`useLayeredTree`); the
+  // task list behind it still decides what the body shows around them —
+  // loading, a failure, an empty filtered set — and the header's count. The
+  // surface has these two sources, and both are held: the background reads
+  // neither, a membership change waits for «Updates available», and the one
+  // button reads each source once and is done only when both are.
+
+  /** A tree node of the literal tree endpoint. */
+  const node = (n: number) => ({ item: issue(n), depth: 0, isReference: false }) as unknown as IssueTreeResponse['items'][number];
+
+  /** The tree endpoint answers `n` root rows. */
+  const treeOf = (n: number): IssueTreeResponse => ({ items: Array.from({ length: n }, (_, i) => node(i + 1)) });
+
+  const treeReads = () => fetchIssueTreeSpy.mock.calls.length;
+
+  /** The tree view of `demo` with the «blocks» lens, as the lens control stores it, mounted. */
+  async function mountLayeredTree(): Promise<void> {
+    window.localStorage.setItem('skein.tasks.view', 'tree');
+    window.localStorage.setItem('skein.tasks.tree.demo.depTypes', JSON.stringify(['blocks', 'parent-child']));
+    server(1, 30);
+    serve();
+    await act(async () => { render(column('/projects/demo')); });
+  }
+
+  /** The tree view with the «blocks» lens, its tree answered with `rows` rows. */
+  async function layeredTreeShown(rows = 5): Promise<void> {
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(rows));
+    await mountLayeredTree();
+    await advance(500);
+    // The layered tree of the project, with the lens, is what is drawn.
+    expect(treeReads()).toBe(1);
+    expect(fetchIssueTreeSpy.mock.calls[0][0]).toMatchObject({ projectId: P, rootId: undefined });
+    expect(fetchIssueTreeSpy.mock.calls[0][0].types).toContain('blocks');
+    expect(screen.queryByText(`title demo-${rows}`)).not.toBeNull();
+  }
+
+  test.each<[string, () => Promise<void>]>([
+    ['a created issue', () => issueCreated('demo-new')],
+    ['the return to the tab', () => returnToTab()],
+  ])('the tree with the «blocks» lens: %s reads neither the tree nor the task list and offers the updates; the button reads each once', async (_n, wave) => {
+    await layeredTreeShown();
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+
+    await wave();
+
+    expect(treeReads()).toBe(0);
+    expect(calls).toEqual([]);
+    expect(screen.queryByText('title demo-5')).not.toBeNull();
+    expect(updatesButton()).not.toBeNull();
+
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(6));
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+    expect(updatesButton()).toBeNull();
+    expect(screen.getByRole('status').textContent).not.toBe('');
+  });
+
+  // An event before the first answer of the tree is owed by that answer,
+  // whichever way the live layer meets it: a created issue names the
+  // project's trees; a row change of an issue (phase 2) meets the tree only
+  // as «not answered yet», and that answer may come before the wave.
+  test.each<[string, () => void]>([
+    ['a created issue', () => {
+      act(() => hub.handlers.get('event')!({
+        id: nextEnvelope++, occurredAt: '2026-10-01T10:01:00Z', eventType: 'issue.created', entityType: 'issue',
+        entityId: 'demo-new', projectId: P, actor: 'bob', actorType: 'human', actorUserId: 'u-2', entityTitle: 'demo-new', projectIdPrefix: 'demo',
+      }));
+    }],
+    ['a renamed issue (its row on the event)', () => {
+      const { isBlocked: _b, ...row } = { ...issue(1), title: 'renamed demo-1', version: 2, updatedAt: ts(20_000), rowSeq: 41 };
+      act(() => hub.handlers.get('event')!({
+        id: nextEnvelope++, occurredAt: '2026-10-01T10:02:00Z', eventType: 'issue.updated', entityType: 'issue',
+        entityId: row.id, projectId: P, actor: 'bob', actorType: 'human', actorUserId: 'u-2', entityTitle: row.title, projectIdPrefix: 'demo',
+        changedFields: ['title'], row,
+      }));
+    }],
+  ])('the tree with the «blocks» lens: %s during its first read, answered before the wave, is offered — not read again', async (_n, event) => {
+    let answer: () => void = () => {};
+    fetchIssueTreeSpy.mockImplementation(() => new Promise((resolve) => { answer = () => resolve(treeOf(5)); }));
+    await mountLayeredTree();
+    await advance(100);
+    expect(treeReads()).toBe(1);
+
+    event();
+    await advance(100);
+    answer();
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 300);
+
+    expect(screen.queryByText('title demo-5')).not.toBeNull();
+    expect(treeReads()).toBe(1);
+    expect(updatesButton()).not.toBeNull();
+
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(6));
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(treeReads()).toBe(2);
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+    expect(updatesButton()).toBeNull();
+  });
+
+  test('the tree with the «blocks» lens: an event during the reads the button started is offered when they end, not read again', async () => {
+    await layeredTreeShown();
+    await issueCreated('demo-new-1');
+    expect(updatesButton()).not.toBeNull();
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    let answer: () => void = () => {};
+    fetchIssueTreeSpy.mockImplementation(() => new Promise((resolve) => { answer = () => resolve(treeOf(6)); }));
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+    expect(treeReads()).toBe(1);
+    await issueCreated('demo-new-2');
+    answer();
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 300);
+
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    expect(updatesButton()).not.toBeNull();
+  });
+
+  test('the tree with the «blocks» lens: the network back after the tree went stale reads no tree', async () => {
+    await layeredTreeShown();
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+
+    try {
+      act(() => { onlineManager.setOnline(false); });
+      await advance(10_000);
+    } finally {
+      act(() => { onlineManager.setOnline(true); });
+    }
+    await advance(300);
+
+    expect(treeReads()).toBe(0);
+    expect(calls).toEqual([]);
+    expect(screen.queryByText('title demo-5')).not.toBeNull();
+  });
+
+  // The two reads of the button are one attempt: a failure of either keeps
+  // the offer to retry, and the retry reads only the source still owed.
+  test.each<[string, 'tree' | 'list']>([
+    ['the tree', 'tree'],
+    ['the task list', 'list'],
+  ])('the tree with the «blocks» lens: the read of %s fails — the button offers a retry, which reads only that source and ends the updates', async (_n, failing) => {
+    await layeredTreeShown();
+    await issueCreated('demo-new');
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    fetchIssueTreeSpy.mockImplementation(async () => {
+      if (failing === 'tree') throw new Error('down');
+      return treeOf(6);
+    });
+    if (failing === 'list') {
+      listIssuesSpy.mockImplementationOnce((_pid, params) => {
+        calls.push(params?.cursor);
+        return Promise.reject(new Error('down'));
+      });
+    }
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    const retry = screen.queryByRole('button', { name: 'Update failed — retry' });
+    expect(retry).not.toBeNull();
+
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(6));
+    act(() => { retry!.focus(); });
+    await act(async () => { fireEvent.click(retry!); });
+    await advance(300);
+
+    expect(treeReads()).toBe(failing === 'tree' ? 1 : 0);
+    expect(calls).toEqual(failing === 'list' ? [undefined] : []);
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    // The retry read only the failed source, and it is this surface's own
+    // end (the clean source is part of it): told, and the focus given back.
+    expect(screen.getByRole('status').textContent).toBe(i18n.t('tasks:updatesApplied'));
+    expect(document.activeElement).not.toBeNull();
+    expect(document.activeElement!.matches('.col-tasks-header, .task-filters-search input')).toBe(true);
+  });
+
+  test('the tree with the «blocks» lens: the tree read landed, the task list read not yet — the button stays busy, a press reads nothing more, the end is told when both landed', async () => {
+    await layeredTreeShown();
+    await issueCreated('demo-new');
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(6));
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+
+    const button = updatesButton()!;
+    act(() => { button.focus(); });
+    await act(async () => { fireEvent.click(button); });
+    await advance(300);
+
+    // The tree has its answer; the task list has not.
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    const busy = screen.queryByRole('button', { name: 'Updating…' });
+    expect(busy).not.toBeNull();
+    expect(document.activeElement).toBe(busy);
+    expect(screen.getByRole('status').textContent).toBe('Updating…');
+
+    await act(async () => { fireEvent.click(busy!); });
+    await advance(300);
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+
+    answer();
+    await advance(300);
+
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('The list is updated');
+    // Where the single-list contract sends it: the header, or the search
+    // field where the header is not laid out (`TasksColumn.tsx#focusAfterUpdates`).
+    expect(document.activeElement).not.toBeNull();
+    expect(document.activeElement!.matches('.col-tasks-header, .task-filters-search input')).toBe(true);
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+  });
+
+  // A failed attempt keeps the obligations of the source that landed: a new
+  // event before the retry marks it again, and the retry reads both — each once.
+  test.each<[string, 'tree' | 'list']>([
+    ['the tree', 'tree'],
+    ['the task list', 'list'],
+  ])('the tree with the «blocks» lens: the read of %s failed and an issue is created before the retry — the retry reads both sources once', async (_n, failing) => {
+    await layeredTreeShown();
+    await issueCreated('demo-new-1');
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    fetchIssueTreeSpy.mockImplementation(async () => {
+      if (failing === 'tree') throw new Error('down');
+      return treeOf(6);
+    });
+    if (failing === 'list') {
+      listIssuesSpy.mockImplementationOnce((_pid, params) => {
+        calls.push(params?.cursor);
+        return Promise.reject(new Error('down'));
+      });
+    }
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    expect(screen.queryByRole('button', { name: 'Update failed — retry' })).not.toBeNull();
+
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(7));
+    await issueCreated('demo-new-2');
+    // The background still reads neither source.
+    expect(treeReads()).toBe(0);
+    expect(calls).toEqual([]);
+    const retry = screen.queryByRole('button', { name: 'Update failed — retry' });
+    expect(retry).not.toBeNull();
+
+    await act(async () => { fireEvent.click(retry!); });
+    await advance(300);
+
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    expect(screen.queryByText('title demo-7')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('The list is updated');
+  });
+
+  test('the tree with the «blocks» lens and a filter with no task: the column shows its empty state, not the tree', async () => {
+    await layeredTreeShown();
+    listIssuesSpy.mockImplementation((_pid, params) => {
+      calls.push(params?.cursor);
+      return Promise.resolve(params?.priority === 1
+        ? { items: [], total: 0, hasMore: false, nextCursor: null }
+        : pages[params?.cursor ?? FIRST]);
+    });
+
+    await act(async () => { ui!.setPriorityFilter('1'); });
+    await advance(500);
+
+    // The tree is not filtered (sk-44.5); the empty filtered task list keeps
+    // it off the screen, as before.
+    expect(screen.queryByText('title demo-5')).toBeNull();
+    expect(screen.queryByText('title demo-1')).toBeNull();
+    expect(screen.queryByText(i18n.t('tasks:emptyFiltered'))).not.toBeNull();
+  });
+
+  // The end of an attempt belongs to the surface that was pressed — all of
+  // its lists, read or not — not to any surface that shares one of them.
+  test('the tree with the «blocks» lens: the task filter changes while the button reads — the end of the old reads is not told to the new pair', async () => {
+    await layeredTreeShown();
+    await issueCreated('demo-new');
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(6));
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+
+    // The new task list (the same tree) fails its first read.
+    listIssuesSpy.mockImplementation((_pid, params) => {
+      calls.push(params?.cursor);
+      return params?.priority === 1 ? Promise.reject(new Error('down')) : Promise.resolve(pages[params?.cursor ?? FIRST]);
+    });
+    await act(async () => { ui!.setPriorityFilter('1'); });
+    await advance(300);
+
+    answer();
+    await advance(300);
+
+    expect(screen.getByRole('status').textContent).not.toBe(i18n.t('tasks:updatesApplied'));
+  });
+
+  test('the cards turn into the tree with the «blocks» lens while the button reads — the end of the list\'s read is not told to the tree, and the leaving button gives its focus to the column', async () => {
+    window.localStorage.setItem('skein.tasks.view', 'cards');
+    window.localStorage.setItem('skein.tasks.tree.demo.depTypes', JSON.stringify(['blocks', 'parent-child']));
+    server(1, 30);
+    serve();
+    await act(async () => { render(column('/projects/demo')); });
+    await advance(500);
+    expect(treeReads()).toBe(0);
+    await issueCreated('demo-new');
+    expect(updatesButton()).not.toBeNull();
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+
+    // The tree's first read waits.
+    let treeAnswer: () => void = () => {};
+    fetchIssueTreeSpy.mockImplementation(() => new Promise((resolve) => { treeAnswer = () => resolve(treeOf(5)); }));
+    await act(async () => { ui!.setView('tree'); });
+    await advance(300);
+    expect(treeReads()).toBe(1);
+    // The tree's button shows the list's read running; the reader is on it.
+    const busy = screen.queryByRole('button', { name: i18n.t('tasks:updatesApplying') });
+    expect(busy).not.toBeNull();
+    act(() => { busy!.focus(); });
+    const listReads = calls.length;
+
+    answer();
+    await advance(300);
+
+    expect(screen.getByRole('status').textContent).not.toBe(i18n.t('tasks:updatesApplied'));
+    // Nothing is owed any more: the button leaves, its focus goes to the column.
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    expect(document.activeElement).not.toBeNull();
+    expect(document.activeElement!.matches('.col-tasks-header, .task-filters-search input')).toBe(true);
+    expect(treeReads()).toBe(1);
+    expect(calls.length).toBe(listReads);
+    treeAnswer();
+    await advance(300);
+  });
+
+  test('the tree with the «blocks» lens: an issue created while the button reads — the reads land, the offer stays and keeps the focus', async () => {
+    await layeredTreeShown();
+    await issueCreated('demo-new-1');
+    let answer: () => void = () => {};
+    fetchIssueTreeSpy.mockImplementation(() => new Promise((resolve) => { answer = () => resolve(treeOf(6)); }));
+    const button = updatesButton()!;
+    act(() => { button.focus(); });
+    await act(async () => { fireEvent.click(button); });
+    await advance(0);
+    await issueCreated('demo-new-2');
+    answer();
+    await advance(300);
+
+    expect(screen.queryByText('title demo-6')).not.toBeNull();
+    const offer = updatesButton();
+    expect(offer).not.toBeNull();
+    expect(document.activeElement).toBe(offer);
+  });
+
+  test('the tree rooted at an epic: the network back after it went stale reads it again, as before', async () => {
+    await layeredTreeShown();
+    await act(async () => { ui!.setTreeRootAnchor({ id: 'demo-1', projectId: P }); });
+    await advance(500);
+    const rooted = () => fetchIssueTreeSpy.mock.calls.filter(([args]) => args.rootId === 'demo-1').length;
+    expect(rooted()).toBe(1);
+
+    try {
+      act(() => { onlineManager.setOnline(false); });
+      await advance(10_000);
+    } finally {
+      act(() => { onlineManager.setOnline(true); });
+    }
+    await advance(300);
+
+    expect(rooted()).toBe(2);
+  });
+
+  test('the tree with the «blocks» lens: the button moves to the filters row while it reads — it stays busy, reads nothing more, and tells the end there', async () => {
+    setViewportWidth(1440);
+    await layeredTreeShown();
+    await issueCreated('demo-new');
+    fetchIssueTreeSpy.mockClear();
+    calls = [];
+    fetchIssueTreeSpy.mockImplementation(async () => treeOf(6));
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    const inHeader = updatesButton()!;
+    expect(inHeader.closest('.col-tasks-header')).not.toBeNull();
+    await act(async () => { fireEvent.click(inHeader); });
+    await advance(300);
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+
+    // A phone: the column header is stripped, the button is in the filters row.
+    act(() => { setViewportWidth(390); });
+    await advance(300);
+    const busy = screen.queryByRole('button', { name: 'Updating…' });
+    expect(busy).not.toBeNull();
+    expect(busy).not.toBe(inHeader);
+    expect(busy!.closest('.col-tasks-header')).toBeNull();
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
+    act(() => { busy!.focus(); });
+
+    answer();
+    await advance(300);
+
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('The list is updated');
+    expect(document.activeElement).not.toBeNull();
+    expect(document.activeElement!.matches('.col-tasks-header, .task-filters-search input')).toBe(true);
+    expect(treeReads()).toBe(1);
+    expect(calls).toEqual([undefined]);
   });
 
   // The column keeps the list's query observed under a surface that shows

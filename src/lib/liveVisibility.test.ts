@@ -410,16 +410,12 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
     return { reads: () => n, stop };
   }
 
-  /** A mounted task list with two loaded pages; records the page params it reads. */
-  function mountTwoPageList(qc: QueryClient): { params: unknown[]; stop: () => void } {
-    return mountList(qc, 2);
-  }
-
   /**
-   * A mounted task list with `loaded` pages (sk-763: two or more is a list
-   * being read, one is not); records the page params it reads.
+   * A mounted task list with `loaded` pages; records the page params it
+   * reads. `shown`: the column shows it (sk-763: a shown list is held,
+   * whatever its size); not shown, it is re-read as before (K21).
    */
-  function mountList(qc: QueryClient, loaded: 1 | 2): { params: unknown[]; stop: () => void } {
+  function mountList(qc: QueryClient, loaded: 1 | 2, shown = true): { params: unknown[]; stop: () => void } {
     const key = ['tasks', 'project', 'q-proj', 'all', 'active', 'all', 'all', 'all', '', '', 'updated', String(loaded)];
     const params: unknown[] = [];
     qc.setQueryData(key, loaded === 2
@@ -440,7 +436,7 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
     });
     const stop = observer.subscribe(() => {});
     // The column shows it (sk-763: only a list the column shows can be held).
-    showReadingList(qc, key);
+    if (shown) showReadingList(qc, key);
     return { params, stop };
   }
 
@@ -451,7 +447,8 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
   test('focus re-reads the task lists from the first page only (K21), the members and the active trees', async () => {
     const qc = await mountTab();
     await settle();
-    const list = mountList(qc, 1);
+    // A task list the column does not show (K21; a shown one is held — below).
+    const list = mountList(qc, 1, false);
     const members = mountCounter(qc, ['members', 'list', P]);
     const tree = mountCounter(qc, ['issues', 'tree', P, '__forest__', 'parent-child', '__full__', '__no_blockers__']);
     act(() => {
@@ -503,7 +500,7 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
       nav.current!(list);
     });
     await settle();
-    const tasks = mountTwoPageList(qc);
+    const tasks = mountList(qc, 2);
     const members = mountCounter(qc, ['members', 'list', P]);
 
     for (const path of openings) {
@@ -664,7 +661,8 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
   test('an obligation keeps «first page only»: a new issue while hidden → one page on return', async () => {
     const qc = await mountTab();
     await settle();
-    const list = mountList(qc, 1);
+    // A task list the column does not show (K21; a shown one is held — below).
+    const list = mountList(qc, 1, false);
     setHidden(true);
     deliverEvent({ eventType: 'issue.created', entityType: 'issue', entityId: 'q-9', projectId: 'q-proj' });
     await flush(LIVE_INVALIDATION_WINDOW_MS);
@@ -675,13 +673,17 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
     list.stop();
   });
 
-  // sk-763 (owner's decision): a list being read — two pages loaded, shown —
-  // is not reset by focus, by the return of visibility or by the obligations
-  // a hidden tab kept; it is marked «updates available» and keeps its pages.
-  test('a list being read: focus and the return walk no read of it; the obligation becomes the mark', async () => {
+  // sk-763 (owner's decision): a list the column shows — one page or more,
+  // from its start or not — is not reset by focus, by the return of
+  // visibility or by the obligations a hidden tab kept; it is marked
+  // «updates available» and keeps its pages.
+  test.each<[string, 1 | 2]>([
+    ['one page', 1],
+    ['two pages', 2],
+  ])('a shown list of %s: focus and the return walk no read of it; the obligation becomes the mark', async (_n, loaded) => {
     const qc = await mountTab();
     await settle();
-    const list = mountTwoPageList(qc);
+    const list = mountList(qc, loaded);
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
@@ -693,7 +695,7 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
     await flush(LIVE_INVALIDATION_WINDOW_MS * 2);
     expect(list.params).toEqual([]);
     const held = qc.getQueryCache().findAll({ queryKey: ['tasks', 'project', 'q-proj'] })[0];
-    expect((held.state.data as { pages: unknown[] }).pages).toHaveLength(2);
+    expect((held.state.data as { pages: unknown[] }).pages).toHaveLength(loaded);
     expect(readingListHold.marked(held)).toBe(true);
     list.stop();
   });

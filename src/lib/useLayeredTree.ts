@@ -74,6 +74,14 @@ export interface UseLayeredTreeArgs {
   includeBlockers?: boolean;
   /** When false, the underlying query is gated off. */
   enabled?: boolean;
+  /**
+   * sk-763 — whether the tree is read again when the browser comes back
+   * online (TanStack's `refetchOnReconnect`). Absent: the library's default.
+   * The Tasks column passes `false` for the project's tree it shows: that
+   * tree is held, and the live connection's return reads it through the live
+   * layer (`lib/liveListDirty.ts`).
+   */
+  refetchOnReconnect?: boolean;
 }
 
 export interface UseLayeredTreeResult {
@@ -180,7 +188,7 @@ export function patchLayeredTreeRow(
 }
 
 export function useLayeredTree(args: UseLayeredTreeArgs): UseLayeredTreeResult {
-  const { project, rootId, types, maxDepth, includeBlockers, enabled = true } = args;
+  const { project, rootId, types, maxDepth, includeBlockers, enabled = true, refetchOnReconnect } = args;
 
   const query: UseQueryResult<LayeredTreePayload, unknown> = useQuery({
     queryKey: layeredTreeQueryKey(project, rootId, types, maxDepth, includeBlockers),
@@ -205,6 +213,7 @@ export function useLayeredTree(args: UseLayeredTreeArgs): UseLayeredTreeResult {
     },
     enabled,
     staleTime: 5_000,
+    ...(refetchOnReconnect === undefined ? {} : { refetchOnReconnect }),
   });
 
   const tooLarge = (() => {

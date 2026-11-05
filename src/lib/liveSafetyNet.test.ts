@@ -279,7 +279,8 @@ describe('No. 82 — the shape of the tick', () => {
     stop();
   });
 
-  test('the «unreviewed» list of one page, read from its start, is re-read from its first page (K21)', async () => {
+  // A list the column does not show (sk-763: a shown one is held, above).
+  test('the «unreviewed» list of one page the column does not show is re-read from its first page (K21)', async () => {
     await mountTab();
     const key = ['tasks', 'me', 'created-by', 'unreviewed', 'all', 'all', 'all', '', 'updated'];
     const params: unknown[] = [];

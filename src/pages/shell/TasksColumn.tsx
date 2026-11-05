@@ -12,6 +12,7 @@ import { COL_BOUNDS, useLayoutState } from '../../lib/useLayoutState';
 import { useProjectByHandle } from '../../lib/useProjectByHandle';
 import { useProjectsList } from '../../lib/useProjectsList';
 import {
+  hashKey,
   keepPreviousData,
   useQueries,
   useQuery,
@@ -93,7 +94,7 @@ import { BudilnikLensBody } from './BudilnikLensBody';
 import { useRingingIssueIds, useRingingTaskCount } from '../../lib/useReminders';
 import { SkeinTooltip } from '../../components/SkeinTooltip';
 import { TasksUpdatesButton } from './TasksUpdatesButton';
-import { scrollReadingToStart, useReportReadingPosition } from '../../lib/liveListDirty';
+import { holdsReadingList, readingListHold, scrollReadingToStart, useReportReadingPosition } from '../../lib/liveListDirty';
 import { useWidthMode } from '../../lib/useWidthMode';
 import { useDeclareProjects } from '../../lib/liveProjectDeclaration';
 
@@ -177,6 +178,27 @@ interface Props {
    * `useTasks`. Filters / search / blob mode are all suppressed.
    */
   budilnikMode: boolean;
+}
+
+/** sk-36 — only `parent-child` is toggled on: the tree is built client-side over the task list. */
+function onlyParentChildOf(depTypes: ReadonlySet<DepType>): boolean {
+  return depTypes.size === 1 && depTypes.has('parent-child');
+}
+
+/**
+ * sk-36 / sk-98 — whether the tree view draws the backend layered tree
+ * (`useLayeredTree`): a project is resolved and a link lens beyond
+ * parent-child is on, or the tree is rooted at an epic. One predicate for
+ * the body, which reads that tree, and for the column, which reports and
+ * offers the list it shows (sk-763).
+ */
+function readsLayeredTree(
+  view: ReturnType<typeof useTasksUiState>['view'],
+  projectId: string | null,
+  depTypes: ReadonlySet<DepType>,
+  anchored: boolean,
+): boolean {
+  return view === 'tree' && projectId !== null && (anchored || !onlyParentChildOf(depTypes));
 }
 
 /**
@@ -480,21 +502,6 @@ export function TasksColumn({
   // sk-50 — during a search the body is the flat (cards) list whatever view
   // is persisted; on clear, the persisted view returns.
   const shownView = searchModes.searchActive ? 'cards' : ui.view;
-  // sk-763 — whether the column shows this list as its ordinary list (not
-  // under the reminders lens, a rooted subtree, the pasted-codes result or
-  // folded away), on which surface, and where the reader is in it: a list
-  // being read is not reset by the background (`lib/liveListDirty.ts`). The
-  // surface is the view, and for the board also its grouping: the lanes are
-  // keyed by the axis (`kanbanBoard.ts#kanbanColumnKey`), so another axis is
-  // another set of scroll containers. Neither is part of the list's key.
-  useReportReadingPosition(tasks.cacheKey, {
-    shown: !collapsed && !budilnikMode && !anchored && !blob.active,
-    root: columnRef,
-    surface: shownView === 'kanban' ? `kanban:${ui.kanbanAxis}` : shownView,
-  });
-  const updatesButton = (
-    <TasksUpdatesButton listKey={tasks.cacheKey} onApply={scrollBodyToTop} focusAfter={focusAfterUpdates} />
-  );
   // sk-622.21 T041 (US-9) — the project of the open route is declared
   // first, even while it shows no rows (an issue created in it must still
   // arrive). The rows' own projects are declared from the query cache.
@@ -537,6 +544,26 @@ export function TasksColumn({
   // (legacy parent-child-only client-side tree) and the layered-tree
   // backend query.
   const [treeDepTypes, setTreeDepTypes] = useTreeDepTypes(layout.selectedProject);
+
+  // sk-763 — what the column shows, when it shows its ordinary list (not
+  // under the reminders lens, a rooted subtree, the pasted-codes result or
+  // folded away): the task list, and — the tree view with a link lens beyond
+  // parent-child — the project's layered tree the body draws (the same key
+  // `TasksBody` reads). The task list still decides the body around that tree
+  // (loading, a failure, an empty filtered set) and the header's count, so
+  // both are sources of what is shown, and neither is reset or re-read by
+  // the background (`lib/liveListDirty.ts`). «Updates available» offers and
+  // reads them together: the tree once and the task list's first page once.
+  const listShown = !collapsed && !budilnikMode && !anchored && !blob.active;
+  const columnTreeKey = layeredTreeQueryKey(tasks.resolvedProjectId, null, [...treeDepTypes]);
+  const treeShown = readsLayeredTree(shownView, tasks.resolvedProjectId, treeDepTypes, false);
+  useReportReadingPosition(tasks.cacheKey, { shown: listShown, root: columnRef });
+  useReportReadingPosition(columnTreeKey, { shown: listShown && treeShown, root: columnRef });
+  const updatesButton = treeShown ? (
+    <TasksUpdatesButton listKey={columnTreeKey} alsoKey={tasks.cacheKey} onApply={scrollBodyToTop} focusAfter={focusAfterUpdates} />
+  ) : (
+    <TasksUpdatesButton listKey={tasks.cacheKey} onApply={scrollBodyToTop} focusAfter={focusAfterUpdates} />
+  );
 
   // Resolve project UUID → display alias (idPrefix) for cross-project
   // Outbox where `layout.selectedProject` is null but each item carries
@@ -2072,8 +2099,7 @@ function TasksBody({
   // round-trip). Anything else → `useLayeredTree` against the new
   // backend endpoint, which returns a pre-flattened DFS row list
   // already-encoding (depth, parent, edge type) per row.
-  const onlyParentChild =
-    treeDepTypes.size === 1 && treeDepTypes.has('parent-child');
+  const onlyParentChild = onlyParentChildOf(treeDepTypes);
 
   // sk-98 — when anchored, the layered tree is rooted at the epic and runs
   // against the ANCHOR's projectId (the blob row carried it), regardless of
@@ -2145,13 +2171,17 @@ function TasksBody({
   // `view === 'tree' && !onlyParentChild && resolvedProjectId !== null`.
   // sk-429 — the condition is named because two readers use it: the query itself and
   // the freshness check below. Two copies of one condition would drift apart.
-  const layeredEnabled =
-    view === 'tree' && treeProjectId !== null && (anchored || !onlyParentChild);
+  const layeredEnabled = readsLayeredTree(view, treeProjectId, treeDepTypes, anchored);
   const layered = useLayeredTree({
     project: treeProjectId,
     rootId: anchored ? treeRootAnchor!.id : null,
     types: layeredTypes,
     enabled: layeredEnabled,
+    // sk-763 — the project's tree the column shows is held: the network back
+    // does not re-read it on its own; the live connection's return reads it
+    // through the live layer, as for the task list (`useTasks.ts`). A subtree
+    // rooted at an epic keeps the library's default.
+    refetchOnReconnect: anchored ? undefined : false,
   });
 
   // sk-763 — the conditions the tree's rows answer: the list behind them,
@@ -2210,12 +2240,23 @@ function TasksBody({
     // There is no response yet — nothing to judge; the request is in flight anyway.
     if (layered.requestedAt === null) return;
     if (!isStaleAgainstTasksColumnTreeClock(layered.requestedAt)) return;
+    const treeKey = layeredTreeQueryKey(
+      treeProjectId,
+      anchored ? treeRootAnchor!.id : null,
+      layeredTypes,
+    );
+    // sk-763 — the tree the column shows is held (`lib/liveListDirty.ts`):
+    // the event is not read here but owed as «Updates available». The mark
+    // is set here too: an event the live layer met while the tree had no
+    // answer yet may no longer match any tree when its wave runs, and then
+    // only this clock still knows of it (marking twice is marking once).
+    const shownTree = qc.getQueryCache().get(hashKey(treeKey));
+    if (shownTree !== undefined && holdsReadingList(shownTree)) {
+      readingListHold.mark(shownTree);
+      return;
+    }
     void qc.invalidateQueries({
-      queryKey: layeredTreeQueryKey(
-        treeProjectId,
-        anchored ? treeRootAnchor!.id : null,
-        layeredTypes,
-      ),
+      queryKey: treeKey,
       refetchType: 'active',
     }, { cancelRefetch: false });
   }, [

@@ -3,13 +3,15 @@
  *
  * ─── What the owner decided ────────────────────────────────────────
  *
- * While a person reads a loaded task list (the Tasks column, tree or
- * cards), the background does not drop the pages they scrolled in: a row
- * change the client can apply with certainty is applied in place
+ * While the Tasks column shows a loaded task list (tree, cards or board),
+ * the background does not drop its pages or re-read them — one page or
+ * many, from its start or not: a row change the client can apply with
+ * certainty is applied in place
  * (`liveRowPatch.ts`), and everything else — a change the list cannot
  * answer from the event, a new row, focus, visibility, a reconnect — marks
  * the list «updates available». The person applies it with one explicit
- * click, which reads the first page in one request. Some numbers (the
+ * click, which reads the first page in one request (a layered tree with the
+ * task list behind it: the tree once and that first page once). Some numbers (the
  * total, blocked markers, epic progress of the far pages) may be stale
  * until then. No automatic re-read of the loaded pages.
  *
@@ -19,23 +21,26 @@
  *
  * ─── Which list is held ────────────────────────────────────────────
  *
- * {@link holdsReadingList}: a Tasks-column list (`['tasks', …]`, not a text
- * search — the hybrid search pages a server snapshot with its own
- * recovery, sk-346) that the column SHOWS now as its ordinary list (tree,
- * cards or board — not under the reminders lens, a rooted subtree or the
- * pasted-codes result, which keep the query observed but show something
- * else; {@link useReportReadingPosition}), and that the reader is in:
- *  - it already owes updates (a mark): it stays held until the reader
- *    applies them — returning to the start applies nothing on its own;
- *  - more than one page is loaded: a re-read of the first page drops the
- *    pages after it;
- *  - one page is loaded and the column is scrolled away from its start:
- *    new rows on top would push the rows being read out of the page.
- * A list shown from its start with one page, a list nobody shows and a
- * list the column shows something else over are re-read as before (K21) —
- * a held list nobody shows any more is cut as before, and its return reads
- * that one page, which drops its mark. The decision is made by the
- * coalescing batcher at the moment of the wave (`liveInvalidationBatcher.ts`).
+ * {@link holdsReadingList}: the list the Tasks column SHOWS now as its
+ * ordinary list — a task list (`['tasks', …]`, not a text search: the hybrid
+ * search pages a server snapshot with its own recovery, sk-346) in the
+ * cards, the board or the parent-child tree, or the project's layered tree
+ * (`['issues', 'tree', pid, '__forest__', …]`) the tree view draws with a
+ * link lens beyond parent-child (then the task list behind it is shown too:
+ * it decides the body around the tree and the header's count, and the one
+ * «Updates available» reads both, `TasksUpdatesButton.tsx`); not under the
+ * reminders lens, a rooted subtree or the pasted-codes result, which keep
+ * the query observed but show something else ({@link useReportReadingPosition})
+ * — and that has an answer loaded (a tree answered with no row too) —
+ * however many pages, wherever its reader is in it: one page read from its
+ * start is held too (the owner's decision: the list does not rebuild itself
+ * while it is looked at, and the background reads less). A list nobody
+ * shows and a list the column shows something else over are re-read as
+ * before (K21) — a held list nobody shows any more is cut as before, and its
+ * return reads that one page, which drops its mark. The first read of a
+ * list is its own: nothing is loaded yet, nothing is held. The decision is
+ * made by the coalescing batcher at the moment of the wave
+ * (`liveInvalidationBatcher.ts`).
  *
  * ─── What the mark is ──────────────────────────────────────────────
  *
@@ -58,8 +63,6 @@ import type { ReadingHold } from './liveInvalidationBatcher';
 const dirty = new WeakSet<Query>();
 /** Lists the Tasks column shows as its ordinary list now. */
 const shownByColumn = new WeakSet<Query>();
-/** Lists whose column is scrolled away from the start (the reader is in them). */
-const awayFromStart = new WeakSet<Query>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -72,30 +75,42 @@ function loadedPages(data: unknown): number {
   return Array.isArray(pages) ? pages.length : 0;
 }
 
-/** Is `key` a task list a reading hold may apply to (no text search)? */
+/**
+ * Is `key` the column's layered tree of a project — the tree the Tasks
+ * column draws with a link lens beyond parent-child
+ * (`useLayeredTree.ts#layeredTreeQueryKey` with no root)? Not a subtree
+ * rooted at an epic (`rootId`), not the cross-project tree.
+ */
+function columnTreeKey(key: QueryKey): boolean {
+  return key[0] === 'issues' && key[1] === 'tree'
+    && typeof key[2] === 'string' && key[2] !== '__cross__'
+    && key[3] === '__forest__';
+}
+
+/** Is `key` a list a reading hold may apply to: a task list (no text search) or the column's layered tree? */
 function holdableListKey(key: QueryKey): boolean {
   const info = tasksListInfo(key);
-  return info !== null && info.kind !== 'search';
+  if (info !== null) return info.kind !== 'search';
+  return columnTreeKey(key);
+}
+
+/** Whether `q` has an answer shown: a page of a task list, the tree's answer (empty or not). */
+function answered(q: Query): boolean {
+  return columnTreeKey(q.queryKey) ? q.state.data !== undefined : loadedPages(q.state.data) > 0;
 }
 
 /** Whether the background must not reset `q` now (see the module header). */
 export function holdsReadingList(q: Query): boolean {
-  if (!holdableListKey(q.queryKey) || !q.isActive() || !shownByColumn.has(q)) return false;
-  if (dirty.has(q)) return true;
-  const pages = loadedPages(q.state.data);
-  return pages > 1 || (pages === 1 && awayFromStart.has(q));
+  return holdableListKey(q.queryKey) && q.isActive() && shownByColumn.has(q) && answered(q);
 }
 
 /**
  * What the Tasks column reports of the list `q` ({@link useReportReadingPosition}):
- * whether it shows it as its ordinary list, and whether its reader is away
- * from the start.
+ * whether it shows it as its ordinary list.
  */
-function reportReadingList(q: Query, report: { shown: boolean; awayFromStart: boolean }): void {
-  if (report.shown) shownByColumn.add(q);
+function reportReadingList(q: Query, shown: boolean): void {
+  if (shown) shownByColumn.add(q);
   else shownByColumn.delete(q);
-  if (report.awayFromStart) awayFromStart.add(q);
-  else awayFromStart.delete(q);
 }
 
 /**
@@ -118,47 +133,23 @@ export function scrollReadingToStart(root: HTMLElement | null): void {
 
 /**
  * Report the list `key` the Tasks column shows (`shown`: its ordinary list
- * is on screen) and where its reader is: away from the start when any of
- * the column's scroll containers inside `root` is scrolled. `scroll` does
- * not bubble, so it is listened to in the capture phase on the document —
- * the column may mount folded and its body appear later. The cache entry is
- * looked up by hash, and found again when the list is evicted and read
- * anew; a scroll writes only a change of the away flag.
- *
- * `surface` names the surface the list is shown on: the column's view
- * (tree, cards) and, for the board, its grouping — another grouping is
- * another set of lanes. Another surface brings other scroll containers,
- * which start at their start and send no `scroll`. A change of `surface`
- * subscribes the hook again, and the subscription measures the position on
- * the scroll containers then in the column, so a list left scrolled on the
- * previous surface is not taken as one its reader is away in. Nothing else
- * of the list changes with it — its mark, its continuation and its data
- * stay, and nothing is read. Absent — one surface.
+ * is on screen), and let the reader's moves in it open the infinite scroll
+ * after an apply. The cache entry is looked up by hash, and found again when
+ * the list is evicted and read anew. The events are listened to in the
+ * capture phase on the document: the column may mount folded and its body
+ * appear later.
  */
 export function useReportReadingPosition(
   key: QueryKey,
-  opts: { shown: boolean; root: RefObject<HTMLElement | null>; surface?: string },
+  opts: { shown: boolean; root: RefObject<HTMLElement | null> },
 ): void {
   const qc = useQueryClient();
   const hash = hashKey(key);
-  const { shown, root, surface } = opts;
+  const { shown, root } = opts;
   useEffect(() => {
     const cache = qc.getQueryCache();
     let q: Query | undefined = cache.get(hash);
-    const measure = () => scrollersIn(root.current).some((el) => el.scrollTop > 0);
-    let away = measure();
-    const apply = () => {
-      if (q) reportReadingList(q, { shown, awayFromStart: away });
-    };
-    apply();
-    const onScroll = (e: Event) => {
-      const t = e.target;
-      if (!(t instanceof HTMLElement) || !t.matches(READING_SCROLLERS) || !root.current?.contains(t)) return;
-      const next = measure();
-      if (next === away) return;
-      away = next;
-      apply();
-    };
+    if (q) reportReadingList(q, shown);
     // The reader moving in the list — a wheel turn or a touch drag over it,
     // a navigation key on it, a press on a scroll container itself (its
     // scrollbar) — lets the infinite scroll go on after an apply
@@ -182,23 +173,19 @@ export function useReportReadingPosition(
       if (ev.query.queryHash !== hash) return;
       if (ev.type === 'added') {
         q = ev.query;
-        apply();
+        reportReadingList(q, shown);
       } else if (ev.type === 'removed' && ev.query === q) {
         q = undefined;
       }
     });
-    document.addEventListener('scroll', onScroll, true);
     for (const type of intents) document.addEventListener(type, onIntent, { capture: true, passive: true });
     return () => {
-      document.removeEventListener('scroll', onScroll, true);
       for (const type of intents) document.removeEventListener(type, onIntent, { capture: true });
       unsubscribe();
-      if (q) reportReadingList(q, { shown: false, awayFromStart: false });
+      if (q) reportReadingList(q, false);
     };
-    // `key` is read through its hash: a new array of the same key is the same
-    // list. `surface` is not read here: its change re-subscribes, and the
-    // subscription measures the scroll containers of the surface shown now.
-  }, [qc, hash, shown, root, surface]);
+    // `key` is read through its hash: a new array of the same key is the same list.
+  }, [qc, hash, shown, root]);
 }
 
 /** Mark the list of `q` «updates available». */
@@ -261,7 +248,34 @@ const applyPhase = new WeakMap<Query, 'applying' | 'failed'>();
 const continuationClosed = new WeakSet<Query>();
 
 type ApplyOutcome = 'applied' | 'failed';
-const outcomeListeners = new Set<(q: Query, outcome: ApplyOutcome) => void>();
+
+/**
+ * One press of «Updates available» ({@link applyHeldLists}): the surface
+ * pressed — every list it shows, read or not — and the outcome of each
+ * list's apply it waits for as that apply ends: `undefined` while it runs,
+ * `null` when it ended with no outcome.
+ */
+interface SurfaceAttempt {
+  surface: readonly Query[];
+  reads: Map<Query, ApplyOutcome | null | undefined>;
+}
+/** The attempts a list's running apply is awaited by; the entry goes when that apply ends. */
+const surfaceAttempts = new WeakMap<Query, Set<SurfaceAttempt>>();
+const appliedListeners = new Set<(surface: readonly Query[]) => void>();
+
+/** The apply of `q` ended: every attempt awaiting it learns it, and tells when all its reads landed. */
+function settleSurfaceAttempts(q: Query, outcome: ApplyOutcome | null): void {
+  const attempts = surfaceAttempts.get(q);
+  if (attempts === undefined) return;
+  surfaceAttempts.delete(q);
+  for (const attempt of attempts) {
+    attempt.reads.set(q, outcome);
+    const outcomes = [...attempt.reads.values()];
+    if (outcomes.includes(undefined)) continue;
+    if (!outcomes.every((o) => o === 'applied')) continue;
+    for (const listener of appliedListeners) listener(attempt.surface);
+  }
+}
 
 function openContinuation(q: Query): void {
   if (!continuationClosed.delete(q)) return;
@@ -289,7 +303,8 @@ export function mayContinue(q: Query | undefined, explicit: boolean): boolean {
 
 /**
  * The reader applies the updates (the button): the list is cut to its first
- * page and that page is read again — one request; a read in flight is
+ * page and that page is read again — one request (a layered tree has no
+ * pages: it is read again as it is); a read in flight is
  * cancelled first (its pages are dropped). The operation ends with the
  * REAL end of that read — the success of a full read of the list, or its
  * failure; a read paused offline keeps it running until the network is
@@ -336,7 +351,7 @@ export function applyHeldList(qc: QueryClient, key: QueryKey): void {
     else applyPhase.delete(q);
     if (outcome !== null) continuationClosed.add(q);
     emit();
-    if (outcome) for (const l of outcomeListeners) l(q, outcome);
+    settleSurfaceAttempts(q, outcome);
   };
   const unsubscribe = cache.subscribe((e) => {
     if (e.query !== q) return;
@@ -376,11 +391,57 @@ export function applyHeldList(qc: QueryClient, key: QueryKey): void {
   })();
 }
 
-/** Called with the outcome of every apply as it ends (the button moves focus, announces). */
-export function onApplyOutcome(listener: (q: Query, outcome: ApplyOutcome) => void): () => void {
-  outcomeListeners.add(listener);
+/**
+ * The reader applies the updates of one surface. `surface` is every list
+ * the pressed control shows (its identity); `owed`, a part of it, the lists
+ * that owe updates — each goes through its own {@link applyHeldList} (a list
+ * whose apply already runs joins that read), a clean list is not read.
+ *
+ * The press is one attempt, known before any of its reads can end, and it
+ * belongs to the cache entries of this client, not to the control: a
+ * control of the SAME surface mounted again while the reads run (it moved
+ * between the column header and the filters row) learns the end like the
+ * one pressed, while a surface that only shares a list with it (another
+ * task filter over the same tree, the cards turned into a tree) does not.
+ * A surface with a list not in the cache has no identity to confirm: its
+ * reads run, its end is told to no one.
+ *
+ * The attempt landed when every awaited apply ended with an answer; a
+ * failure of any, or an apply that ended with no outcome (its read
+ * cancelled, the entry left the cache or was reset), is no success. The end
+ * says only that the reads landed: an event they did not carry keeps its
+ * own mark (the live layer, or the column's tree clock after the answer is
+ * committed, `TasksColumn.tsx`), and the offer stays. Where the focus goes
+ * is not decided here (`TasksUpdatesButton.tsx`). Nothing is kept once each
+ * awaited apply ended: no element, no history.
+ */
+function everyCached(lists: ReadonlyArray<Query | undefined>): lists is readonly Query[] {
+  return lists.every((q) => q !== undefined);
+}
+
+export function applyHeldLists(qc: QueryClient, surface: readonly QueryKey[], owed: readonly QueryKey[]): void {
+  const cache = qc.getQueryCache();
+  const shown = surface.map((k) => cache.get(hashKey(k)));
+  const awaited = [...new Set(owed.map((k) => cache.get(hashKey(k))).filter((q): q is Query => q !== undefined))];
+  if (awaited.length > 0 && everyCached(shown)) {
+    const attempt: SurfaceAttempt = {
+      surface: [...new Set(shown)],
+      reads: new Map(awaited.map((q) => [q, undefined])),
+    };
+    for (const q of awaited) {
+      const attempts = surfaceAttempts.get(q);
+      if (attempts === undefined) surfaceAttempts.set(q, new Set([attempt]));
+      else attempts.add(attempt);
+    }
+  }
+  for (const k of owed) applyHeldList(qc, k);
+}
+
+/** Called with the surface of every attempt that landed whole (the button of that surface announces it). */
+export function onUpdatesApplied(listener: (surface: readonly Query[]) => void): () => void {
+  appliedListeners.add(listener);
   return () => {
-    outcomeListeners.delete(listener);
+    appliedListeners.delete(listener);
   };
 }
 

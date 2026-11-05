@@ -12,7 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
-import { applyHeldList, mayContinue } from './liveListDirty';
+import { applyHeldList, applyHeldLists, mayContinue, onUpdatesApplied } from './liveListDirty';
 
 interface Page {
   items: string[];
@@ -113,5 +113,24 @@ describe('sk-763 — an apply whose read never starts is over', () => {
 
     expect(reads).toEqual([]);
     expect(mayContinue(qc.getQueryCache().find({ queryKey: KEY, exact: true }), false)).toBe(true);
+  });
+});
+
+// Two presses may wait for one read of a list (the second while the first
+// reads): each learns that read's end, and the list is read once.
+describe('sk-763 — two attempts waiting for one read', () => {
+  test('a second apply of a list whose apply runs joins its read: both attempts learn it landed, one read', async () => {
+    const landed: string[] = [];
+    const stopListening = onUpdatesApplied(() => { landed.push('landed'); });
+    try {
+      applyHeldLists(qc, [KEY], [KEY]);
+      applyHeldLists(qc, [KEY], [KEY]);
+      await settle();
+    } finally {
+      stopListening();
+    }
+
+    expect(reads).toEqual([null]);
+    expect(landed).toEqual(['landed', 'landed']);
   });
 });

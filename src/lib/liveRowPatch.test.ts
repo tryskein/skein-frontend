@@ -525,7 +525,7 @@ describe('No. 87 — a stale row: which opaque lists it reaches', () => {
     ['not showing it: left (membership follows the `tasks` signal)', false, 0],
   ] as const)('the delegated lens over all projects, %s', async (_n, shows, expected) => {
     const delegated = (id: string, n: number) => summary(id, { createdBy: ME, assignee: 'bob', assigneeUserId: 'u-2', rowSeq: 40, updatedAt: ts(n) });
-    // One page, read from its start: a list being read (sk-763) is held
+    // A list the column does not show (K21); a shown list (sk-763) is held
     // instead, see the useTasks sk-763 block.
     seedList('D', DELEGATED, [
       { items: [delegated('sk-6', 4), ...(shows ? [delegated('sk-1', 3)] : [])], hasMore: true, nextCursor: 'c1' },
