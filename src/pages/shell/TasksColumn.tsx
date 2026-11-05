@@ -477,13 +477,20 @@ export function TasksColumn({
     // so a picker would be meaningless.
     assigneeFilter: onMeMode ? null : ui.assigneeFilter,
   });
+  // sk-50 — during a search the body is the flat (cards) list whatever view
+  // is persisted; on clear, the persisted view returns.
+  const shownView = searchModes.searchActive ? 'cards' : ui.view;
   // sk-763 — whether the column shows this list as its ordinary list (not
   // under the reminders lens, a rooted subtree, the pasted-codes result or
-  // folded away) and where the reader is in it: a list being read is not
-  // reset by the background (`lib/liveListDirty.ts`).
+  // folded away), on which surface, and where the reader is in it: a list
+  // being read is not reset by the background (`lib/liveListDirty.ts`). The
+  // surface is the view, and for the board also its grouping: the lanes are
+  // keyed by the axis (`kanbanBoard.ts#kanbanColumnKey`), so another axis is
+  // another set of scroll containers. Neither is part of the list's key.
   useReportReadingPosition(tasks.cacheKey, {
     shown: !collapsed && !budilnikMode && !anchored && !blob.active,
     root: columnRef,
+    surface: shownView === 'kanban' ? `kanban:${ui.kanbanAxis}` : shownView,
   });
   const updatesButton = (
     <TasksUpdatesButton listKey={tasks.cacheKey} onApply={scrollBodyToTop} focusAfter={focusAfterUpdates} />
@@ -1431,7 +1438,7 @@ export function TasksColumn({
         // flat list (a relevance-ranked cross-project tree is
         // meaningless), so reflect 'cards' in the toggle UI and ignore
         // tree selection. On clear, the persisted `ui.view` returns.
-        view={searchModes.searchActive ? 'cards' : ui.view}
+        view={shownView}
         sort={searchModes.effectiveSort}
         onSortChange={ui.setSort}
         onSearchSortChange={searchModes.setSearchSort}
@@ -1592,7 +1599,7 @@ export function TasksColumn({
           // hierarchy; the tree comparator + layered-tree query are bypassed
           // entirely while searchActive. On clear, the persisted view (which
           // may be 'tree') is restored automatically.
-          view={searchModes.searchActive ? 'cards' : ui.view}
+          view={shownView}
           // sk-50 — the EFFECTIVE sort drives BOTH the cards order (already
           // applied in useTasks) and the tree comparator (TasksBody.legacyTree).
           // 'relevance' → preserve server RRF order in both paths.

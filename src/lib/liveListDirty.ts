@@ -124,14 +124,24 @@ export function scrollReadingToStart(root: HTMLElement | null): void {
  * the column may mount folded and its body appear later. The cache entry is
  * looked up by hash, and found again when the list is evicted and read
  * anew; a scroll writes only a change of the away flag.
+ *
+ * `surface` names the surface the list is shown on: the column's view
+ * (tree, cards) and, for the board, its grouping — another grouping is
+ * another set of lanes. Another surface brings other scroll containers,
+ * which start at their start and send no `scroll`. A change of `surface`
+ * subscribes the hook again, and the subscription measures the position on
+ * the scroll containers then in the column, so a list left scrolled on the
+ * previous surface is not taken as one its reader is away in. Nothing else
+ * of the list changes with it — its mark, its continuation and its data
+ * stay, and nothing is read. Absent — one surface.
  */
 export function useReportReadingPosition(
   key: QueryKey,
-  opts: { shown: boolean; root: RefObject<HTMLElement | null> },
+  opts: { shown: boolean; root: RefObject<HTMLElement | null>; surface?: string },
 ): void {
   const qc = useQueryClient();
   const hash = hashKey(key);
-  const { shown, root } = opts;
+  const { shown, root, surface } = opts;
   useEffect(() => {
     const cache = qc.getQueryCache();
     let q: Query | undefined = cache.get(hash);
@@ -185,8 +195,10 @@ export function useReportReadingPosition(
       unsubscribe();
       if (q) reportReadingList(q, { shown: false, awayFromStart: false });
     };
-    // `key` is read through its hash: a new array of the same key is the same list.
-  }, [qc, hash, shown, root]);
+    // `key` is read through its hash: a new array of the same key is the same
+    // list. `surface` is not read here: its change re-subscribes, and the
+    // subscription measures the scroll containers of the surface shown now.
+  }, [qc, hash, shown, root, surface]);
 }
 
 /** Mark the list of `q` «updates available». */

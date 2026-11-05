@@ -2973,7 +2973,7 @@ mark.match-highlight {
  * height. */
 .col-tasks-updates {
   flex: 0 0 auto;
-  margin-left: var(--space-1);
+  margin-inline-start: var(--space-1);
   white-space: nowrap;
 }
 

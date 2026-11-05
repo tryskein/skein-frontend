@@ -104,7 +104,7 @@ vi.mock('@microsoft/signalr', () => {
 const { LiveEventsProvider } = await import('../../../hooks/useLiveEvents');
 const { LIVE_INVALIDATION_WINDOW_MS } = await import('../../../lib/liveInvalidationBatcher');
 const { LayoutProvider } = await import('../../../lib/useLayoutState');
-const { TasksUiStateProvider } = await import('../../../lib/useTasksUiState');
+const { TasksUiStateProvider, useTasksUiState } = await import('../../../lib/useTasksUiState');
 const { TasksColumn } = await import('../TasksColumn');
 const { setViewportWidth } = await import('../../../test/viewport');
 
@@ -220,6 +220,13 @@ async function deliverIntersections(): Promise<void> {
 
 let qc: QueryClient;
 
+/** The column's own UI state, as the header's view switch uses it (`HeaderBar.tsx#ViewSwitch`). */
+let ui: ReturnType<typeof useTasksUiState> | null = null;
+function UiState() {
+  ui = useTasksUiState();
+  return null;
+}
+
 function column(path: string, budilnikMode = false) {
   return (
     <MantineProvider forceColorScheme="light">
@@ -234,6 +241,7 @@ function column(path: string, budilnikMode = false) {
                   element={
                     <LayoutProvider>
                       <TasksUiStateProvider>
+                        <UiState />
                         <TasksColumn width={468} collapsed={false} outboxMode={false} onMeMode={false} budilnikMode={budilnikMode} />
                       </TasksUiStateProvider>
                     </LayoutProvider>
@@ -536,6 +544,143 @@ describe('sk-763 — the Tasks column applies the updates of a held list', () =>
     expect(lanes.every((lane) => lane.scrollTop === 0)).toBe(true);
     await advance(300);
     expect(calls).toEqual([undefined]);
+  });
+
+  // sk-763 — the column showing the list on another surface — another view,
+  // or the board grouped by another field — shows it from the start of the
+  // new surface's scroll containers: what makes a list of one page held is
+  // that its reader is away from its start ON THE SURFACE SHOWN NOW. A
+  // one-page list the reader left at the start of the new surface is re-read
+  // on a wave as before (K21): one read of its first page, no offer. A list
+  // that owes its updates, or has more than one page loaded, stays held
+  // across the change — the change takes nothing of either. The change of
+  // surface itself reads nothing.
+
+  type Surface = 'tree' | 'kanban';
+
+  /** A one-page list (more on the server) on `surface`, its reader away from the start. */
+  async function onePageReadAwayFromStart(surface: Surface): Promise<void> {
+    window.localStorage.setItem('skein.tasks.view', surface);
+    server(1, 30);
+    pages[FIRST] = { ...pages[FIRST], hasMore: true, nextCursor: 'c1' };
+    serve();
+    await act(async () => { render(column('/projects/demo')); });
+    await advance(500);
+    if (surface === 'tree') {
+      scrollable(listBody(), canvasPx);
+      act(() => { listBody().scrollTo({ top: 200 }); });
+    } else {
+      const lanes = [...document.querySelectorAll<HTMLElement>('.kanban-col-body')];
+      expect(lanes.length).toBeGreaterThan(0);
+      lanes.forEach((lane) => scrollable(lane, () => 3000));
+      act(() => { lanes[0].scrollTo({ top: 600 }); });
+    }
+  }
+
+  /** Two pages loaded on `surface` (the tree by its sentinel, the board by «Load more»). */
+  async function twoPagesLoaded(surface: Surface): Promise<void> {
+    window.localStorage.setItem('skein.tasks.view', surface);
+    server(3, 60);
+    serve();
+    await act(async () => { render(column('/projects/demo')); });
+    await advance(500);
+    if (surface === 'tree') {
+      scrollable(listBody(), canvasPx);
+      act(() => { listBody().scrollTo({ top: 1e9 }); });
+      await deliverIntersections();
+    } else {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /load more/i })); });
+    }
+    await advance(300);
+    expect(calls).toEqual([undefined, 'c1']);
+  }
+
+  /** The lane titles of the board (the grouping it shows). */
+  const laneTitles = () => [...document.querySelectorAll('.kanban-col-title')].map((el) => el.textContent);
+
+  /**
+   * A change of surface, as the header's controls make it
+   * (`HeaderBar.tsx#ViewSwitch`, the board's grouping), and what shows that
+   * the new surface is on screen.
+   */
+  const changes = {
+    'the tree, then the board': {
+      from: 'tree',
+      change: async () => {
+        await act(async () => { ui!.setView('kanban'); });
+        await advance(300);
+        expect(document.querySelector('.task-tree-virtual-canvas')).toBeNull();
+        expect(document.querySelector('.kanban-col-body')).not.toBeNull();
+      },
+    },
+    'the tree, then the cards': {
+      from: 'tree',
+      change: async () => {
+        await act(async () => { ui!.setView('cards'); });
+        await advance(300);
+        expect(document.querySelector('.task-tree-virtual-canvas')).toBeNull();
+      },
+    },
+    // Every task of the fixture has priority 2: grouped by priority, the
+    // board shows the lane of that value («P2»), which grouping by status
+    // does not; and the lanes it shows now are at their start.
+    'the board by status, then by priority': {
+      from: 'kanban',
+      change: async () => {
+        expect(laneTitles()).not.toContain('P2');
+        await act(async () => { ui!.setKanbanAxis('priority'); });
+        await advance(300);
+        expect(laneTitles()).toContain('P2');
+        const lanes = [...document.querySelectorAll<HTMLElement>('.kanban-col-body')];
+        expect(lanes.length).toBeGreaterThan(0);
+        expect(lanes.map((lane) => lane.scrollTop)).toEqual(lanes.map(() => 0));
+      },
+    },
+  } satisfies Record<string, { from: Surface; change: () => Promise<void> }>;
+  type ChangeName = keyof typeof changes;
+  const changeNames = (Object.keys(changes) as ChangeName[]).map((n): [ChangeName] => [n]);
+
+  /** Change the surface; the change itself sends no request. */
+  async function changeSurface(name: ChangeName): Promise<void> {
+    const before = [...calls];
+    await changes[name].change();
+    expect(calls).toEqual(before);
+  }
+
+  test.each(changeNames)('a one-page list read away from its start, %s shown from its start: a created issue re-reads the one page, with no offer', async (name) => {
+    await onePageReadAwayFromStart(changes[name].from);
+    expect(calls).toEqual([undefined]);
+    await changeSurface(name);
+    calls = [];
+
+    await issueCreated('demo-new');
+
+    expect(calls).toEqual([undefined]);
+    expect(updatesButton()).toBeNull();
+  });
+
+  test.each(changeNames)('a one-page list that owes its updates, %s: the list stays held and the offer stays', async (name) => {
+    await onePageReadAwayFromStart(changes[name].from);
+    calls = [];
+    await issueCreated('demo-new-1');
+    expect(calls).toEqual([]);
+    expect(updatesButton()).not.toBeNull();
+
+    await changeSurface(name);
+    await issueCreated('demo-new-2');
+
+    expect(calls).toEqual([]);
+    expect(updatesButton()).not.toBeNull();
+  });
+
+  test.each(changeNames)('a list with two pages loaded, %s shown from its start: the list stays held, and a created issue is offered', async (name) => {
+    await twoPagesLoaded(changes[name].from);
+    await changeSurface(name);
+    calls = [];
+    await issueCreated('demo-new');
+
+    expect(calls).toEqual([]);
+    expect(updatesButton()).not.toBeNull();
   });
 
   // The column keeps the list's query observed under a surface that shows
