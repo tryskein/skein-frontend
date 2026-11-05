@@ -170,13 +170,29 @@ export function createLiveVisibility(opts: LiveVisibilityOptions): LiveVisibilit
 }
 
 /**
+ * The list a shell path shows: the path without the open task. The shell
+ * puts the open task in the path (`/projects/:alias/issues/:id` and its
+ * component, space and cross-project variants — `App.tsx`), so opening a
+ * task, or another one, keeps the list (sk-763).
+ */
+function listOfPath(pathname: string): string {
+  const list = pathname.replace(/\/issues\/[^/]+\/?$/, '');
+  return list === '' ? '/' : list;
+}
+
+/**
  * What a navigation (a change of route) does in a live tab. Rendered by
  * `LiveEventsProvider` inside the router, so it stays mounted on every
  * route, the shell's or not:
- *  - registry class 3 is refreshed (R1′);
+ *  - registry class 3 is refreshed (R1′) when the route shows another list
+ *    ({@link listOfPath}). Opening a task of the list, or switching to
+ *    another one, is not such a navigation: re-reading the lists then
+ *    would drop the loaded pages of the very list the task was chosen in
+ *    (K21, sk-763). The open card's own reads — detail, links, watchers —
+ *    are mounted with it and read on mount;
  *  - the Inbox cards accepted in this tab are released (R12, K19 —
- *    `inboxAcceptedRetention.ts`), whether or not the Inbox column is
- *    mounted on the new route.
+ *    `inboxAcceptedRetention.ts`) on any change of path, whether or not
+ *    the Inbox column is mounted on the new route.
  * The first render is the initial load, not a navigation, and does nothing.
  */
 export function LiveNavigationRefresh({
@@ -184,17 +200,21 @@ export function LiveNavigationRefresh({
 }: {
   controller: { current: LiveVisibilityController | null };
 }): null {
-  // The path, not the query string: the shell keeps the open card and the
-  // filters in the query string, and a click on a card is not a navigation.
+  // The path, not the query string: the shell keeps the filters and the
+  // tab in the query string.
   const { pathname } = useLocation();
   const first = useRef(true);
+  const shownList = useRef(listOfPath(pathname));
   useEffect(() => {
+    const list = listOfPath(pathname);
+    const sameList = shownList.current === list;
+    shownList.current = list;
     if (first.current) {
       first.current = false;
       return;
     }
     releaseAllAccepted();
-    controller.current?.refreshClass3();
+    if (!sameList) controller.current?.refreshClass3();
   }, [pathname, controller]);
   return null;
 }

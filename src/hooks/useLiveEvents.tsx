@@ -67,6 +67,7 @@ import {
   createLiveInvalidationBatcher,
   LIVE_INVALIDATION_WINDOW_MS,
 } from '../lib/liveInvalidationBatcher';
+import { readingListHold } from '../lib/liveListDirty';
 import {
   ProjectDeclarationContext,
   createProjectDeclaration,
@@ -304,7 +305,10 @@ export function LiveEventsProvider({ children }: LiveEventsProviderProps) {
     // the window and why). Per connection (the dedup map is per tab); disposed in
     // the cleanup below once the connection has stopped. Theme frames go
     // through it too; only the preview, which touches no cache, does not.
-    const batcher = createLiveInvalidationBatcher(queryClient);
+    // sk-763 — with the reading hold: a shown task list of several pages is
+    // not reset under its reader; its owed reset is marked instead
+    // (`liveListDirty.ts`).
+    const batcher = createLiveInvalidationBatcher(queryClient, undefined, undefined, readingListHold);
 
     // sk-622.21 T043 — hidden tab, focus, visibility, navigation (K22):
     // a hidden tab sends nothing and keeps obligations in the batcher; the

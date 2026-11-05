@@ -17,6 +17,8 @@ import { InfiniteQueryObserver, QueryClient, QueryClientProvider, QueryObserver 
 import * as signalr from '@microsoft/signalr';
 import { LiveEventsProvider } from '../hooks/useLiveEvents';
 import { LIVE_INVALIDATION_WINDOW_MS } from './liveInvalidationBatcher';
+import { readingListHold } from './liveListDirty';
+import { showReadingList } from '../test/showReadingList';
 
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-1', username: 'admin', role: 'user' }, logout: () => Promise.resolve() }),
@@ -261,12 +263,46 @@ describe('No. 75 — personal lists are re-read from the first page (K21)', () =
   test.each<[string, KeyName]>([
     ['tasks', 'tasksOnMe'],
     ['unreviewed', 'tasksUnreviewed'],
-  ])('area %s: a list with two loaded pages fetches only the first', async (area, name) => {
+  ])('area %s: a shown list of two loaded pages (being read) is not re-read; its re-read is owed', async (area, name) => {
     await mountProvider();
     const fetched: unknown[] = [];
     qc.setQueryData(KEYS[name], {
       pages: [{ items: [], hasMore: true, nextCursor: 'c2' }, { items: [], hasMore: false }],
       pageParams: [undefined, 'c2'],
+    });
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: KEYS[name],
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: (last: { hasMore: boolean; nextCursor?: string }) =>
+        last.hasMore ? last.nextCursor : undefined,
+      queryFn: ({ pageParam }: { pageParam: unknown }) => {
+        fetched.push(pageParam);
+        return Promise.resolve({ items: [], hasMore: true, nextCursor: 'c2' });
+      },
+      staleTime: Infinity,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    // The column shows it (sk-763: only a list the column shows can be held).
+    showReadingList(qc, KEYS[name]);
+    deliver('signal', { areas: [area], sentAt: '2026-10-09T10:00:00Z' });
+    await wave();
+    // sk-763 (owner's decision): two loaded pages of a shown list — a list
+    // being read. The signal's re-read is owed («updates available»), not
+    // done under the reader; the pages stay.
+    expect(fetched).toEqual([]);
+    expect(readingListHold.marked(qc.getQueryCache().find({ queryKey: KEYS[name], exact: true })!)).toBe(true);
+    unsubscribe();
+  });
+
+  test.each<[string, KeyName]>([
+    ['tasks', 'tasksOnMe'],
+    ['unreviewed', 'tasksUnreviewed'],
+  ])('area %s: a shown list of one page, read from its start, is re-read from the first page', async (area, name) => {
+    await mountProvider();
+    const fetched: unknown[] = [];
+    qc.setQueryData(KEYS[name], {
+      pages: [{ items: [], hasMore: true, nextCursor: 'c2' }],
+      pageParams: [undefined],
     });
     const observer = new InfiniteQueryObserver(qc, {
       queryKey: KEYS[name],

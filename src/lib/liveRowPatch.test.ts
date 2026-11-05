@@ -19,8 +19,9 @@
  * a list (adds and removes by another actor, replay and reordered delivery).
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { useReportReadingPosition } from './liveListDirty';
 import { act, cleanup, render } from '@testing-library/react';
-import { createElement } from 'react';
+import { createElement, useRef } from 'react';
 import {
   InfiniteQueryObserver,
   QueryClient,
@@ -207,6 +208,17 @@ function DeclareRoute() {
   return null;
 }
 
+/** Lists the Tasks column shows (sk-763): reported through its real hook. */
+let shownLists: Array<readonly unknown[]> = [];
+function showList(key: readonly unknown[]): void {
+  shownLists.push(key);
+}
+function ShownList({ listKey }: { listKey: readonly unknown[] }) {
+  const root = useRef<HTMLDivElement | null>(null);
+  useReportReadingPosition(listKey, { shown: true, root });
+  return createElement('div', { ref: root });
+}
+
 async function advance(ms: number): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
@@ -217,7 +229,12 @@ function tab() {
   return createElement(
     QueryClientProvider,
     { client: qc },
-    createElement(LiveEventsProvider, null, createElement(DeclareRoute)),
+    createElement(
+      LiveEventsProvider,
+      null,
+      createElement(DeclareRoute),
+      ...shownLists.map((k, i) => createElement(ShownList, { key: i, listKey: k })),
+    ),
   );
 }
 
@@ -239,6 +256,7 @@ async function deliver(env: EventEnvelope): Promise<void> {
 }
 
 beforeEach(() => {
+  shownLists = [];
   auth.user = { id: 'u-1', username: 'ann', role: 'user' };
   vi.useFakeTimers();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -507,9 +525,10 @@ describe('No. 87 — a stale row: which opaque lists it reaches', () => {
     ['not showing it: left (membership follows the `tasks` signal)', false, 0],
   ] as const)('the delegated lens over all projects, %s', async (_n, shows, expected) => {
     const delegated = (id: string, n: number) => summary(id, { createdBy: ME, assignee: 'bob', assigneeUserId: 'u-2', rowSeq: 40, updatedAt: ts(n) });
+    // One page, read from its start: a list being read (sk-763) is held
+    // instead, see the useTasks sk-763 block.
     seedList('D', DELEGATED, [
       { items: [delegated('sk-6', 4), ...(shows ? [delegated('sk-1', 3)] : [])], hasMore: true, nextCursor: 'c1' },
-      { items: [delegated('sk-7', 2)], hasMore: false },
     ]);
     CARD60();
     await mountTab();
@@ -698,6 +717,108 @@ describe('No. 87 — a list or card being read when the row arrives is patched a
 
     expect(rowsOf(L).map((r) => [r.id, r.title])).toEqual([['sk-1', 'renamed'], ['sk-2', 'sk-2']]);
     expect(qc.getQueryData<InfiniteData<Page>>(L)?.pages).toHaveLength(2);
+  });
+
+  // sk-763 — a list being read (two pages, shown) is not re-read: the row an
+  // event laid in is laid again once the read in flight lands, but only if
+  // that answer is older than the row, and only if no newer event of the
+  // issue was seen. The reference is the per-issue order of the server
+  // (`rowSeq`, the module header): a later order always wins.
+  test.each<[string, Array<{ title: string; rowSeq: number }>, { title: string; rowSeq: number }, string]>([
+    ['an older answer (40) under the event (41): the event row comes back', [{ title: 'event 41', rowSeq: 41 }], { title: 'answer 40', rowSeq: 40 }, 'event 41'],
+    ['a newer answer (42) over the event (41): the answer stays', [{ title: 'event 41', rowSeq: 41 }], { title: 'answer 42', rowSeq: 42 }, 'answer 42'],
+    ['events 41 then 42, an answer of 40: the newest event row is shown', [{ title: 'event 41', rowSeq: 41 }, { title: 'event 42', rowSeq: 42 }], { title: 'answer 40', rowSeq: 40 }, 'event 42'],
+  ])('a list being read, a read in flight: %s', async (_n, events, answer, shown) => {
+    const L = projectListKey();
+    const row1 = (title: string, rowSeq: number) => summary('sk-1', { title, rowSeq, updatedAt: ts(5) });
+    const p1 = (title: string, rowSeq: number): Page => ({ items: [row1(title, rowSeq)], hasMore: true, nextCursor: 'c1' });
+    const p2: Page = { items: [summary('sk-2', { updatedAt: ts(1) })], hasMore: false, nextCursor: null };
+    qc.setQueryData<InfiniteData<Page>>(L, { pages: [p1('old', 39), p2], pageParams: [undefined, 'c1'] });
+    let hold: (() => void) | null = null;
+    const observer = new InfiniteQueryObserver<Page, Error, InfiniteData<Page>, readonly unknown[], string | undefined>(qc, {
+      queryKey: L,
+      queryFn: ({ pageParam }) => {
+        if (pageParam === 'c1') return Promise.resolve(p2);
+        if (hold === null) return Promise.resolve(p1(answer.title, answer.rowSeq));
+        return new Promise<Page>((r) => { const go = hold!; hold = () => { go(); r(p1(answer.title, answer.rowSeq)); }; });
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (last) => (last.hasMore ? last.nextCursor ?? undefined : undefined),
+      staleTime: Infinity,
+    });
+    unsubscribers.push(observer.subscribe(() => {}));
+    // The column shows it: a list being read.
+    showList(L);
+    await mountTab();
+    hold = () => {};
+    void act(() => { void observer.refetch(); });
+
+    for (const e of events) {
+      await deliver(envelope('issue.updated', 'sk-1', {
+        changedFields: ['title'], row: eventRow('sk-1', { title: e.title, updatedAt: ts(6), rowSeq: e.rowSeq }),
+      }));
+    }
+    const release = hold;
+    hold = null;
+    await act(async () => { release(); });
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 200);
+
+    expect(rowsOf(L).find((r) => r.id === 'sk-1')?.title).toBe(shown);
+    expect(qc.getQueryData<InfiniteData<Page>>(L)?.pages).toHaveLength(2);
+  });
+
+  // sk-763 C4 — the latest row of an issue wins over a late answer, also
+  // when the row the list showed was dropped in place meanwhile and a later
+  // event of the same issue changed nothing the list shows, and also for an
+  // issue the list did not show but the late answer brings in. The
+  // reference: the per-issue order (`rowSeq`) and the list's own condition
+  // («open»): a closed issue is not in an «open» list, whatever an older
+  // answer says. Both kinds of read in flight write pages as they were when
+  // the read started: a full read, and a read of the next page.
+  test.each<['full' | 'next page', boolean]>([
+    ['full', true],
+    ['next page', true],
+    ['full', false],
+  ])('an «open» list being read, a %s read in flight (issue shown before: %s): closed 41, renamed 42, a late answer of the open row 40 — the issue stays out', async (kind, shownBefore) => {
+    const L = projectListKey({ status: 'open' });
+    const a = (title: string, rowSeq: number, status = 'open') => summary('sk-a', { title, rowSeq, status: status as IssueSummary['status'], updatedAt: ts(5) });
+    const other = summary('sk-o', { updatedAt: ts(4), rowSeq: 40 });
+    const tail = summary('sk-t', { updatedAt: ts(1), rowSeq: 40 });
+    const p1 = (withA: boolean): Page => ({ items: withA ? [a('open 40', 40), other] : [other], hasMore: true, nextCursor: 'c1' });
+    const p2: Page = { items: [tail], hasMore: true, nextCursor: 'c2' };
+    const p3: Page = { items: [summary('sk-z', { updatedAt: ts(0), rowSeq: 40 })], hasMore: false, nextCursor: null };
+    qc.setQueryData<InfiniteData<Page>>(L, { pages: [p1(shownBefore), p2], pageParams: [undefined, 'c1'] });
+    let hold: (() => void) | null = null;
+    const observer = new InfiniteQueryObserver<Page, Error, InfiniteData<Page>, readonly unknown[], string | undefined>(qc, {
+      queryKey: L,
+      queryFn: ({ pageParam }) => {
+        const answer = pageParam === 'c1' ? p2 : pageParam === 'c2' ? p3 : p1(true);
+        if (hold === null) return Promise.resolve(answer);
+        return new Promise<Page>((r) => { const go = hold!; hold = () => { go(); r(answer); }; });
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (last) => (last.hasMore ? last.nextCursor ?? undefined : undefined),
+      staleTime: Infinity,
+    });
+    unsubscribers.push(observer.subscribe(() => {}));
+    showList(L);
+    await mountTab();
+    hold = () => {};
+    if (kind === 'full') void act(() => { void observer.refetch(); });
+    else void act(() => { void observer.fetchNextPage(); });
+
+    await deliver(envelope('issue.closed', 'sk-a', {
+      row: eventRow('sk-a', { title: 'open 40', status: 'closed', closeOutcome: 'done', updatedAt: ts(6), rowSeq: 41 }),
+    }));
+    await deliver(envelope('issue.updated', 'sk-a', {
+      changedFields: ['title'], row: eventRow('sk-a', { title: 'closed 42', status: 'closed', closeOutcome: 'done', updatedAt: ts(7), rowSeq: 42 }),
+    }));
+    const release = hold;
+    hold = null;
+    await act(async () => { release(); });
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 200);
+
+    expect(rowsOf(L).map((r) => r.id)).not.toContain('sk-a');
   });
 
   test('a tree not showing the issue is left as it is', async () => {

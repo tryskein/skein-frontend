@@ -82,6 +82,7 @@ import type { LiveInvalidationTarget } from './liveInvalidationBatcher';
 import { layRowOntoIssueDetail } from './useIssueDetail';
 import { patchLayeredTreeRow } from './useLayeredTree';
 import { tasksListServerShape, type TasksListServerShape } from './useTasks';
+import { holdsReadingList } from './liveListDirty';
 
 // ───────────────────────────── the row ───────────────────────────────
 
@@ -561,6 +562,7 @@ export function decideTasksList(
   data: InfiniteData<TasksPageShape>,
   row: NeutralRow,
   me: string,
+  opts: { keepLoaded?: boolean } = {},
 ): InfiniteData<TasksPageShape> | 'refetch' | null {
   if (!shape.computable) return 'refetch';
   const flat: IssueSummary[] = [];
@@ -581,7 +583,18 @@ export function decideTasksList(
     return compareServerOrder(shape.order, row, lastLoaded) <= 0 ? 'refetch' : null;
   }
 
-  if (!member) return 'refetch';
+  if (!member) {
+    // sk-763 — a list being read (`liveListDirty.ts#holdsReadingList`): the
+    // row left by the list's own conditions, computed from the row, so it
+    // goes at once. The loaded set stays the server's prefix up to the last
+    // loaded row (the keyset continuation does not move), and no request
+    // is sent. Any other list is re-read from its first page (K21).
+    if (opts.keepLoaded !== true) return 'refetch';
+    return {
+      ...data,
+      pages: data.pages.map((p) => ({ ...p, items: p.items.filter((r) => r.id !== row.id) })),
+    };
+  }
   const after = layRowOntoSummary(flat[idx], row, me);
   // The continuation cursor is the last loaded row's key as the server cut
   // it. A row sorting after it while more pages exist would come again with
@@ -755,19 +768,104 @@ function layOnTaskLists(qc: LiveInvalidationTarget, cache: QueryCache, row: Neut
     // its membership from the personal signal `tasks` (K18) and only its
     // shown rows follow the event.
     if (!shows && !reachable) continue;
-    const decision = decideTasksList(shape, data, row, me);
+    const held = holdsReadingList(q);
+    // sk-763 — a list being read is not re-read (`liveListDirty.ts`), and a
+    // read of it in flight (a full one, or the next page, which writes the
+    // pages as they were when it started) would lay older rows over what
+    // the events changed since. So every fresh row the list may hold — shown
+    // or not: the late answer may bring the issue in — is kept, the latest
+    // per issue, until that read ends, and decided again against its answer.
+    if (held && reading(q)) rememberDuringRead(qc, cache, q, row, me);
+    const decision = decideTasksList(shape, data, row, me, { keepLoaded: held });
     if (decision === null) continue;
     if (decision === 'refetch') {
       refetchFirstPage(qc, q);
       continue;
     }
     write(q, decision);
+    if (!reading(q) || held) continue;
     // The row stays a member and the set is the same: only the read in
     // flight could lay the older answer over the patch. Re-read the pages
     // as loaded (as phase 1 did), not from the first page — a tail the user
     // just scrolled in stays.
-    if (reading(q)) void qc.invalidateQueries({ queryKey: key, exact: true });
+    void qc.invalidateQueries({ queryKey: key, exact: true });
   }
+}
+
+/**
+ * sk-763 — the latest event row of each issue a held list may hold, kept
+ * for the duration of ONE read of that list in flight (per cache entry:
+ * another client, or the entry evicted, starts empty). Dropped when that
+ * read ends — success, failure or cancel — and when the entry leaves the
+ * cache.
+ */
+const rowsDuringRead = new WeakMap<Query, Map<string, NeutralRow>>();
+
+function rememberDuringRead(qc: LiveInvalidationTarget, cache: QueryCache, q: Query, row: NeutralRow, me: string): void {
+  let rows = rowsDuringRead.get(q);
+  if (rows === undefined) {
+    const kept = new Map<string, NeutralRow>();
+    rows = kept;
+    rowsDuringRead.set(q, kept);
+    const unsubscribe = cache.subscribe((e) => {
+      if (e.query !== q) return;
+      if (e.type === 'removed') {
+        unsubscribe();
+        rowsDuringRead.delete(q);
+        return;
+      }
+      if (e.type !== 'updated' || q.state.fetchStatus !== 'idle') return;
+      unsubscribe();
+      rowsDuringRead.delete(q);
+      layLatestAfterRead(qc, cache, q, kept, me);
+    });
+  }
+  const prev = rows.get(row.id);
+  if (prev === undefined || row.rowSeq > prev.rowSeq) rows.set(row.id, row);
+}
+
+/**
+ * The read of a held list ended: each kept row is decided again against
+ * the answer that landed (or the data a failed read left). The per-issue
+ * order decides (module header): an answer carrying the issue at an equal
+ * or later order stays as it is; an older one gives way to the kept row —
+ * laid in, or the issue dropped when the kept row is out of the list (it
+ * left, or it is not the list's), or the list marked when the row cannot
+ * be decided here. A row older than one this tab already took is not
+ * laid: it is not the latest (an equal one is — it is the row kept).
+ */
+function layLatestAfterRead(
+  qc: LiveInvalidationTarget,
+  cache: QueryCache,
+  q: Query,
+  rows: ReadonlyMap<string, NeutralRow>,
+  me: string,
+): void {
+  const shape = tasksListServerShape(q.queryKey, me);
+  if (shape === null) return;
+  const store = rowFreshnessOf(cache, me);
+  let data: unknown = q.state.data;
+  let changed = false;
+  for (const row of rows.values()) {
+    if (!isTasksPages(data)) return;
+    let answered = 0;
+    for (const p of data.pages) {
+      for (const r of p.items) {
+        if (r.id === row.id && typeof r.rowSeq === 'number' && r.rowSeq > answered) answered = r.rowSeq;
+      }
+    }
+    if (answered >= row.rowSeq) continue;
+    if (store.taken(row.id, (id, mark) => hasOlderCopy(cache, id, mark)) > row.rowSeq) continue;
+    const decision = decideTasksList(shape, data, row, me, { keepLoaded: holdsReadingList(q) });
+    if (decision === null) continue;
+    if (decision === 'refetch') {
+      refetchFirstPage(qc, q);
+      continue;
+    }
+    data = decision;
+    changed = true;
+  }
+  if (changed) write(q, data);
 }
 
 /** Patch every cached tree showing the issue; true if one was being read. */

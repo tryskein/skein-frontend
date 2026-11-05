@@ -29,7 +29,11 @@ import { projectResolveQueryKey } from './projectHandleCache';
 export interface UseProjectByHandleResult {
   /** Resolved project, or null if handle is null / unresolvable. */
   project: ProjectListItem | null;
-  /** True while either the list cache or the resolve call is in flight. */
+  /**
+   * True while the handle has no answer yet: the resolve call is in flight
+   * and nothing was resolved before. A background re-read of a resolved
+   * handle is not loading — the previous answer stays until it lands.
+   */
   isLoading: boolean;
   /** True iff resolve completed and returned no match. */
   isUnresolved: boolean;
@@ -67,7 +71,13 @@ export function useProjectByHandle(handle: string | null): UseProjectByHandleRes
   if (cached !== null) {
     return { project: cached, isLoading: false, isUnresolved: false };
   }
-  if (resolveQ.isLoading || resolveQ.isFetching) {
+  // Loading only while there is no answer yet. A background re-read of an
+  // answer already shown (an event of the project invalidates it, see
+  // `liveEventInvalidation.ts#invalidateProjectEvent`) keeps that answer
+  // until the new one lands: reporting it as loading would make the Tasks
+  // column replace its loaded list with a placeholder, dropping the rows and
+  // the scroll position (sk-763).
+  if (resolveQ.data === undefined && (resolveQ.isLoading || resolveQ.isFetching)) {
     return { project: null, isLoading: true, isUnresolved: false };
   }
   // Resolve landed. ResolveResult.match is a ResolveMatch — a subset of

@@ -14,10 +14,10 @@
  * what is proven here is that the row arrives through the first-page
  * re-read and nothing else is done to the list.
  */
-import { type ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import * as signalr from '@microsoft/signalr';
 
@@ -111,6 +111,8 @@ const hub = (signalr as unknown as { __mock: { handlers: Map<string, (payload: u
 const { LiveEventsProvider } = await import('../../hooks/useLiveEvents');
 const { LIVE_INVALIDATION_WINDOW_MS } = await import('../liveInvalidationBatcher');
 const { useTasks } = await import('../useTasks');
+const { TasksUpdatesButton } = await import('../../pages/shell/TasksUpdatesButton');
+const { useReportReadingPosition } = await import('../liveListDirty');
 
 function ts(n: number): string {
   return `2026-10-01T10:00:${String(n).padStart(2, '0')}.000001Z`;
@@ -223,7 +225,21 @@ function Harness(args: HarnessArgs) {
     sort: args.sort ?? 'updated',
     assigneeFilter: args.assigneeFilter ?? null,
   });
-  return null;
+  // sk-763 — what the column does for this list: report that it shows it
+  // and where its reader is (its body is the scroll container), and offer
+  // «Updates available».
+  const root = useRef<HTMLDivElement | null>(null);
+  useReportReadingPosition(last.cacheKey, { shown: true, root });
+  return (
+    <div ref={root}>
+      <div className="col-body tasks-body" data-testid="column-body" />
+      {/* The column header the button lives in (focus lands on it after an apply). */}
+      <div className="col-header" tabIndex={-1} data-testid="column-header">
+        <TasksUpdatesButton listKey={last.cacheKey} onApply={() => {}} />
+      </div>
+      <input aria-label="search" />
+    </div>
+  );
 }
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -325,30 +341,25 @@ describe('No. 88 — membership and continuation (US-15, K21)', () => {
     expect(last?.data?.find((r) => r.id === 'sk-d')?.title).toBe('D renamed');
   });
 
-  test('closing a task in the «open» list re-reads it from the first page; the loaded tail is dropped', async () => {
+  // sk-763 — a list of ONE page; a list of several pages being read keeps
+  // them and drops the row in place (the sk-763 block below).
+  test('closing a task in the «open» list of one page re-reads it from the first page', async () => {
     const A = summary('sk-a', { updatedAt: ts(9) });
     const B = summary('sk-b', { updatedAt: ts(8) });
     const C = summary('sk-c', { updatedAt: ts(7) });
-    pages = {
-      [FIRST]: { items: [A, B], total: 3, hasMore: true, nextCursor: 'c1' },
-      c1: { items: [C], total: 3, hasMore: false, nextCursor: null },
-    };
+    pages = { [FIRST]: { items: [A, B, C], total: 3, hasMore: false, nextCursor: null } };
     serveFrom();
-    await mount({ statusFilter: 'open' }, 2);
+    await mount({ statusFilter: 'open' });
     expect(ids()).toEqual(['sk-a', 'sk-b', 'sk-c']);
 
     // The server after the close: B is gone.
-    pages = {
-      [FIRST]: { items: [A], total: 2, hasMore: true, nextCursor: 'c1' },
-      c1: { items: [C], total: 2, hasMore: false, nextCursor: null },
-    };
+    pages = { [FIRST]: { items: [A, C], total: 2, hasMore: false, nextCursor: null } };
     await deliver(envelope('issue.closed', 'sk-b', {
       row: rowFrom(B, { status: 'closed', closeOutcome: 'done', updatedAt: ts(10), rowSeq: 41 }),
     }));
 
     expect(listCalls()).toEqual([undefined]);
-    expect(ids()).toEqual(['sk-a']);
-    expect(loadedPageCount(last!.cacheKey)).toBe(1);
+    expect(ids()).toEqual(['sk-a', 'sk-c']);
   });
 
   test('re-assignment away from me re-reads «on me» from the first page', async () => {
@@ -759,7 +770,11 @@ describe('No. 88 — membership and continuation (US-15, K21)', () => {
       row: rowFrom(B, { title: 'renamed', updatedAt: ts(10), rowSeq: 41 }),
     }));
 
-    expect(listCalls()).toEqual([undefined]);
+    // sk-763 — two pages loaded and shown: the list is being read, so its
+    // lens condition (not on the row) is owed as «updates available», not
+    // re-read under the reader.
+    expect(listCalls()).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Updates available' })).not.toBeNull();
   });
 
   test('«All projects» with a source filter: an event of a row it does not show re-reads it from the first page', async () => {
@@ -792,3 +807,561 @@ describe('No. 88 — membership and continuation (US-15, K21)', () => {
   });
 });
 
+
+// ─────────── sk-763 — a list being read is not reset under its reader ───────────
+//
+// The reference is the owner's decision for sk-763 (it replaces, for such
+// lists, the K21 norm «re-read from the first page, dropping the loaded
+// pages»): while a person reads a loaded list, the background drops none of
+// its pages and re-reads none of them; a change the client can apply with
+// certainty is applied in place, anything else marks the list «updates
+// available», and the person applies it with one click — the first page,
+// one request. The server below is literal: what the list must show is
+// read off its pages, written out by hand in `created DESC` order.
+
+describe('sk-763 — a list being read keeps its loaded pages; the rest waits for the button', () => {
+  const A = summary('sk-a', { createdAt: ts(9), updatedAt: ts(9) });
+  const B = summary('sk-b', { createdAt: ts(8), updatedAt: ts(8) });
+  const C = summary('sk-c', { createdAt: ts(7), updatedAt: ts(7) });
+  const D = summary('sk-d', { createdAt: ts(6), updatedAt: ts(6) });
+  const E = summary('sk-e', { createdAt: ts(5), updatedAt: ts(5) });
+  const ALL = ['sk-a', 'sk-b', 'sk-c', 'sk-d', 'sk-e'];
+
+  /** Three pages: A B | C D | E — the reader has scrolled to E. */
+  function threePages(): void {
+    pages = {
+      [FIRST]: { items: [A, B], total: 5, hasMore: true, nextCursor: 'c-b' },
+      'c-b': { items: [C, D], total: 5, hasMore: true, nextCursor: 'c-d' },
+      'c-d': { items: [E], total: 5, hasMore: false, nextCursor: null },
+    };
+  }
+
+  async function returnToTab(): Promise<void> {
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 300);
+  }
+
+  const updatesButton = () => screen.queryByRole('button', { name: 'Updates available' });
+
+  test('the return to the tab sends nothing, keeps every row and offers the updates', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 3);
+    expect(updatesButton()).toBeNull();
+
+    await returnToTab();
+
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(ALL);
+    expect(updatesButton()).not.toBeNull();
+  });
+
+  test('a created issue sends nothing and keeps every row; the button reads the first page once and shows it', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 3);
+
+    const N = summary('sk-n', { createdAt: ts(10), updatedAt: ts(10) });
+    pages = {
+      [FIRST]: { items: [N, A], total: 6, hasMore: true, nextCursor: 'c-a' },
+      'c-a': { items: [B, C], total: 6, hasMore: true, nextCursor: 'c-c' },
+      'c-c': { items: [D, E], total: 6, hasMore: false, nextCursor: null },
+    };
+    await deliver(envelope('issue.created', 'sk-n', { row: rowFrom(N, { rowSeq: 41 }) }));
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(ALL);
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+
+    // One read, of the first page; the old continuation is gone with the
+    // pages it belonged to, and the mark with the read that delivered.
+    expect(listCalls()).toEqual([undefined]);
+    expect(ids()).toEqual(['sk-n', 'sk-a']);
+    expect(loadedPageCount(last!.cacheKey)).toBe(1);
+    expect(updatesButton()).toBeNull();
+
+    // The next page waits for the reader: asked for on its own it is not read.
+    await act(async () => { last!.fetchNextPage(); });
+    await advance(100);
+    expect(listCalls()).toEqual([undefined]);
+    // The reader moves in the list (a wheel turn): the next page continues
+    // the fresh first page, not the dropped one.
+    act(() => { screen.getByTestId('column-body').dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true })); });
+    await act(async () => { last!.fetchNextPage(); });
+    await advance(100);
+    expect(listCalls()).toEqual([undefined, 'c-a']);
+    expect(ids()).toEqual(['sk-n', 'sk-a', 'sk-b', 'sk-c']);
+  });
+
+  test('a row that left the list by a condition the row answers goes at once, with no request', async () => {
+    threePages();
+    serveFrom();
+    await mount({ statusFilter: 'open', sort: 'created' }, 3);
+
+    await deliver(envelope('issue.closed', 'sk-d', {
+      row: rowFrom(D, { status: 'closed', closeOutcome: 'done', updatedAt: ts(11), rowSeq: 41 }),
+    }));
+
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(['sk-a', 'sk-b', 'sk-c', 'sk-e']);
+  });
+
+  test('a status change of a shown row (blocked markers of others may move) sends nothing and offers the updates', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 3);
+
+    await deliver(envelope('issue.status_changed', 'sk-c', {
+      row: rowFrom(C, { status: 'in_progress', updatedAt: ts(11), rowSeq: 41 }),
+    }));
+
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(ALL);
+    expect(last?.data?.find((r) => r.id === 'sk-c')?.status).toBe('in_progress');
+    expect(updatesButton()).not.toBeNull();
+  });
+
+  test('loading the next page does not take the offer away: it re-reads none of the loaded pages', async () => {
+    pages = {
+      [FIRST]: { items: [A, B], total: 5, hasMore: true, nextCursor: 'c-b' },
+      'c-b': { items: [C, D], total: 5, hasMore: true, nextCursor: 'c-d' },
+      'c-d': { items: [E], total: 5, hasMore: false, nextCursor: null },
+    };
+    serveFrom();
+    await mount({ sort: 'created' }, 2);
+    await returnToTab();
+    expect(updatesButton()).not.toBeNull();
+
+    await act(async () => { last!.fetchNextPage(); });
+    await advance(100);
+
+    expect(listCalls()).toEqual(['c-d']);
+    expect(ids()).toEqual(ALL);
+    expect(updatesButton()).not.toBeNull();
+  });
+
+  test('while the fresh first page is read the button says so and cannot be pressed again', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 3);
+    await returnToTab();
+
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+    const busy = screen.getByRole('button', { name: 'Updating…' });
+    expect(busy.getAttribute('aria-disabled')).toBe('true');
+    await act(async () => { fireEvent.click(busy); });
+    expect(listCalls()).toEqual([undefined]);
+
+    answer();
+    await advance(300);
+    expect(updatesButton()).toBeNull();
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+  });
+
+  test('a failed read keeps the offer and lets the reader try again', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 3);
+    await returnToTab();
+
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return Promise.reject(new Error('down'));
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(screen.queryByRole('button', { name: 'Update failed — retry' })).not.toBeNull();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update failed — retry' })); });
+    await advance(300);
+    expect(listCalls()).toEqual([undefined, undefined]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(updatesButton()).toBeNull();
+  });
+
+  /** The reader scrolls the column body to `top` (jsdom has no scrolling). */
+  function scrollBody(top: number): void {
+    const body = screen.getByTestId('column-body');
+    Object.defineProperty(body, 'scrollTop', { configurable: true, get: () => top });
+    act(() => { body.dispatchEvent(new Event('scroll')); });
+  }
+
+  test('one page loaded and the reader away from its start: a created issue sends nothing and keeps the rows', async () => {
+    // Page 1 of more: new rows on top would push the rows read near its end
+    // out of it — the reader is in the list, so it is held.
+    pages = { [FIRST]: { items: [A, B], total: 5, hasMore: true, nextCursor: 'c-b' } };
+    serveFrom();
+    await mount({ sort: 'created' });
+    scrollBody(400);
+
+    const N = summary('sk-n', { createdAt: ts(10), updatedAt: ts(10) });
+    pages = { [FIRST]: { items: [N, A], total: 6, hasMore: true, nextCursor: 'c-a' } };
+    await deliver(envelope('issue.created', 'sk-n', { row: rowFrom(N, { rowSeq: 41 }) }));
+
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(updatesButton()).not.toBeNull();
+
+    // Back at the start the list still owes its updates: nothing applies
+    // them but the button (the owner approved no automatic apply).
+    scrollBody(0);
+    await returnToTab();
+    expect(listCalls()).toEqual([]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(updatesButton()).not.toBeNull();
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(listCalls()).toEqual([undefined]);
+    expect(updatesButton()).toBeNull();
+  });
+
+  test('an event during the read the button started is not swallowed: it is applied when that read ends', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 3);
+    await returnToTab();
+
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+    const N = summary('sk-n', { createdAt: ts(10), updatedAt: ts(10) });
+    act(() => hub.handlers.get('event')!(envelope('issue.created', 'sk-n', { row: rowFrom(N, { rowSeq: 41 }) })));
+    pages = { ...pages, [FIRST]: { items: [N, A], total: 6, hasMore: true, nextCursor: 'c-a' } };
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 300);
+    answer();
+    await advance(LIVE_INVALIDATION_WINDOW_MS + 300);
+
+    // The button's read (started before the event), then the event's own
+    // read of the one page now shown from its start.
+    expect(listCalls()).toEqual([undefined, undefined]);
+    expect(ids()).toEqual(['sk-n', 'sk-a']);
+  });
+
+  test('another list is another mark: switching the filter shows no offer, switching back shows its own', async () => {
+    threePages();
+    serveFrom();
+    let rerender: (ui: ReactNode) => void = () => {};
+    await act(async () => {
+      ({ rerender } = render(<Wrapper><Harness sort="created" /></Wrapper>));
+    });
+    await advance(1_000);
+    for (let i = 1; i < 3; i += 1) {
+      await act(async () => { last!.fetchNextPage(); });
+      await advance(100);
+    }
+    await returnToTab();
+    expect(updatesButton()).not.toBeNull();
+
+    await act(async () => { rerender(<Wrapper><Harness sort="created" statusFilter="open" /></Wrapper>); });
+    await advance(1_000);
+    expect(updatesButton()).toBeNull();
+
+    await act(async () => { rerender(<Wrapper><Harness sort="created" /></Wrapper>); });
+    await advance(100);
+    expect(updatesButton()).not.toBeNull();
+  });
+
+  /** Mount with a rerender handle; three pages loaded; the list marked. */
+  async function mountMarked(args: HarnessArgs): Promise<(next: HarnessArgs) => Promise<void>> {
+    threePages();
+    serveFrom();
+    let rerender: (ui: ReactNode) => void = () => {};
+    await act(async () => {
+      ({ rerender } = render(<Wrapper><Harness {...args} /></Wrapper>));
+    });
+    await advance(1_000);
+    for (let i = 1; i < 3; i += 1) {
+      await act(async () => { last!.fetchNextPage(); });
+      await advance(100);
+    }
+    calls = [];
+    await returnToTab();
+    expect(updatesButton()).not.toBeNull();
+    return async (next) => {
+      await act(async () => { rerender(<Wrapper><Harness {...next} /></Wrapper>); });
+      await advance(1_000);
+    };
+  }
+
+  test('a failed apply on one list leaves nothing behind on another', async () => {
+    const switchTo = await mountMarked({ sort: 'created' });
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return Promise.reject(new Error('down'));
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(screen.queryByRole('button', { name: 'Update failed — retry' })).not.toBeNull();
+
+    await switchTo({ sort: 'created', statusFilter: 'open' });
+    expect(screen.queryByRole('button', { name: 'Update failed — retry' })).toBeNull();
+    expect(updatesButton()).toBeNull();
+  });
+
+  test('an apply still running when the list is switched: its end shows nothing on the new list', async () => {
+    const switchTo = await mountMarked({ sort: 'created' });
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+    await switchTo({ sort: 'created', statusFilter: 'open' });
+    expect(screen.queryByRole('button', { name: 'Updating…' })).toBeNull();
+    answer();
+    await advance(300);
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    expect(document.activeElement).not.toBe(screen.getByTestId('column-header'));
+  });
+
+  test('the keyboard: Enter applies once; focus stays while it reads and goes to the header after', async () => {
+    await mountMarked({ sort: 'created' });
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    const button = updatesButton()!;
+    act(() => { button.focus(); });
+    await act(async () => { fireEvent.keyDown(button, { key: 'Enter' }); fireEvent.click(button); });
+    await advance(0);
+    const busy = screen.getByRole('button', { name: 'Updating…' });
+    expect(document.activeElement).toBe(busy);
+    await act(async () => { fireEvent.click(busy); });
+    expect(listCalls()).toEqual([undefined]);
+
+    answer();
+    await advance(300);
+    expect(updatesButton()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByTestId('column-header'));
+  });
+
+  test('focus moved elsewhere while the list reads stays there', async () => {
+    await mountMarked({ sort: 'created' });
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    const button = updatesButton()!;
+    act(() => { button.focus(); });
+    await act(async () => { fireEvent.click(button); });
+    await advance(0);
+    const search = screen.getByRole('textbox', { name: 'search' });
+    act(() => { search.focus(); });
+    answer();
+    await advance(300);
+    expect(document.activeElement).toBe(search);
+  });
+
+  // The norm of the per-issue order (`liveRowPatch.ts#shownRowSeq`): a
+  // positive `rowSeq` is a known order; 0 or none is «order unknown», and any
+  // known order is fresher than it.
+  test.each<[string, number | undefined, number | undefined, 'first' | 'later']>([
+    ['41 first, 42 on a later page', 41, 42, 'later'],
+    ['42 first, 41 on a later page', 42, 41, 'first'],
+    ['unknown (0) first, 42 later', 0, 42, 'later'],
+    ['unknown (none) first, 42 later', undefined, 42, 'later'],
+    ['42 first, unknown (0) later', 42, 0, 'first'],
+    ['42 first, unknown (none) later', 42, undefined, 'first'],
+    ['equal orders', 42, 42, 'first'],
+    ['both unknown', 0, 0, 'first'],
+  ])('a repeated id: %s — one row, at the first place, with the copy of the freshest known order', async (_n, firstSeq, laterSeq, winner) => {
+    const firstCopy = summary('sk-b', { title: 'first', rowSeq: firstSeq, createdAt: ts(8), updatedAt: ts(8) });
+    const laterCopy = summary('sk-b', { title: 'later', rowSeq: laterSeq, createdAt: ts(8), updatedAt: ts(8) });
+    pages = {
+      [FIRST]: { items: [A, firstCopy], total: 4, hasMore: true, nextCursor: 'c-b' },
+      'c-b': { items: [laterCopy, C], total: 4, hasMore: false, nextCursor: null },
+    };
+    serveFrom();
+    await mount({ sort: 'created' }, 2);
+    expect(ids()).toEqual(['sk-a', 'sk-b', 'sk-c']);
+    expect(last?.data?.find((r) => r.id === 'sk-b')?.title).toBe(winner);
+  });
+
+  /** Hold the next first-page answer until the returned function is called. */
+  function holdFirstAnswer(): () => void {
+    let answer: () => void = () => {};
+    const first = pages[FIRST];
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((resolve) => { answer = () => resolve(first); });
+    });
+    return () => answer();
+  }
+
+  test('the same list mounted again while its apply runs: still «Updating…», and a press does not read again', async () => {
+    const switchTo = await mountMarked({ sort: 'created' });
+    const answer = holdFirstAnswer();
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+    await switchTo({ sort: 'created', statusFilter: 'open' });
+    await switchTo({ sort: 'created' });
+    const busy = screen.queryByRole('button', { name: 'Updating…' });
+    expect(busy).not.toBeNull();
+    await act(async () => { fireEvent.click(busy!); });
+    expect(listCalls().filter((c) => c === undefined)).toHaveLength(2); // the open list's own first read + the apply
+    answer();
+    await advance(300);
+    expect(updatesButton()).toBeNull();
+  });
+
+  test('offline: the apply waits for the network and says so; it ends when the read is delivered', async () => {
+    await mountMarked({ sort: 'created' });
+    act(() => { onlineManager.setOnline(false); });
+    try {
+      await act(async () => { fireEvent.click(updatesButton()!); });
+      await advance(300);
+      expect(screen.queryByRole('button', { name: 'Updating…' })).not.toBeNull();
+      expect(listCalls()).toEqual([]);
+    } finally {
+      act(() => { onlineManager.setOnline(true); });
+    }
+    await advance(300);
+    expect(listCalls()).toEqual([undefined]);
+    expect(screen.queryByRole('button', { name: /Updating…|Updates available|Update failed/ })).toBeNull();
+  });
+
+  // A cancel of task reads (`useKanbanMove.ts#useKanbanMove` before a move,
+  // TanStack's default `revert`) cancels the apply's own read. A cancel is
+  // neither a delivery nor a success: the offer stays, nothing is announced,
+  // the focus stays on the button, and the reader can press it again.
+  test.each<[string, () => () => void]>([
+    ['the read is on the wire', () => { holdFirstAnswer(); return () => {}; }],
+    ['the read waits offline', () => {
+      act(() => { onlineManager.setOnline(false); });
+      return () => act(() => { onlineManager.setOnline(true); });
+    }],
+  ])('the apply\'s read is cancelled while %s: no «Updating…», no success, a new press reads again', async (_n, start) => {
+    await mountMarked({ sort: 'created' });
+    const backOnline = start();
+    try {
+      const button = updatesButton()!;
+      act(() => { button.focus(); });
+      await act(async () => { fireEvent.click(button); });
+      await advance(0);
+      expect(screen.queryByRole('button', { name: 'Updating…' })).not.toBeNull();
+
+      await act(async () => { await qc.cancelQueries({ queryKey: last!.cacheKey, exact: true }); });
+      await advance(300);
+
+      expect(screen.queryByRole('button', { name: 'Updating…' })).toBeNull();
+      const again = updatesButton();
+      expect(again).not.toBeNull();
+      expect(document.activeElement).toBe(again);
+      expect(screen.getByRole('status').textContent).toBe('');
+    } finally {
+      backOnline();
+    }
+    await advance(300);
+    calls = [];
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(listCalls()).toEqual([undefined]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(updatesButton()).toBeNull();
+  });
+
+  test('the apply\'s read is cancelled: the next page can be read', async () => {
+    await mountMarked({ sort: 'created' });
+    holdFirstAnswer();
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+    await act(async () => { await qc.cancelQueries({ queryKey: last!.cacheKey, exact: true }); });
+    await advance(300);
+    calls = [];
+
+    await act(async () => { last!.fetchNextPage(); });
+    await advance(100);
+
+    expect(listCalls()).toEqual(['c-b']);
+  });
+
+  test('a read of the next page in flight when the button is pressed: it is dropped, and the apply ends with its own read', async () => {
+    threePages();
+    serveFrom();
+    await mount({ sort: 'created' }, 2);
+    await returnToTab();
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise(() => {});
+    });
+    await act(async () => { last!.fetchNextPage(); });
+    await advance(0);
+    expect(listCalls()).toEqual(['c-d']);
+
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+
+    expect(listCalls()).toEqual(['c-d', undefined]);
+    expect(ids()).toEqual(['sk-a', 'sk-b']);
+    expect(screen.queryByRole('button', { name: /Updating…|Updates available|Update failed/ })).toBeNull();
+    expect(screen.getByRole('status').textContent).not.toBe('');
+  });
+
+  test('a failed apply, then a full read of the list lands anyway: no offer is left', async () => {
+    await mountMarked({ sort: 'created' });
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return Promise.reject(new Error('down'));
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(300);
+    expect(screen.queryByRole('button', { name: 'Update failed — retry' })).not.toBeNull();
+
+    // Another full read of the list delivers (a mount, a reconnect): the owed updates are applied.
+    await act(async () => { await qc.refetchQueries({ queryKey: last!.cacheKey, exact: true }); });
+    await advance(300);
+    expect(screen.queryByRole('button', { name: /Update failed|Updates available|Updating…/ })).toBeNull();
+  });
+
+  test('another QueryClient for the same list while an apply runs: the new one shows nothing of it', async () => {
+    const switchTo = await mountMarked({ sort: 'created' });
+    let fail: () => void = () => {};
+    listIssuesSpy.mockImplementationOnce((_pid, params) => {
+      calls.push(params?.cursor);
+      return new Promise((_resolve, reject) => { fail = () => reject(new Error('down')); });
+    });
+    await act(async () => { fireEvent.click(updatesButton()!); });
+    await advance(0);
+
+    // A fresh client renders the same list key in the same tree.
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    serveFrom();
+    await switchTo({ sort: 'created' });
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+    fail();
+    await advance(300);
+    expect(screen.queryByRole('button', { name: /Updating…|Update failed|Updates available/ })).toBeNull();
+  });
+
+  test('a list of one page is re-read from its first page as before: nothing of it is lost', async () => {
+    pages = { [FIRST]: { items: [A, B], total: 2, hasMore: false, nextCursor: null } };
+    serveFrom();
+    await mount({ sort: 'created' });
+
+    await returnToTab();
+
+    expect(listCalls()).toEqual([undefined]);
+    expect(updatesButton()).toBeNull();
+  });
+});

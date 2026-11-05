@@ -92,6 +92,9 @@ import { BlobCodesResult } from './BlobCodesResult';
 import { BudilnikLensBody } from './BudilnikLensBody';
 import { useRingingIssueIds, useRingingTaskCount } from '../../lib/useReminders';
 import { SkeinTooltip } from '../../components/SkeinTooltip';
+import { TasksUpdatesButton } from './TasksUpdatesButton';
+import { scrollReadingToStart, useReportReadingPosition } from '../../lib/liveListDirty';
+import { useWidthMode } from '../../lib/useWidthMode';
 import { useDeclareProjects } from '../../lib/liveProjectDeclaration';
 
 /**
@@ -219,6 +222,29 @@ export function TasksColumn({
 }: Props) {
   const { t } = useTranslation('tasks');
   const { t: tCommon } = useTranslation('common');
+  // sk-763 — the column root: where its reader is is read off its scroll
+  // containers, and they are brought to the start as the reader applies
+  // the updates of a held list (`TasksUpdatesButton`).
+  const columnRef = useRef<HTMLDivElement | null>(null);
+  const scrollBodyToTop = useCallback(() => {
+    scrollReadingToStart(columnRef.current);
+  }, []);
+  // The header when it is on screen, else the search box: where the focus
+  // goes when «Updates available» leaves while holding it.
+  const focusAfterUpdates = useCallback((): HTMLElement | null => {
+    const root = columnRef.current;
+    const header = root?.querySelector<HTMLElement>('.col-tasks-header') ?? null;
+    if (header !== null && header.getClientRects().length > 0) return header;
+    return root?.querySelector<HTMLElement>('.task-filters-search input') ?? header;
+  }, []);
+  // sk-763 — ONE «Updates available» control, in a row the reader sees: the
+  // column header, except on a phone, where the header is folded away for
+  // the all-projects place (`.col-header-zone-name-only`) and stripped to the
+  // heading otherwise — there it sits in the filters head row, which is
+  // always on screen.
+  const widthMode = useWidthMode();
+  const updatesInFilterRow = widthMode === 'mobile';
+
   const layout = useLayoutState();
   const ui = useTasksUiState();
   const auth = useAuth();
@@ -451,6 +477,17 @@ export function TasksColumn({
     // so a picker would be meaningless.
     assigneeFilter: onMeMode ? null : ui.assigneeFilter,
   });
+  // sk-763 — whether the column shows this list as its ordinary list (not
+  // under the reminders lens, a rooted subtree, the pasted-codes result or
+  // folded away) and where the reader is in it: a list being read is not
+  // reset by the background (`lib/liveListDirty.ts`).
+  useReportReadingPosition(tasks.cacheKey, {
+    shown: !collapsed && !budilnikMode && !anchored && !blob.active,
+    root: columnRef,
+  });
+  const updatesButton = (
+    <TasksUpdatesButton listKey={tasks.cacheKey} onApply={scrollBodyToTop} focusAfter={focusAfterUpdates} />
+  );
   // sk-622.21 T041 (US-9) — the project of the open route is declared
   // first, even while it shows no rows (an issue created in it must still
   // arrive). The rows' own projects are declared from the query cache.
@@ -1181,6 +1218,7 @@ export function TasksColumn({
 
   return (
     <div
+      ref={columnRef}
       className={
         // sk-551.29 — one class for both views: the pane beside them is
         // sized the same way, so the `--tree` / `--board` suffixes the
@@ -1344,6 +1382,7 @@ export function TasksColumn({
             </span>
           </span>
         ) : null}
+        {!anchored && !blob.active && !updatesInFilterRow ? updatesButton : null}
         <button
           type="button"
           className="col-header-btn"
@@ -1361,6 +1400,9 @@ export function TasksColumn({
         </button>
       </div>
       <TaskFilters
+        // sk-763 — on a phone «Updates available» rides the filters head
+        // row: the header above is folded away there (see `updatesButton`).
+        headAction={!anchored && !blob.active && updatesInFilterRow ? updatesButton : undefined}
         search={ui.search}
         // sk-47.2 — wrapped setter: editing the box while in blob mode
         // exits blob mode first, then applies the typed change.
@@ -1518,6 +1560,7 @@ export function TasksColumn({
             hasNextPage={tasks.hasNextPage}
             isFetchingNextPage={tasks.isFetchingNextPage}
             fetchNextPage={tasks.fetchNextPage}
+            dataScope={tasks.cacheKey}
           />
         </div>
       ) : blob.active ? (
@@ -1600,6 +1643,7 @@ export function TasksColumn({
           hasNextPage={tasks.hasNextPage}
           isFetchingNextPage={tasks.isFetchingNextPage}
           fetchNextPage={tasks.fetchNextPage}
+          dataScope={tasks.cacheKey}
         />
       )}
     </div>
@@ -1838,7 +1882,16 @@ interface TasksBodyProps {
   /** Forwarded from useTasks for the IntersectionObserver-driven scroll. */
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
-  fetchNextPage: () => void;
+  fetchNextPage: (opts?: { explicit?: boolean }) => void;
+  /**
+   * sk-763 — the cache key of the `useTasks` list behind `items`
+   * (`useTasks().cacheKey`): which project, place, filters, lens, search
+   * and server sort the rows answer. With the tree's own conditions it is
+   * the scope of the tree's reading anchor (`TaskTreeVirtualList`
+   * `anchorScope`). A change of it is a change of conditions even when
+   * the new rows come from the cache at once, without a loading state.
+   */
+  dataScope: readonly unknown[];
 }
 
 function TasksBody({
@@ -1877,6 +1930,7 @@ function TasksBody({
   hasNextPage,
   isFetchingNextPage,
   fetchNextPage,
+  dataScope,
 }: TasksBodyProps) {
   const { t } = useTranslation('tasks');
   // sk-551.32 — the board's fold memory lives HERE, above the loading
@@ -2092,6 +2146,23 @@ function TasksBody({
     types: layeredTypes,
     enabled: layeredEnabled,
   });
+
+  // sk-763 — the conditions the tree's rows answer: the list behind them,
+  // the subtree it is rooted at, its edge types, its sort and its search.
+  // The reading anchor keeps the reader's row in place only while these
+  // stay the same — a background refresh of the same tree; another scope
+  // is another list, even when its rows are taken from the cache at once.
+  const treeAnchorScope = useMemo(
+    () => JSON.stringify([
+      dataScope,
+      anchored ? treeRootAnchor?.id ?? null : null,
+      [...layeredTypes].sort(),
+      sort,
+      sortDir,
+      searchQuery,
+    ]),
+    [dataScope, anchored, treeRootAnchor, layeredTypes, sort, sortDir, searchQuery],
+  );
 
   // sk-429 — catch up with an event that arrived DURING a walk in progress.
   //
@@ -2540,7 +2611,8 @@ function TasksBody({
         onSelect={onSelect}
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
-        fetchNextPage={fetchNextPage}
+        // sk-763 — «Load more» is the reader's own request for the next page.
+        fetchNextPage={() => fetchNextPage({ explicit: true })}
       />
     );
   }
@@ -2630,6 +2702,7 @@ function TasksBody({
         <TaskTreeVirtualList
           ref={treeScrollerRef}
           rows={visibleRows}
+          anchorScope={treeAnchorScope}
           // sk-285.2.13 — the same condition the sentinel below is
           // rendered under, and for the same reason: on the flat-tree
           // path another page can still arrive and grow `visibleRows`,

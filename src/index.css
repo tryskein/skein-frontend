@@ -2963,6 +2963,31 @@ mark.match-highlight {
   color: var(--ink-2);
 }
 
+/* sk-763 — «Updates available» (`TasksUpdatesButton.tsx`). The accent
+ * ghost action of the details pane (`.empty-section-add`: 16px icon +
+ * words, `--height-control` tall), placed in the Tasks header between the
+ * heading and the collapse button (on a phone in the filters head row
+ * instead, see the mobile block). It never shrinks or wraps: the box before
+ * it (the heading, the search box) is the one that gives way, so the button
+ * appearing moves nothing but that box's free room, and the row keeps its
+ * height. */
+.col-tasks-updates {
+  flex: 0 0 auto;
+  margin-left: var(--space-1);
+  white-space: nowrap;
+}
+
+/* While the fresh list is read the button stays (it keeps the keyboard
+ * focus, so it is `aria-disabled`, not `disabled`) and takes the ghost
+ * action's disabled look: the ink drops to `--ink-3`, no hover wash. */
+.col-tasks-updates[aria-disabled='true'] {
+  color: var(--ink-3);
+  cursor: default;
+}
+
+/* Its hover and press stay that look too — see the rule after the ghost
+ * press recipe (`.empty-section-add.col-tasks-updates[aria-disabled='true']:active`). */
+
 /* sk-285.7 fidelity L3 — the handle STRADDLES the seam instead of
  * widening it.
  *
@@ -19464,6 +19489,11 @@ tr:nth-of-type(4n + 3) .activity-redacted-title {
    * container — never on the page. Vertical scrolling is already this
    * element's (`.col-body`). */
   overflow-x: auto;
+  /* sk-763 — the reading position is kept by the list itself
+   * (`TaskTreeVirtualList.tsx`, the reading anchor): rows are placed by
+   * transform, and a browser scroll anchor of its own on top of that
+   * would compensate a second time. */
+  overflow-anchor: none;
 }
 
 /* The column headings. Sticky against VERTICAL scrolling (they hold the
@@ -20269,6 +20299,20 @@ tr:nth-of-type(4n + 3) .activity-redacted-title {
  * the caption repeats a fact the View settings panel states in full. */
 [data-width-mode='mobile'] .col-tasks-board-note {
   display: none;
+}
+
+/* sk-763 — on a phone «Updates available» sits in the filters head row
+ * (the header is folded away there): only the glyph is drawn — each state
+ * has its own — and the words stay the button's name, hidden the way
+ * `.sr-only` hides (not `display: none`, which would take the name away). */
+[data-width-mode='mobile'] .col-tasks-updates-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 [data-width-mode='mobile'] .col-tasks-header .col-header-count,
@@ -21106,6 +21150,19 @@ tr:nth-of-type(4n + 3) .activity-redacted-title {
 .kanban-focus-action:active,
 .viewsettings-reset:active {
   color: var(--primary-h);
+}
+
+/* sk-763 — «Updates available» while its read runs (`TasksUpdatesButton.tsx`)
+ * is `aria-disabled`, not `disabled` (it keeps the keyboard focus), so the
+ * `:not(:disabled)` hover and press of the ghost above still match it. Its
+ * hover and press keep the disabled look of its rest (`.col-tasks-updates`):
+ * no wash, no ring, `--ink-3`. Same weight as the press ink rule above and
+ * after it, so it wins on order; the focus ring is an `outline` and stays. */
+.empty-section-add.col-tasks-updates[aria-disabled='true']:hover,
+.empty-section-add.col-tasks-updates[aria-disabled='true']:active {
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink-3);
 }
 
 /* `Watching` is drawn as the ghost's own on-state (`--primary-t` +

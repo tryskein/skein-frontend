@@ -20,6 +20,8 @@ import '../i18n/config';
 import { LiveEventsProvider } from '../hooks/useLiveEvents';
 import { LIVE_INVALIDATION_WINDOW_MS } from './liveInvalidationBatcher';
 import { LIVE_SAFETY_NET_MS } from './liveSafetyNet';
+import { readingListHold } from './liveListDirty';
+import { showReadingList } from '../test/showReadingList';
 import { useNotificationCounts } from './useNotificationCounts';
 import { useWatching } from './useWatching';
 import { useInbox } from './useInbox';
@@ -248,7 +250,7 @@ describe('No. 82 — the 60 s safety net of a visible tab', () => {
 });
 
 describe('No. 82 — the shape of the tick', () => {
-  test('the «unreviewed» list is re-read from its first page only (K21)', async () => {
+  test('the «unreviewed» list being read (two pages shown) is not re-read; its re-read is owed', async () => {
     await mountTab();
     const key = ['tasks', 'me', 'created-by', 'unreviewed', 'all', 'all', 'all', '', 'updated'];
     const params: unknown[] = [];
@@ -256,6 +258,32 @@ describe('No. 82 — the shape of the tick', () => {
       pages: [{ items: [], hasMore: true, nextCursor: 'c2' }, { items: [], hasMore: false }],
       pageParams: [undefined, 'c2'],
     });
+    const observer = new InfiniteQueryObserver(qc, {
+      queryKey: key,
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: (last: { hasMore: boolean; nextCursor?: string }) => (last.hasMore ? last.nextCursor : undefined),
+      queryFn: ({ pageParam }: { pageParam: unknown }) => {
+        params.push(pageParam);
+        return Promise.resolve({ items: [], hasMore: true, nextCursor: 'c2' });
+      },
+      staleTime: Infinity,
+    });
+    const stop = observer.subscribe(() => {});
+    // The column shows it (sk-763: only a list the column shows can be held).
+    showReadingList(qc, key);
+    await advance(LIVE_SAFETY_NET_MS + LIVE_INVALIDATION_WINDOW_MS);
+    // sk-763 (owner's decision): two loaded pages shown — a list being read:
+    // the tick's re-read is owed («updates available»), the pages stay.
+    expect(params).toEqual([]);
+    expect(readingListHold.marked(qc.getQueryCache().find({ queryKey: key, exact: true })!)).toBe(true);
+    stop();
+  });
+
+  test('the «unreviewed» list of one page, read from its start, is re-read from its first page (K21)', async () => {
+    await mountTab();
+    const key = ['tasks', 'me', 'created-by', 'unreviewed', 'all', 'all', 'all', '', 'updated'];
+    const params: unknown[] = [];
+    qc.setQueryData(key, { pages: [{ items: [], hasMore: true, nextCursor: 'c2' }], pageParams: [undefined] });
     const observer = new InfiniteQueryObserver(qc, {
       queryKey: key,
       initialPageParam: undefined as string | undefined,

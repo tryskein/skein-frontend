@@ -4,6 +4,7 @@ import {
   useEffect,
   useId,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -202,6 +203,14 @@ export interface TaskTreeVirtualListProps {
   /** Visible rows: post-collapse, in render order. */
   rows: FlatTreeRow[];
   /**
+   * sk-763 — the conditions `rows` answer (project, filters, sort, search,
+   * rooted subtree), as one comparable string. While it stays the same, a
+   * change of `rows` is new data for the same list and the row the reader
+   * is at keeps its place (`readingAnchorShift`). When it changes, the rows
+   * are another list and the offset is left alone. Absent — one scope.
+   */
+  anchorScope?: string;
+  /**
    * sk-285.2.13 — `rows` is a loaded PREFIX: the paginated query behind
    * the tree has another page, which the footer sentinel will fetch as
    * the reader reaches the bottom.
@@ -273,6 +282,69 @@ export interface TaskTreeVirtualListProps {
 const OVERSCAN = 6;
 
 /**
+ * sk-763 — how far the scroll offset must move so the row the reader is at
+ * keeps its place after the rows changed, in px (0 — nothing to move).
+ *
+ * The rows have one fixed height, so moving the offset by N rows keeps on
+ * screen, in place, exactly the rows whose index changed by N. What the
+ * reader reads is the rows of the old viewport, not one of them: each of
+ * them still in the new rows counts for its change of index, and the offset
+ * moves by the change most of them share. Rows added or gone above move
+ * the whole viewport alike; a row re-sorted by a change of its own (an edit
+ * moves it in the server's order), alone or with a few others, is outweighed
+ * by the rest of what the reader sees. A tie goes to the smaller move, then
+ * to the change met first from the top. When no row of the old viewport is
+ * left, the rows are another list, and the offset is not moved.
+ *
+ * The old viewport is the rows partly or wholly in view: from the row at
+ * `scrollOffset` to the last row that starts before `scrollOffset +
+ * viewportPx`. A row below that has no say — it is not on the screen.
+ *
+ * Not applied at the very top (`scrollOffset <= 0`): a reader there sees
+ * the start of the list, which is where new rows appear. Not applied when
+ * no row is in view (`viewportPx <= 0`).
+ */
+function readingAnchorShift(
+  prevKeys: readonly string[],
+  nextKeys: readonly string[],
+  scrollOffset: number,
+  viewportPx: number,
+  rowHeightPx: number,
+): number {
+  // No row in view (a body no taller than the table head): no reading
+  // context to keep.
+  if (scrollOffset <= 0 || viewportPx <= 0 || prevKeys.length === 0) return 0;
+  const first = Math.floor(scrollOffset / rowHeightPx);
+  // The last row any part of which is in the half-open range
+  // [scrollOffset, scrollOffset + viewportPx) — fractional offsets included;
+  // a row that only starts at the end of the range is out of view. With a
+  // range of positive height it is never above `first`.
+  const last = Math.min(
+    prevKeys.length - 1,
+    Math.ceil((scrollOffset + viewportPx) / rowHeightPx) - 1,
+  );
+  if (first > last) return 0;
+  const nextIndex = new Map<string, number>();
+  for (let i = 0; i < nextKeys.length; i++) nextIndex.set(nextKeys[i], i);
+  // For each change of index, how many rows of the old viewport it keeps in
+  // place (a Map keeps the changes in the order they are met from the top).
+  const kept = new Map<number, number>();
+  for (let i = first; i <= last; i++) {
+    const at = nextIndex.get(prevKeys[i]);
+    if (at !== undefined) kept.set(at - i, (kept.get(at - i) ?? 0) + 1);
+  }
+  let shift = 0;
+  let most = 0;
+  for (const [change, rows] of kept) {
+    if (rows > most || (rows === most && Math.abs(change) < Math.abs(shift))) {
+      shift = change;
+      most = rows;
+    }
+  }
+  return shift * rowHeightPx;
+}
+
+/**
  * How long a typeahead buffer stays alive between keystrokes, in ms.
  *
  * Long enough to type a word at conversational speed, short enough that
@@ -288,6 +360,7 @@ export const TaskTreeVirtualList = forwardRef<
 >(function TaskTreeVirtualList(
   {
     rows,
+    anchorScope,
     hasMoreRows,
     selectedId,
     expanded,
@@ -451,6 +524,84 @@ export const TaskTreeVirtualList = forwardRef<
     // canvas, which starts below the header.
     scrollMargin: TREE_HEAD_HEIGHT_PX,
   });
+
+  /**
+   * sk-763 — keep the reading position when the rows change under the
+   * reader: a background refresh of the data adds or removes rows above
+   * the row being read, and with an offset that stays a number the row
+   * would slide away (see `readingAnchorShift`). Runs before paint, so the
+   * reader never sees the intermediate position. The offset is the one the
+   * virtualizer last saw, from before this commit: the element's own
+   * `scrollTop` may already be clamped by a shorter canvas.
+   *
+   * This is not a scroll to the selected row: the anchor is where the
+   * reader is, wherever the selection is.
+   *
+   * A body that shows no row now — on a phone, the Tasks zone the reader
+   * left stays mounted with no height — still holds what the reader read:
+   * the viewport of rows they saw last (`readViewportPxRef`, taken on every
+   * commit that has one: the mount, a scroll, a resize, the zone shown
+   * again). The rows changing while it is hidden move the offset by that
+   * viewport, so the reader comes back to the rows they left. A body that
+   * never showed a row has nothing to keep.
+   *
+   * A hidden body may not report the offsets written to it, so the
+   * virtualizer's offset is not moved by them: until the next `scroll` of
+   * the body, the offset of the last compensation, as the element holds it
+   * (clamped or not), is where the reader is (`ownOffsetRef`). Any
+   * `scroll` — the reader's own, the report of a write, a clamp — drops it,
+   * and the virtualizer reads the same event.
+   */
+  const prevRowKeysRef = useRef(rowKeys);
+  const prevAnchorScopeRef = useRef(anchorScope);
+  const readViewportPxRef = useRef(0);
+  const ownOffsetRef = useRef<number | null>(null);
+  const scrollEventsRef = useRef(0);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      scrollEventsRef.current += 1;
+      ownOffsetRef.current = null;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const viewport = el.clientHeight - TREE_HEAD_HEIGHT_PX;
+    if (viewport > 0) readViewportPxRef.current = viewport;
+  });
+  useLayoutEffect(() => {
+    const prevKeys = prevRowKeysRef.current;
+    const sameScope = prevAnchorScopeRef.current === anchorScope;
+    prevRowKeysRef.current = rowKeys;
+    prevAnchorScopeRef.current = anchorScope;
+    const el = scrollRef.current;
+    if (!el) return;
+    const viewportNow = el.clientHeight - TREE_HEAD_HEIGHT_PX;
+    if (!sameScope) {
+      // Another list: what was read of the previous one says nothing of it.
+      ownOffsetRef.current = null;
+      readViewportPxRef.current = Math.max(0, viewportNow);
+      return;
+    }
+    if (prevKeys === rowKeys) return;
+    const offset = ownOffsetRef.current ?? virtualizer.scrollOffset ?? el.scrollTop;
+    const shift = readingAnchorShift(
+      prevKeys,
+      rowKeys,
+      offset,
+      viewportNow > 0 ? viewportNow : readViewportPxRef.current,
+      TREE_ROW_HEIGHT_PX,
+    );
+    if (shift === 0) return;
+    const eventsBefore = scrollEventsRef.current;
+    virtualizer.scrollToOffset(offset + shift, { align: 'start' });
+    // Reported already (the virtualizer has it) — nothing to hold.
+    ownOffsetRef.current = scrollEventsRef.current === eventsBefore ? el.scrollTop : null;
+  }, [rowKeys, anchorScope, virtualizer]);
 
   useImperativeHandle(
     ref,

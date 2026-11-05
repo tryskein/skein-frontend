@@ -92,17 +92,35 @@ function renderList(
   ref?: RefObject<TaskTreeScroller>,
   rows: FlatTreeRow[] = ROWS,
   columns: readonly TreeOptionalColumn[] = TREE_DEFAULT_COLUMNS,
+  anchorScope?: string,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const result = render(listElement(client, ref, rows, columns, anchorScope));
+  return {
+    ...result,
+    /** Re-render the same mounted list with another set of rows (and scope). */
+    rerenderRows: (next: FlatTreeRow[], nextScope: string | undefined = anchorScope) =>
+      result.rerender(listElement(client, ref, next, columns, nextScope)),
+  };
+}
+
+function listElement(
+  client: QueryClient,
+  ref: RefObject<TaskTreeScroller> | undefined,
+  rows: FlatTreeRow[],
+  columns: readonly TreeOptionalColumn[],
+  anchorScope?: string,
+) {
+  return (
     <QueryClientProvider client={client}>
       <MantineProvider forceColorScheme="dark">
         <MemoryRouter>
           <TaskTreeVirtualList
             ref={ref}
             rows={rows}
+            anchorScope={anchorScope}
             // The whole fixture is loaded: no page is outstanding, so
             // the set sizes below are exact numbers.
             hasMoreRows={false}
@@ -125,7 +143,7 @@ function renderList(
           />
         </MemoryRouter>
       </MantineProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -149,8 +167,14 @@ function canvasHeight(container: HTMLElement): number {
  * offset is written — the three things the virtualizer reads and jsdom
  * does not provide. Returns a reader for the current offset.
  */
-function emulateScrolling(container: HTMLElement): () => number {
+function emulateScrolling(
+  container: HTMLElement,
+  viewportPx: number | (() => number) = VIEWPORT_PX,
+  /** Whether a written offset fires `scroll` now (a browser may not for a box it does not lay out). */
+  firesScroll: () => boolean = () => true,
+): () => number {
   const body = container.querySelector<HTMLElement>('.col-body')!;
+  const height = typeof viewportPx === 'number' ? () => viewportPx : viewportPx;
   let offset = 0;
   Object.defineProperty(body, 'scrollTop', {
     configurable: true,
@@ -161,7 +185,7 @@ function emulateScrolling(container: HTMLElement): () => number {
   });
   Object.defineProperty(body, 'clientHeight', {
     configurable: true,
-    get: () => VIEWPORT_PX,
+    get: height,
   });
   Object.defineProperty(body, 'scrollHeight', {
     configurable: true,
@@ -171,7 +195,7 @@ function emulateScrolling(container: HTMLElement): () => number {
     const top = options?.top ?? 0;
     if (top === offset) return; // a browser fires no event for a no-op
     offset = top;
-    body.dispatchEvent(new Event('scroll'));
+    if (firesScroll()) body.dispatchEvent(new Event('scroll'));
   }) as HTMLElement['scrollTo'];
   return () => offset;
 }
@@ -404,5 +428,321 @@ describe('sk-285.2.19 — the header names the columns the rows print', () => {
     const grid = container.querySelector('[role="treegrid"]')!;
     expect(scroller.contains(strip)).toBe(true);
     expect(grid.contains(strip)).toBe(false);
+  });
+});
+
+// ─────────── sk-763 — the reading position survives new data ───────────
+//
+// The reference is the acceptance of sk-763: a background refresh of the
+// tree's data does not move the reading position. With the rows at a fixed
+// height, the row at the top of the viewport is the reader's anchor: rows
+// that appear or go away ABOVE it must not slide it up or down, and a
+// reader at the very top keeps seeing the top, where new rows appear. The
+// expected offsets are literal row arithmetic of the fixture, not read off
+// the component.
+
+describe('sk-763 — the row the reader is at keeps its place when rows change above it', () => {
+  /** Scroll the emulated container like a reader would. */
+  function scrollTo(container: HTMLElement, top: number): void {
+    const body = container.querySelector<HTMLElement>('.col-body')!;
+    act(() => {
+      body.scrollTo({ top });
+    });
+  }
+
+  /** The reader is at row demo-301 (index 300), 10 px into it. */
+  const READING_AT = 300 * TREE_ROW_HEIGHT_PX + 10;
+
+  test('three rows added above: the offset moves by exactly three rows, the same row stays on top', () => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, READING_AT);
+    expect(renderedTitles(view.container)).toContain('title demo-301');
+
+    act(() => {
+      view.rerenderRows([row('new-1'), row('new-2'), row('new-3'), ...ROWS]);
+    });
+
+    expect(offset()).toBe(READING_AT + 3 * TREE_ROW_HEIGHT_PX);
+    expect(renderedTitles(view.container)).toContain('title demo-301');
+  });
+
+  test('two rows above go away: the offset moves back by exactly two rows', () => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, READING_AT);
+
+    act(() => {
+      view.rerenderRows(ROWS.filter((r) => r.item.id !== 'demo-5' && r.item.id !== 'demo-6'));
+    });
+
+    expect(offset()).toBe(READING_AT - 2 * TREE_ROW_HEIGHT_PX);
+  });
+
+  test('the top row itself goes away: the next row of the window keeps its place', () => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, READING_AT);
+
+    // demo-301 is gone and one row is added above: demo-302 was one row
+    // below the top, and stays one row below where the top was.
+    act(() => {
+      view.rerenderRows([row('new-1'), ...ROWS.filter((r) => r.item.id !== 'demo-301')]);
+    });
+
+    expect(offset()).toBe(READING_AT);
+  });
+
+  test('a reader at the very top stays at the top, where the new rows appear', () => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+
+    act(() => {
+      view.rerenderRows([row('new-1'), row('new-2'), ...ROWS]);
+    });
+
+    expect(offset()).toBe(0);
+    expect(renderedTitles(view.container)).toContain('title new-1');
+  });
+
+  test('another scope (filters, sort, project) is another list: its rows, even from the cache at once, do not move the offset', () => {
+    const view = renderList(undefined, ROWS, TREE_DEFAULT_COLUMNS, 'scope-a');
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, READING_AT);
+
+    // The same rows lead the other list, shifted: within one scope this
+    // would be an anchor shift of three rows.
+    act(() => {
+      view.rerenderRows([row('new-1'), row('new-2'), row('new-3'), ...ROWS], 'scope-b');
+    });
+    expect(offset()).toBe(READING_AT);
+
+    // Back in the new scope, a background refresh is anchored again.
+    act(() => {
+      view.rerenderRows([row('new-0'), row('new-1'), row('new-2'), row('new-3'), ...ROWS], 'scope-b');
+    });
+    expect(offset()).toBe(READING_AT + TREE_ROW_HEIGHT_PX);
+  });
+
+  /** The same rows with `ids` taken out and put back, in that order, from index `to`. */
+  function moved(ids: readonly string[], to: number): FlatTreeRow[] {
+    const rest = ROWS.filter((r) => !ids.includes(r.item.id));
+    const block = ids.map((id) => ROWS.find((r) => r.item.id === id)!);
+    return [...rest.slice(0, to), ...block, ...rest.slice(to)];
+  }
+
+  // Rows re-sorted by a change of their own (an edit moves them in the
+  // server's order) leave their places: the rest of the viewport is the
+  // reading context, and the offset keeps the most rows of the viewport
+  // where they are on screen — whether the moved row was the top one or
+  // not, and however many moved together. The rows viewport is the body
+  // less the table head, 800 − 40 = 760 px; from 300·44+10 = 13210 it shows
+  // [13210, 13970): rows 300…317 (row 317 is 13948…13992, row 318 starts at
+  // 13992, out of view). The expected offsets are the index arithmetic of
+  // the fixture over those 18 rows.
+  test.each<[string, readonly string[], number, number]>([
+    // 17 rows (prev 301…317) keep their index: one row out above them, one in above them.
+    ['the top row moves up, far above the window (300 → 20)', ['demo-301'], 20, READING_AT],
+    // 17 rows (prev 301…317) move up one index.
+    ['the top row moves down, far below the window (300 → 450)', ['demo-301'], 450, READING_AT - TREE_ROW_HEIGHT_PX],
+    // 10 rows (prev 301…310) move up one index, 7 (prev 311…317) keep theirs.
+    ['the top row moves down inside the window (300 → 310)', ['demo-301'], 310, READING_AT - TREE_ROW_HEIGHT_PX],
+    // 9 rows (prev 301…309) move up one index, 8 (prev 310…317) keep theirs;
+    // row 318, out of view, has no say.
+    ['the top row moves down inside the window (300 → 309)', ['demo-301'], 309, READING_AT - TREE_ROW_HEIGHT_PX],
+    // 13 rows (prev 305…317) keep their index, 4 (prev 300…303) move down one.
+    ['another row of the window moves up, far above it (304 → 20)', ['demo-305'], 20, READING_AT],
+    // 16 rows (prev 302…317) keep their index; the two moved ones stay neighbours.
+    ['the two top rows move up together, far above the window (300, 301 → 20, 21)', ['demo-301', 'demo-302'], 20, READING_AT],
+  ])('%s: the reading context keeps its place', (_n, ids, to, expected) => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, READING_AT);
+
+    act(() => {
+      view.rerenderRows(moved(ids, to));
+    });
+
+    expect(offset()).toBe(expected);
+  });
+
+  // A browser scrolls by fractions of a pixel: a row counts when any part
+  // of it is in [offset, offset + 760). The move is the top row 300 → 309:
+  // prev 301…309 move up one index, prev 310…318 keep theirs.
+  test.each<[string, number, number]>([
+    // [13232.2, 13992.2): row 318 (13992…14036) is in view by 0.2 px — 9 rows
+    // move, 9 stay: a tie, and the smaller move (none) is taken.
+    ['the viewport ends 0.2 px into row 318', 13232.2, 13232.2],
+    // [13231.8, 13991.8): row 318 is not in view — 9 rows move, 8 stay.
+    ['the viewport ends 0.2 px before row 318', 13231.8, 13187.8],
+    // [13232, 13992): row 318 starts exactly where the range ends — not in view; 9 rows move, 8 stay.
+    ['the viewport ends exactly where row 318 starts', 13232, 13188],
+  ])('%s: the rows partly in view count, the rows out of view do not', (_n, readingAt, expected) => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, readingAt);
+
+    act(() => {
+      view.rerenderRows(moved(['demo-301'], 309));
+    });
+
+    expect(offset()).toBeCloseTo(expected, 6);
+  });
+
+  // A body no taller than the table head shows no row at all: there is no
+  // reading context to keep, and rows moving do not move the offset.
+  test.each<[string, number]>([
+    ['as tall as the head (no room for rows)', 40],
+    ['shorter than the head', 39],
+  ])('a body %s: the top row moving away (300 → 20) leaves the offset where it is', (_n, bodyPx) => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container, bodyPx);
+    scrollTo(view.container, READING_AT);
+
+    act(() => {
+      view.rerenderRows(moved(['demo-301'], 20));
+    });
+
+    expect(offset()).toBe(READING_AT);
+  });
+
+  /** `rows` with `ids` taken out and put back, in that order, from index `to`. */
+  function movedIn(rows: readonly FlatTreeRow[], ids: readonly string[], to: number): FlatTreeRow[] {
+    const rest = rows.filter((r) => !ids.includes(r.item.id));
+    const block = ids.map((id) => rows.find((r) => r.item.id === id)!);
+    return [...rest.slice(0, to), ...block, ...rest.slice(to)];
+  }
+
+  // On a phone the Tasks zone the reader left stays mounted with a body of
+  // no height (its rows are not laid out: `clientHeight` 0, or its padding
+  // alone), and its offset is kept. What the reader read is the viewport
+  // they saw last — 760 px of rows from 13210, rows 300…317. A row loaded
+  // below it moving to the top while the zone is hidden moves every one of
+  // those rows down one index: the offset follows them, so the reader comes
+  // back to the rows they left, and each such move adds one row more —
+  // whether or not the hidden body reports the offsets written to it.
+  test.each<[string, number, boolean]>([
+    ['a body of no height, reporting its scroll', 0, true],
+    ['a body of no height, not reporting its scroll', 0, false],
+    ['a body as tall as its padding, reporting its scroll', 16, true],
+    ['a body as tall as its padding, not reporting its scroll', 16, false],
+  ])('the reader read, then left the zone (%s): rows moving above them keep the reading context for the return', (_n, hiddenPx, hiddenScrollEvents) => {
+    let bodyPx = VIEWPORT_PX;
+    const view = renderList();
+    const offset = emulateScrolling(view.container, () => bodyPx, () => bodyPx === VIEWPORT_PX || hiddenScrollEvents);
+    scrollTo(view.container, READING_AT);
+
+    bodyPx = hiddenPx;
+    // demo-450 (index 449, below the viewport) moves to index 0: demo-301 300 → 301.
+    const once = movedIn(ROWS, ['demo-450'], 0);
+    act(() => {
+      view.rerenderRows(once);
+    });
+    expect(offset()).toBe(READING_AT + TREE_ROW_HEIGHT_PX);
+
+    // demo-451 (index 450, still below) moves to index 0 as well: demo-301 301 → 302.
+    act(() => {
+      view.rerenderRows(movedIn(once, ['demo-451'], 0));
+    });
+    expect(offset()).toBe(READING_AT + 2 * TREE_ROW_HEIGHT_PX);
+
+    // Back on the zone: the offset is where the rows are, and the row read is in view.
+    bodyPx = VIEWPORT_PX;
+    act(() => {
+      view.container.querySelector<HTMLElement>('.col-body')!.dispatchEvent(new Event('scroll'));
+    });
+    expect(offset()).toBe(READING_AT + 2 * TREE_ROW_HEIGHT_PX);
+    expect(renderedTitles(view.container)).toContain('title demo-301');
+  });
+
+  // What the offset was moved to while hidden is the reader's position only
+  // until the reader moves: back on the zone, they scroll to 13210 — the
+  // very offset the list was at before — and read there. A row loaded below
+  // that moving to the top then keeps THAT position.
+  test('back on the zone, the reader scrolls to where the list once was: the next rows moving above keep the new position', () => {
+    let bodyPx = VIEWPORT_PX;
+    const view = renderList();
+    const offset = emulateScrolling(view.container, () => bodyPx, () => bodyPx === VIEWPORT_PX);
+    scrollTo(view.container, READING_AT);
+
+    bodyPx = 0;
+    // demo-450 (index 449) → 0 while hidden; the hidden body reports no scroll.
+    const once = movedIn(ROWS, ['demo-450'], 0);
+    act(() => {
+      view.rerenderRows(once);
+    });
+    expect(offset()).toBe(READING_AT + TREE_ROW_HEIGHT_PX);
+
+    bodyPx = VIEWPORT_PX;
+    scrollTo(view.container, READING_AT);
+    expect(offset()).toBe(READING_AT);
+
+    // demo-451 (index 450, below the viewport) → 0: rows 300…317 of the new position move down one.
+    act(() => {
+      view.rerenderRows(movedIn(once, ['demo-451'], 0));
+    });
+    expect(offset()).toBe(READING_AT + TREE_ROW_HEIGHT_PX);
+  });
+
+  test('the reader left the zone and the top row read moves up far away (300 → 20): the rest of what was read keeps its place', () => {
+    let bodyPx = VIEWPORT_PX;
+    const view = renderList();
+    const offset = emulateScrolling(view.container, () => bodyPx);
+    scrollTo(view.container, READING_AT);
+
+    bodyPx = 0;
+    // 17 rows of the last viewport (prev 301…317) keep their index.
+    act(() => {
+      view.rerenderRows(moved(['demo-301'], 20));
+    });
+
+    expect(offset()).toBe(READING_AT);
+  });
+
+  // A body that never showed a row has nothing read to keep: a row moving
+  // does not move the offset.
+  test.each<[string, number]>([
+    ['of no height', 0],
+    ['as tall as its padding', 16],
+  ])('a body %s from the start: the top row moving away (300 → 20) leaves the offset where it is', (_n, bodyPx) => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container, bodyPx);
+    scrollTo(view.container, READING_AT);
+
+    act(() => {
+      view.rerenderRows(moved(['demo-301'], 20));
+    });
+
+    expect(offset()).toBe(READING_AT);
+  });
+
+  test('the reader left the zone and the list changed (another scope): a row moving in the new list leaves the offset where it is', () => {
+    let bodyPx = VIEWPORT_PX;
+    const view = renderList(undefined, ROWS, TREE_DEFAULT_COLUMNS, 'scope-a');
+    const offset = emulateScrolling(view.container, () => bodyPx);
+    scrollTo(view.container, READING_AT);
+
+    bodyPx = 0;
+    act(() => {
+      view.rerenderRows(ROWS, 'scope-b');
+    });
+    // The new list was never read: what was read of the old one says nothing of it.
+    act(() => {
+      view.rerenderRows(movedIn(ROWS, ['demo-450'], 0), 'scope-b');
+    });
+
+    expect(offset()).toBe(READING_AT);
+  });
+
+  test('rows changing below the reader do not move the offset', () => {
+    const view = renderList();
+    const offset = emulateScrolling(view.container);
+    scrollTo(view.container, READING_AT);
+
+    act(() => {
+      view.rerenderRows([...ROWS.filter((r) => r.item.id !== 'demo-450'), row('new-tail')]);
+    });
+
+    expect(offset()).toBe(READING_AT);
   });
 });

@@ -24,6 +24,8 @@ import { LiveEventsProvider } from '../hooks/useLiveEvents';
 import { LiveNavigationRefresh } from './liveVisibility';
 import { LIVE_INVALIDATION_WINDOW_MS } from './liveInvalidationBatcher';
 import { LIVE_SAFETY_NET_MS } from './liveSafetyNet';
+import { readingListHold } from './liveListDirty';
+import { showReadingList } from '../test/showReadingList';
 import { useNotificationCounts } from './useNotificationCounts';
 import { useWatching } from './useWatching';
 import { useIssueDetail } from './useIssueDetail';
@@ -410,12 +412,22 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
 
   /** A mounted task list with two loaded pages; records the page params it reads. */
   function mountTwoPageList(qc: QueryClient): { params: unknown[]; stop: () => void } {
-    const key = ['tasks', 'project', 'q-proj', 'all', 'active', 'all', 'all', 'all', '', '', 'updated', ''];
+    return mountList(qc, 2);
+  }
+
+  /**
+   * A mounted task list with `loaded` pages (sk-763: two or more is a list
+   * being read, one is not); records the page params it reads.
+   */
+  function mountList(qc: QueryClient, loaded: 1 | 2): { params: unknown[]; stop: () => void } {
+    const key = ['tasks', 'project', 'q-proj', 'all', 'active', 'all', 'all', 'all', '', '', 'updated', String(loaded)];
     const params: unknown[] = [];
-    qc.setQueryData(key, {
-      pages: [{ items: [], hasMore: true, nextCursor: 'c2' }, { items: [], hasMore: false }],
-      pageParams: [undefined, 'c2'],
-    });
+    qc.setQueryData(key, loaded === 2
+      ? {
+        pages: [{ items: [], hasMore: true, nextCursor: 'c2' }, { items: [], hasMore: false }],
+        pageParams: [undefined, 'c2'],
+      }
+      : { pages: [{ items: [], hasMore: true, nextCursor: 'c2' }], pageParams: [undefined] });
     const observer = new InfiniteQueryObserver(qc, {
       queryKey: key,
       initialPageParam: undefined as string | undefined,
@@ -427,6 +439,8 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
       staleTime: Infinity,
     });
     const stop = observer.subscribe(() => {});
+    // The column shows it (sk-763: only a list the column shows can be held).
+    showReadingList(qc, key);
     return { params, stop };
   }
 
@@ -437,7 +451,7 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
   test('focus re-reads the task lists from the first page only (K21), the members and the active trees', async () => {
     const qc = await mountTab();
     await settle();
-    const list = mountTwoPageList(qc);
+    const list = mountList(qc, 1);
     const members = mountCounter(qc, ['members', 'list', P]);
     const tree = mountCounter(qc, ['issues', 'tree', P, '__forest__', 'parent-child', '__full__', '__no_blockers__']);
     act(() => {
@@ -468,6 +482,45 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
     });
     await flush(LIVE_INVALIDATION_WINDOW_MS);
     expect(members.reads()).toBe(1);
+    members.stop();
+  });
+
+  // sk-763: opening a task puts it in the PATH (`/projects/:alias/issues/:id`
+  // and its component, space and cross-project variants, `App.tsx`). The
+  // reference is the acceptance of sk-763 — choosing a row of the list does
+  // not reload that list — and the intent stated by `LiveNavigationRefresh`
+  // itself: a click on a card is not a navigation. A change of the list the
+  // shell shows (another project, component, space, or leaving the shell)
+  // still is.
+  test.each<[string, string, string[], string]>([
+    ['a project', '/projects/pp', ['/projects/pp/issues/pp-1', '/projects/pp/issues/pp-2', '/projects/pp'], '/projects/qq'],
+    ['a component', '/projects/pp/components/c-1', ['/projects/pp/components/c-1/issues/pp-1', '/projects/pp/components/c-1'], '/projects/pp/components/c-2'],
+    ['a space', '/spaces/s1-team', ['/spaces/s1-team/issues/pp-1', '/spaces/s1-team/issues/pp-2'], '/projects/pp'],
+    ['all projects', '/', ['/issues/pp-1', '/issues/pp-2', '/'], '/settings/account'],
+  ])('in %s, opening and switching tasks re-reads nothing; a change of the list does', async (_n, list, openings, other) => {
+    const qc = await mountTab();
+    await act(async () => {
+      nav.current!(list);
+    });
+    await settle();
+    const tasks = mountTwoPageList(qc);
+    const members = mountCounter(qc, ['members', 'list', P]);
+
+    for (const path of openings) {
+      await act(async () => {
+        nav.current!(path);
+      });
+      await flush(LIVE_INVALIDATION_WINDOW_MS);
+    }
+    expect(tasks.params).toEqual([]);
+    expect(members.reads()).toBe(0);
+
+    await act(async () => {
+      nav.current!(other);
+    });
+    await flush(LIVE_INVALIDATION_WINDOW_MS);
+    expect(members.reads()).toBe(1);
+    tasks.stop();
     members.stop();
   });
 
@@ -611,7 +664,7 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
   test('an obligation keeps «first page only»: a new issue while hidden → one page on return', async () => {
     const qc = await mountTab();
     await settle();
-    const list = mountTwoPageList(qc);
+    const list = mountList(qc, 1);
     setHidden(true);
     deliverEvent({ eventType: 'issue.created', entityType: 'issue', entityId: 'q-9', projectId: 'q-proj' });
     await flush(LIVE_INVALIDATION_WINDOW_MS);
@@ -619,6 +672,29 @@ describe('No. 80 — class 3 and the obligations: shape of the re-read', () => {
     setHidden(false);
     await flush(LIVE_INVALIDATION_WINDOW_MS);
     expect(list.params).toEqual([undefined]);
+    list.stop();
+  });
+
+  // sk-763 (owner's decision): a list being read — two pages loaded, shown —
+  // is not reset by focus, by the return of visibility or by the obligations
+  // a hidden tab kept; it is marked «updates available» and keeps its pages.
+  test('a list being read: focus and the return walk no read of it; the obligation becomes the mark', async () => {
+    const qc = await mountTab();
+    await settle();
+    const list = mountTwoPageList(qc);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await flush(LIVE_INVALIDATION_WINDOW_MS);
+    setHidden(true);
+    deliverEvent({ eventType: 'issue.created', entityType: 'issue', entityId: 'q-9', projectId: 'q-proj' });
+    await flush(LIVE_INVALIDATION_WINDOW_MS);
+    setHidden(false);
+    await flush(LIVE_INVALIDATION_WINDOW_MS * 2);
+    expect(list.params).toEqual([]);
+    const held = qc.getQueryCache().findAll({ queryKey: ['tasks', 'project', 'q-proj'] })[0];
+    expect((held.state.data as { pages: unknown[] }).pages).toHaveLength(2);
+    expect(readingListHold.marked(held)).toBe(true);
     list.stop();
   });
 });

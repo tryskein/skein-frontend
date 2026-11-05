@@ -20,6 +20,8 @@ import {
   createLiveInvalidationBatcher,
   type LiveInvalidationBatcher,
 } from './liveInvalidationBatcher';
+import { readingListHold } from './liveListDirty';
+import { showReadingList } from '../test/showReadingList';
 
 const W = LIVE_INVALIDATION_WINDOW_MS;
 
@@ -616,5 +618,265 @@ describe('K22 — hidden tab: obligations, marks, return', () => {
     expect(counts.calls()).toBe(2);
     await vi.advanceTimersByTimeAsync(20);
     expect(counts.calls()).toBe(3);
+  });
+});
+
+// ─────────── sk-763 — the reading hold ───────────
+//
+// The reference is the owner's decision for sk-763: a list being read is
+// neither cut to its first page nor re-read by the background — the reset
+// it is owed is marked, kept until a full read of the list delivers, and
+// never lost (K22: a hidden tab, a read in flight). A purge of lost access
+// is never held. Which list is «being read» is the hold's business
+// (`liveListDirty.ts`); here a hold that holds what the test says.
+
+describe('sk-763 — the reading hold', () => {
+  function recordingHold(holdsKey: (key: readonly unknown[]) => boolean) {
+    const marked = new Set<unknown>();
+    const released: unknown[] = [];
+    return {
+      hold: {
+        holds: (q: { queryKey: readonly unknown[] }) => holdsKey(q.queryKey),
+        marked: (q: unknown) => marked.has(q),
+        mark: (q: unknown) => { marked.add(q); },
+        release: (q: unknown) => { marked.delete(q); released.push(q); },
+      },
+      isMarked: (key: unknown[]) => marked.has(qc.getQueryCache().find({ queryKey: key, exact: true })),
+      released,
+    };
+  }
+
+  function heldBatcher(holdsKey: (key: readonly unknown[]) => boolean, hidden: () => boolean = () => false) {
+    const h = recordingHold(holdsKey);
+    const b = createLiveInvalidationBatcher(qc, W, hidden, h.hold as never);
+    unsubscribers.push(() => b.dispose());
+    return { b, ...h };
+  }
+
+  /** An active infinite list of three loaded pages; records every page read. */
+  async function threePageList(queryKey: unknown[]) {
+    const params: unknown[] = [];
+    const obs = new InfiniteQueryObserver<number, Error, { pages: number[] }, unknown[], number>(qc, {
+      queryKey,
+      queryFn: async ({ pageParam }) => {
+        params.push(pageParam);
+        return pageParam;
+      },
+      initialPageParam: 0,
+      getNextPageParam: (last) => (last < 2 ? last + 1 : undefined),
+    });
+    unsubscribers.push(obs.subscribe(() => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    await obs.fetchNextPage();
+    await obs.fetchNextPage();
+    params.splice(0);
+    return {
+      obs,
+      params,
+      pages: () => (qc.getQueryData<{ pages: number[] }>(queryKey)?.pages.length ?? 0),
+    };
+  }
+
+  const KEY = ['tasks', 'held'];
+
+  test.each([
+    ['a «first page» reset (K21)', { firstPageOnly: true }],
+    ['a reset of all loaded pages', {}],
+  ])('%s of a held list: no read, the pages stay, the reset is marked', async (_n, flags) => {
+    const { b, isMarked } = heldBatcher(() => true);
+    const list = await threePageList(KEY);
+    void b.invalidateQueries({ queryKey: KEY, ...flags });
+    await vi.advanceTimersByTimeAsync(W * 2);
+    expect(list.params).toEqual([]);
+    expect(list.pages()).toBe(3);
+    expect(isMarked(KEY)).toBe(true);
+  });
+
+  test('a purge of lost access is never held: the list is cut and re-read as before', async () => {
+    const { b, isMarked } = heldBatcher(() => true);
+    const list = await threePageList(KEY);
+    void b.invalidateQueries({ queryKey: KEY, firstPageOnly: true, accessPurge: true });
+    await vi.advanceTimersByTimeAsync(W);
+    expect(list.params).toEqual([0]);
+    expect(list.pages()).toBe(1);
+    expect(isMarked(KEY)).toBe(false);
+  });
+
+  test('an event during a full read of the list is not lost: it is held once that read ends', async () => {
+    const { b, isMarked } = heldBatcher(() => true);
+    let release: () => void = () => {};
+    let n = 0;
+    const obs = new QueryObserver(qc, {
+      queryKey: KEY,
+      queryFn: () => {
+        n += 1;
+        return n === 1 ? Promise.resolve(1) : new Promise((r) => { release = () => r(n); });
+      },
+    });
+    unsubscribers.push(obs.subscribe(() => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    void obs.refetch();
+    void b.invalidateQueries({ queryKey: KEY });
+    await vi.advanceTimersByTimeAsync(W);
+    expect(isMarked(KEY)).toBe(false);
+    release();
+    await vi.advanceTimersByTimeAsync(W);
+    expect(isMarked(KEY)).toBe(true);
+    expect(n).toBe(2);
+  });
+
+  test('a full read delivered after the mark releases it; a read of the next page does not', async () => {
+    const { b, isMarked, released } = heldBatcher(() => true);
+    const list = await threePageList(['tasks', 'grow']);
+    // One more page to load later: the list was cut to two by the test.
+    qc.setQueryData(['tasks', 'grow'], (d: { pages: number[]; pageParams: number[] } | undefined) =>
+      d ? { pages: d.pages.slice(0, 2), pageParams: d.pageParams.slice(0, 2) } : d);
+    void b.invalidateQueries({ queryKey: ['tasks', 'grow'] });
+    await vi.advanceTimersByTimeAsync(W);
+    expect(isMarked(['tasks', 'grow'])).toBe(true);
+
+    await list.obs.fetchNextPage();
+    expect(list.params).toEqual([2]);
+    expect(isMarked(['tasks', 'grow'])).toBe(true);
+
+    await qc.refetchQueries({ queryKey: ['tasks', 'grow'], exact: true });
+    expect(isMarked(['tasks', 'grow'])).toBe(false);
+    expect(released).toHaveLength(1);
+  });
+
+  test('a read of the next page does not cover an event: the list is still re-read', async () => {
+    const b = createLiveInvalidationBatcher(qc);
+    unsubscribers.push(() => b.dispose());
+    const list = await threePageList(['projects', 'list', 'shell', 'infinite']);
+    qc.setQueryData(['projects', 'list', 'shell', 'infinite'], (d: { pages: number[]; pageParams: number[] } | undefined) =>
+      d ? { pages: d.pages.slice(0, 2), pageParams: d.pageParams.slice(0, 2) } : d);
+    void b.invalidateQueries({ queryKey: ['projects', 'list', 'shell', 'infinite'] });
+    // The reader scrolls: the next page is read and lands before the wave.
+    await list.obs.fetchNextPage();
+    list.params.splice(0);
+    await vi.advanceTimersByTimeAsync(W);
+    expect(list.params).toEqual([0, 1, 2]);
+  });
+
+  test('a hidden tab keeps the obligation; on return a held list is marked and not read', async () => {
+    let hidden = false;
+    const { b, isMarked } = heldBatcher(() => true, () => hidden);
+    const list = await threePageList(KEY);
+    hidden = true;
+    void b.invalidateQueries({ queryKey: KEY, firstPageOnly: true });
+    await vi.advanceTimersByTimeAsync(W);
+    expect(isMarked(KEY)).toBe(false);
+    hidden = false;
+    b.resume();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(list.params).toEqual([]);
+    expect(list.pages()).toBe(3);
+    expect(isMarked(KEY)).toBe(true);
+  });
+
+  test('a failed full read, then a read of the next page that succeeds: the mark stays', async () => {
+    const { b, isMarked } = heldBatcher(() => true);
+    let failHead = false;
+    const obs = new InfiniteQueryObserver<number, Error, { pages: number[] }, unknown[], number>(qc, {
+      queryKey: ['tasks', 'flaky'],
+      queryFn: async ({ pageParam }) => {
+        if (failHead && pageParam === 0) throw new Error('down');
+        return pageParam;
+      },
+      initialPageParam: 0,
+      getNextPageParam: (last) => (last < 2 ? last + 1 : undefined),
+      retry: false,
+    });
+    unsubscribers.push(obs.subscribe(() => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    await obs.fetchNextPage();
+    void b.invalidateQueries({ queryKey: ['tasks', 'flaky'] });
+    await vi.advanceTimersByTimeAsync(W);
+    expect(isMarked(['tasks', 'flaky'])).toBe(true);
+
+    // A full read from the first page fails; the reader then loads the next page.
+    failHead = true;
+    await obs.refetch();
+    failHead = false;
+    await obs.fetchNextPage();
+    expect(qc.getQueryData<{ pages: number[] }>(['tasks', 'flaky'])?.pages).toEqual([0, 1, 2]);
+    expect(isMarked(['tasks', 'flaky'])).toBe(true);
+  });
+
+  test('an event, a failed full read, a next page that lands: the event is still owed', async () => {
+    const b = createLiveInvalidationBatcher(qc);
+    unsubscribers.push(() => b.dispose());
+    let failHead = false;
+    const params: unknown[] = [];
+    const obs = new InfiniteQueryObserver<number, Error, { pages: number[] }, unknown[], number>(qc, {
+      queryKey: ['projects', 'list', 'shell', 'infinite', 'flaky'],
+      queryFn: async ({ pageParam }) => {
+        params.push(pageParam);
+        if (failHead && pageParam === 0) throw new Error('down');
+        return pageParam;
+      },
+      initialPageParam: 0,
+      getNextPageParam: (last) => (last < 2 ? last + 1 : undefined),
+      retry: false,
+    });
+    unsubscribers.push(obs.subscribe(() => {}));
+    await vi.advanceTimersByTimeAsync(0);
+    void b.invalidateQueries({ queryKey: ['projects', 'list', 'shell', 'infinite', 'flaky'] });
+    failHead = true;
+    await obs.refetch();
+    failHead = false;
+    await obs.fetchNextPage();
+    params.splice(0);
+    await vi.advanceTimersByTimeAsync(W);
+    expect(params).toEqual([0, 1]);
+  });
+
+  test('with the real hold: a marked list nobody shows any more is cut as before (K21); its return reads one page and drops the mark', async () => {
+    const b = createLiveInvalidationBatcher(qc, W, () => false, readingListHold);
+    unsubscribers.push(() => b.dispose());
+    const key = ['tasks', 'project', 'p-held', 'all', 'all', 'all', 'all', 'all', '', '', 'updated', ''];
+    const params: unknown[] = [];
+    const observe = () => {
+      const obs = new InfiniteQueryObserver<number, Error, { pages: number[] }, unknown[], number>(qc, {
+        queryKey: key,
+        queryFn: async ({ pageParam }) => { params.push(pageParam); return pageParam; },
+        initialPageParam: 0,
+        getNextPageParam: (last) => (last < 2 ? last + 1 : undefined),
+        staleTime: 30_000,
+      });
+      return { obs, stop: obs.subscribe(() => {}) };
+    };
+    const first = observe();
+    await vi.advanceTimersByTimeAsync(0);
+    await first.obs.fetchNextPage();
+    await first.obs.fetchNextPage();
+    showReadingList(qc, key);
+    void b.invalidateQueries({ queryKey: key, firstPageOnly: true });
+    await vi.advanceTimersByTimeAsync(W);
+    const q = qc.getQueryCache().find({ queryKey: key, exact: true })!;
+    expect(readingListHold.marked(q)).toBe(true);
+
+    first.stop();
+    params.splice(0);
+    void b.invalidateQueries({ queryKey: key, firstPageOnly: true });
+    await vi.advanceTimersByTimeAsync(W);
+    expect(params).toEqual([]);
+    expect((q.state.data as { pages: number[] }).pages).toEqual([0]);
+
+    const back = observe();
+    unsubscribers.push(back.stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(params).toEqual([0]);
+    expect(readingListHold.marked(q)).toBe(false);
+  });
+
+  test('a list that leaves the cache drops its mark', async () => {
+    const { b, released } = heldBatcher(() => true);
+    await threePageList(KEY);
+    void b.invalidateQueries({ queryKey: KEY });
+    await vi.advanceTimersByTimeAsync(W);
+    unsubscribers.splice(1).forEach((u) => u());
+    qc.removeQueries({ queryKey: KEY });
+    expect(released).toHaveLength(1);
   });
 });

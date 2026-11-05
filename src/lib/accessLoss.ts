@@ -348,7 +348,10 @@ export function resetAfterAccessLoss(target: LiveInvalidationTarget): void {
       else if (resetShown || !q.isActive()) q.reset();
       else if (q.state.fetchStatus === 'fetching') void q.cancel({ revert: true });
     }
-    void target.invalidateQueries({ queryKey: family });
+    // sk-763 — `accessPurge`: a reading hold never keeps a shown task list
+    // off this re-read; data the reader may have lost is not held for a
+    // stable screen.
+    void target.invalidateQueries({ queryKey: family, accessPurge: true });
   }
 }
 

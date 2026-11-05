@@ -1,4 +1,4 @@
-import { useMemo, useState, type ClipboardEvent, type Ref } from 'react';
+import { useMemo, useState, type ClipboardEvent, type ReactNode, type Ref } from 'react';
 import { Loader, Select, TextInput } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -354,6 +354,13 @@ export interface TaskFiltersProps {
   filtersLayout: FiltersLayout;
   /** sk-285.7 T025 — pick the panel's layout. */
   onFiltersLayoutChange: (v: FiltersLayout) => void;
+  /**
+   * sk-763 — an action kept in the head row beside the filters toggle. The
+   * Tasks column puts «Updates available» here on a phone, where its own
+   * header is folded away; the row is there in every state, so the action
+   * takes room in it rather than adding a row.
+   */
+  headAction?: ReactNode;
 }
 
 /**
@@ -1561,6 +1568,7 @@ export function TaskFilters({
   onToggleCollapsed,
   filtersLayout,
   onFiltersLayoutChange,
+  headAction,
 }: TaskFiltersProps) {
   const { t } = useTranslation('filters');
   // Option lists are rebuilt when the language changes — `t` is a fresh
@@ -1777,6 +1785,7 @@ export function TaskFilters({
             aria-hidden
           />
         </button>
+        {headAction}
       </div>
 
       {/* The dropdown grid. Kept in the tree (so `aria-controls` always

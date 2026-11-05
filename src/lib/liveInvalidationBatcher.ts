@@ -111,6 +111,31 @@ export const LIVE_INVALIDATION_WINDOW_MS = 1500;
  */
 export interface LiveInvalidateFilters extends InvalidateQueryFilters {
   firstPageOnly?: boolean;
+  /**
+   * sk-763 — the reset purges data of a lost space or project
+   * (`accessLoss.ts#resetAfterAccessLoss`). A reading hold
+   * ({@link ReadingHold}) never applies to it: data the reader may no
+   * longer see is not kept for a stable screen.
+   */
+  accessPurge?: boolean;
+}
+
+/**
+ * sk-763 — which shown lists the background must not reset, and where their
+ * owed reset is recorded (`liveListDirty.ts`). A held query hit by a wave is
+ * neither cut to its first page nor re-read: it is marked, and the mark is
+ * released by the first read from its first page that delivers an answer
+ * started after the last held reset.
+ */
+export interface ReadingHold {
+  holds(q: Query): boolean;
+  /**
+   * Whether `q` carries a mark — also one left by a previous connection's
+   * coalescer: it is released by the first full read this one sees.
+   */
+  marked(q: Query): boolean;
+  mark(q: Query): void;
+  release(q: Query): void;
 }
 
 /**
@@ -158,6 +183,8 @@ interface DueQuery {
   refetchType: RefetchType;
   /** K21: before invalidating, leave only the first page. */
   firstPageOnly: boolean;
+  /** sk-763: an access purge — never held. */
+  accessPurge: boolean;
 }
 
 /** Data of a TanStack infinite query: pages and their parameters. */
@@ -194,6 +221,7 @@ export function createLiveInvalidationBatcher(
   qc: QueryClient,
   windowMs: number = LIVE_INVALIDATION_WINDOW_MS,
   isHidden: () => boolean = documentHidden,
+  hold?: ReadingHold,
 ): LiveInvalidationBatcher {
   const cache = qc.getQueryCache();
 
@@ -213,12 +241,50 @@ export function createLiveInvalidationBatcher(
   // action of the read itself. `setQueryData` dispatches the same `success`, but with
   // `manual: true`; that is not a server response to a read and does not count as delivery.
   const deliveredSeq = new WeakMap<Query, number>();
+  // sk-763 — the number of the LATEST reset a reading hold kept off a query.
+  const heldSeq = new WeakMap<Query, number>();
+  // sk-763 — whether the read attempt running now (or last) is a full read
+  // from the first page (`true`) or a read of the next page (`false`).
+  const fullAttempt = new WeakMap<Query, boolean>();
   const unsubscribe = cache.subscribe((e) => {
+    if (e.type === 'removed') {
+      heldSeq.delete(e.query);
+      if (hold?.marked(e.query)) hold.release(e.query);
+      return;
+    }
     if (e.type !== 'updated') return;
     if (e.action.type === 'fetch') {
-      fetchStartedSeq.set(e.query, ++seq);
+      // sk-763 — a read of the NEXT page (`fetchNextPage`, meta `fetchMore`)
+      // re-reads none of the loaded pages: it delivers no change an event
+      // made to them, so it neither covers an event nor releases a hold.
+      // Which kind the running attempt is is kept with it: the success
+      // that ends it is credited to a full read only if it was one.
+      const meta = e.action.meta as { fetchMore?: unknown } | undefined;
+      const full = meta?.fetchMore === undefined;
+      fullAttempt.set(e.query, full);
+      if (full) fetchStartedSeq.set(e.query, ++seq);
     } else if (e.action.type === 'success' && e.action.manual !== true) {
-      deliveredSeq.set(e.query, fetchStartedSeq.get(e.query) ?? 0);
+      // The attempt that ended was a next-page read (or none of ours): the
+      // loaded pages were not read again, nothing is delivered.
+      if (fullAttempt.get(e.query) !== true) return;
+      fullAttempt.delete(e.query);
+      const delivered = fetchStartedSeq.get(e.query) ?? 0;
+      deliveredSeq.set(e.query, delivered);
+      // A mark this coalescer did not set predates it: any full read it saw
+      // start (numbers from 1) started after the mark.
+      const held = heldSeq.get(e.query) ?? (hold?.marked(e.query) ? 0 : undefined);
+      if (held !== undefined && delivered > held) {
+        heldSeq.delete(e.query);
+        hold?.release(e.query);
+      }
+    } else if (e.action.type === 'error') {
+      // A failed attempt delivers nothing; a later success belongs to a
+      // later attempt, which records its own kind.
+      fullAttempt.delete(e.query);
+    } else if (e.action.type === 'setState' && e.query.state.data === undefined) {
+      // `Query#reset` (access purge, sign-out): nothing shown is held any more.
+      heldSeq.delete(e.query);
+      if (hold?.marked(e.query)) hold.release(e.query);
     }
   });
 
@@ -275,6 +341,7 @@ export function createLiveInvalidationBatcher(
             seq: Math.max(prev.seq, d.seq),
             refetchType: mergeRefetchType(prev.refetchType, d.refetchType),
             firstPageOnly: prev.firstPageOnly || d.firstPageOnly,
+            accessPurge: prev.accessPurge || d.accessPurge,
           }
           : d,
       );
@@ -294,8 +361,9 @@ export function createLiveInvalidationBatcher(
     for (const p of pending) {
       const refetchType = p.filters.refetchType ?? 'active';
       const firstPageOnly = p.filters.firstPageOnly === true;
+      const accessPurge = p.filters.accessPurge === true;
       for (const q of cache.findAll(p.filters)) {
-        addDue(q, { seq: p.seq, refetchType, firstPageOnly });
+        addDue(q, { seq: p.seq, refetchType, firstPageOnly, accessPurge });
       }
     }
     pending = [];
@@ -315,6 +383,7 @@ export function createLiveInvalidationBatcher(
               seq: Math.max(prev.seq, d.seq),
               refetchType: mergeRefetchType(prev.refetchType, d.refetchType),
               firstPageOnly: prev.firstPageOnly || d.firstPageOnly,
+              accessPurge: prev.accessPurge || d.accessPurge,
             }
             : d,
         );
@@ -342,6 +411,13 @@ export function createLiveInvalidationBatcher(
         // its success clear the mark and swallow the event; started AFTER — it
         // may still fail. In both cases we wait for its end.
         carried.set(q, d);
+        continue;
+      }
+      if (hold !== undefined && !d.accessPurge && hold.holds(q)) {
+        // sk-763 — a list being read: no cut, no re-read. The reset is owed
+        // and shown as such until the reader applies it (`liveListDirty.ts`).
+        heldSeq.set(q, Math.max(heldSeq.get(q) ?? 0, d.seq));
+        hold.mark(q);
         continue;
       }
       if (d.firstPageOnly) keepFirstPage(q);

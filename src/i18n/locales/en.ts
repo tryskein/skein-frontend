@@ -732,6 +732,14 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
       '{{total}} tasks total, {{collapsed}} hidden under collapsed rows',
     collapsedTooltip:
       '{{total}} total · {{collapsed}} hidden under collapsed rows — expand rows to see all',
+    // sk-763 — the loaded list is kept while it is read; what the client
+    // could not apply in place waits behind this button.
+    updatesAvailable: 'Updates available',
+    updatesTooltip:
+      'The list changed since it was loaded. Show the fresh list from the top; until then some rows and counts may be out of date.',
+    updatesApplying: 'Updating…',
+    updatesFailed: 'Update failed — retry',
+    updatesApplied: 'The list is updated',
     loadedSoFarTooltip:
       'Rows loaded so far. Hybrid search has no exact match count — scroll to load more.',
     loading: 'Loading tasks…',

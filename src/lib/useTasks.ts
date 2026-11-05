@@ -101,7 +101,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { hashKey, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { mayContinue, useContinuationClosed } from './liveListDirty';
 import { ApiError } from '../api/client';
 import {
   listAllIssues,
@@ -311,8 +312,13 @@ export interface UseTasksResult {
   hasNextPage: boolean;
   /** True while a `fetchNextPage()` is in flight. */
   isFetchingNextPage: boolean;
-  /** Kick the next-page fetch; no-op when `hasNextPage` is false. */
-  fetchNextPage: () => void;
+  /**
+   * Kick the next-page fetch; no-op when `hasNextPage` is false. sk-763 —
+   * also a no-op while the reader's apply of updates reads the first page,
+   * and, after it, until the reader moves in the list; `explicit` (a
+   * «Load more» press) is the reader's request and opens the way.
+   */
+  fetchNextPage: (opts?: { explicit?: boolean }) => void;
   isLoading: boolean;
   error: unknown;
   emptyReason: TasksEmptyReason;
@@ -937,6 +943,10 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
     }
   }, [cursorRecoveryScope]);
 
+  // sk-763 — re-render when the way to the next page opens or closes, so a
+  // sentinel still in view asks again once the reader moved.
+  useContinuationClosed(cacheKey);
+
   const query = useInfiniteQuery<TasksPage>({
     queryKey: cacheKey,
     enabled,
@@ -1132,6 +1142,12 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
     // 30s — same cadence as the inbox query (R3.2d), invalidated on
     // every issue.* event by liveEventInvalidation.
     staleTime: 30_000,
+    // sk-763 — no re-read of its own when the browser comes back online:
+    // TanStack would read every loaded page again, under the reader, past
+    // the live layer's reading hold (`liveListDirty.ts`). The live
+    // connection's own return re-reads through that layer (`resync`,
+    // `useLiveEvents.tsx`).
+    refetchOnReconnect: false,
   });
 
   // Flatten pages into a single item list — same pattern as
@@ -1140,8 +1156,30 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   const flatItems = useMemo<IssueSummary[]>(() => {
     if (!query.data) return [];
     const out: IssueSummary[] = [];
+    // sk-763 — one row per issue. A list being read keeps its loaded pages
+    // through background changes (`liveListDirty.ts`); its keyset
+    // continuation answers rows after the last loaded one and cannot repeat
+    // them for the server's orders, so this is a guard: a repeated id would
+    // give the tree two rows of one issue and a selection that jumps
+    // between them. The row keeps the place of its first copy; its content
+    // is the copy with the greatest per-issue order (`rowSeq`) — a later
+    // page may carry a fresher row. A known order beats an unknown one;
+    // copies of equal or unknown order keep the first one.
+    const at = new Map<string, number>();
     for (const page of query.data.pages) {
-      for (const it of page.items) out.push(it);
+      for (const it of page.items) {
+        const i = at.get(it.id);
+        if (i === undefined) {
+          at.set(it.id, out.length);
+          out.push(it);
+          continue;
+        }
+        // The norm of `liveRowPatch.ts#shownRowSeq`: 0 or none is «order
+        // unknown», and a known (positive) order is fresher than it.
+        const kept = typeof out[i].rowSeq === 'number' ? out[i].rowSeq as number : 0;
+        const next = typeof it.rowSeq === 'number' ? it.rowSeq : 0;
+        if (next > 0 && next > kept) out[i] = it;
+      }
     }
     return out;
   }, [query.data]);
@@ -1449,7 +1487,11 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
     total: projectNotFound || spaceNotFound ? 0 : total,
     hasNextPage: query.hasNextPage ?? false,
     isFetchingNextPage: query.isFetchingNextPage,
-    fetchNextPage: () => {
+    fetchNextPage: (opts?: { explicit?: boolean }) => {
+      // sk-763 — the apply of a held list reads its first page: a next page
+      // started now would cancel that read (TanStack's `cancelRefetch`), and
+      // after it the fresh page waits for the reader (`liveListDirty.ts`).
+      if (!mayContinue(queryClient.getQueryCache().get(hashKey(cacheKey)), opts?.explicit === true)) return;
       // useInfiniteQuery's fetchNextPage returns a promise; we don't
       // need to await it from callers (the IntersectionObserver
       // doesn't care when it lands, only that it was kicked off).
