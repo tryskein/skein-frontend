@@ -52,7 +52,7 @@ import {
   setProjectVisibility,
   type E2eUser,
 } from './support/liveApi';
-import { framesNaming, hubAnswered, issueEvents, recordReceivedFrames } from './support/frames';
+import { framesNaming, hubAnswered, hubReady, issueEvents, probeHubReadiness, recordReceivedFrames } from './support/frames';
 
 /** Live event: fractions of a second; 15 s is the cold-stack margin, not polling. */
 const LIVE_UPDATE_TIMEOUT_MS = 15_000;
@@ -64,18 +64,35 @@ const AFTER_BARRIER_MS = 3_000;
 
 test.use({ viewport: { width: 1600, height: 1000 } });
 
-/** A page of `user`, in a browser context of its own (own cookie, own hub connection). */
-async function openAsUser(browser: Browser, user: E2eUser, path: string): Promise<Page> {
+/**
+ * Open `path` in `page` and wait until its hub connection would deliver a
+ * personal signal live (see `hubReady`). Returns the recorded frames.
+ */
+async function openReady(page: Page, path: string): Promise<string[]> {
+  const frames = recordReceivedFrames(page);
+  await probeHubReadiness(page);
+  await page.goto(path);
+  await expect
+    .poll(() => hubReady(frames), { message: 'precondition: the tab is connected to the hub', timeout: LIVE_UPDATE_TIMEOUT_MS })
+    .toBe(true);
+  return frames;
+}
+
+/**
+ * A page of `user`, in a browser context of its own (own cookie, own hub
+ * connection), ready for personal signals. A new user has no project, so
+ * the tab may have nothing to declare: readiness is the probe's, not a
+ * declaration's.
+ */
+async function openAsUser(browser: Browser, user: E2eUser, path: string): Promise<{ page: Page; frames: string[] }> {
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   await loginAs(context.request, user);
   const page = await context.newPage();
-  const frames = recordReceivedFrames(page);
-  await page.goto(path);
-  await waitForHub(frames);
-  return page;
+  const frames = await openReady(page, path);
+  return { page, frames };
 }
 
-/** Wait until the hub has answered the tab's subscription (see `hubAnswered`). */
+/** Wait until the hub has answered the tab's own declaration (see `hubAnswered`). */
 async function waitForHub(frames: string[]): Promise<void> {
   await expect
     .poll(() => hubAnswered(frames), { message: 'precondition: the tab is subscribed on the hub', timeout: LIVE_UPDATE_TIMEOUT_MS })
@@ -110,7 +127,7 @@ test('255: an invitation reaches the addressee’s open tab — card and Inbox b
   const user = await createUser(api, tag);
   const space = await createSpace(api, `Acme ${tag}`);
 
-  const tab = await openAsUser(browser, user, '/');
+  const { page: tab } = await openAsUser(browser, user, '/');
   const badge = tab.getByRole('link', { name: /^Inbox \d+$/ }).first();
   await expect(badge, 'precondition: the Inbox badge is shown').toBeVisible();
   const before = await inboxCount(tab);
@@ -142,13 +159,13 @@ test('256: accepted in the addressee’s tab — the owner’s open settings sho
 
   // Tab A: the owner (the stack admin, who created the space) on its settings.
   const owner = await context.newPage();
-  await owner.goto(`/settings/spaces/${space.id}`);
+  await openReady(owner, `/settings/spaces/${space.id}`);
   await expect(owner.getByText('Members (1)', { exact: true }), 'precondition: the owner alone').toBeVisible();
   await expect(owner.getByRole('cell', { name: user.username, exact: true })).toHaveCount(0);
   const ownerLoads = countLoads(owner);
 
   // Tab B: the addressee accepts from the card.
-  const tab = await openAsUser(browser, user, '/');
+  const { page: tab } = await openAsUser(browser, user, '/');
   const accept = tab.getByRole('button', { name: `Accept the invitation to ${space.name}` });
   await expect(accept, 'precondition: the card is there').toHaveCount(1, { timeout: LIVE_UPDATE_TIMEOUT_MS });
   await accept.click();
@@ -234,7 +251,9 @@ test('258: a project switched space → members — a tab on its issue leaves wi
   const project = await createProject(api, `${tag}a`, { spaceId: space.id, visibility: 'space' });
   const issue = await createIssue(api, project.id, { title: `Members only soon ${tag}`, type: 'task' });
 
-  const onIssue = await openAsUser(browser, user, `/projects/${project.idPrefix}/issues/${issue.id}`);
+  const { page: onIssue, frames } = await openAsUser(browser, user, `/projects/${project.idPrefix}/issues/${issue.id}`);
+  // The tab declares the issue's project: wait for that answer too.
+  await waitForHub(frames);
   await expect(onIssue.getByText(issue.title).first(), 'precondition: the issue is open').toBeVisible();
   const spacePage = await onIssue.context().newPage();
   const spacePath = `/spaces/${space.id}-${space.slug}`;
