@@ -66,11 +66,13 @@ export function splitCommentsByFilter(
   comments: CommentDTO[] | undefined,
   showHumans: boolean,
   showAgents: boolean,
+  onlyApi = false,
 ): {
   all: CommentDTO[];
   visible: CommentDTO[];
   humansCount: number;
   agentsCount: number;
+  apiCount: number;
   hiddenHumans: number;
   hiddenAgents: number;
 } {
@@ -78,14 +80,21 @@ export function splitCommentsByFilter(
   const isAutonomous = (c: CommentDTO) => c.authorKind === 'agent_autonomous';
   const humansCount = all.filter((c) => !isAutonomous(c)).length;
   const agentsCount = all.length - humansCount;
-  const visible = all.filter((c) => (isAutonomous(c) ? showAgents : showHumans));
+  const apiCount = all.filter((c) => c.authorKind === 'api').length;
+  // sk-878.3.1 — the exact «API» choice narrows within the two chips: only
+  // comments written with an API key stay (they belong to Humans).
+  const visible = all.filter(
+    (c) => (isAutonomous(c) ? showAgents : showHumans) && (!onlyApi || c.authorKind === 'api'),
+  );
+  const visibleAgents = visible.filter(isAutonomous).length;
   return {
     all,
     visible,
     humansCount,
     agentsCount,
-    hiddenHumans: showHumans ? 0 : humansCount,
-    hiddenAgents: showAgents ? 0 : agentsCount,
+    apiCount,
+    hiddenHumans: humansCount - (visible.length - visibleAgents),
+    hiddenAgents: agentsCount - visibleAgents,
   };
 }
 
@@ -123,6 +132,8 @@ export interface CommentsThreadProps {
   showHumans?: boolean;
   /** Show agent_autonomous comments. Default true. */
   showAgents?: boolean;
+  /** sk-878.3.1 — show only comments written with an API key (`api`). Default false. */
+  onlyApi?: boolean;
   /** Turn every chip back on. Supplied by the surface that owns them. */
   onResetFilter?: () => void;
 }
@@ -133,6 +144,7 @@ export function CommentsThread({
   disabled,
   showHumans = true,
   showAgents = true,
+  onlyApi = false,
   onResetFilter,
 }: CommentsThreadProps) {
   const { t } = useTranslation('comments');
@@ -196,7 +208,7 @@ export function CommentsThread({
   };
 
   const { all: allComments, visible: visibleComments, hiddenAgents, hiddenHumans } =
-    splitCommentsByFilter(commentsQuery.data, showHumans, showAgents);
+    splitCommentsByFilter(commentsQuery.data, showHumans, showAgents, onlyApi);
   const hidden = hiddenAgents + hiddenHumans;
 
   // The post is in flight: the row is on screen before the server has
@@ -294,16 +306,17 @@ export function CommentsThread({
         <Box mt="sm">
           <div className="comment-hidden-note">
             <IconFilter size={16} stroke={1.75} aria-hidden />
-            {/* Exactly one of the two is non-zero here, and that is not
-                luck: closing BOTH chips leaves nothing visible, which
-                is the plaque's case rather than this strip's. So the
-                pair is a total choice and needs no neutral third
-                phrasing — which would have been dead code carrying a
-                dead pair of dictionary entries. */}
+            {/* Without the API choice exactly one of the two is non-zero
+                here, and that is not luck: closing BOTH chips leaves
+                nothing visible, which is the plaque's case rather than
+                this strip's. The API choice can hide from both groups at
+                once, so it names its own reason with the whole count. */}
             <span>
-              {hiddenAgents > 0
-                ? t('hiddenByFilter', { count: hiddenAgents })
-                : t('hiddenByFilterHumans', { count: hiddenHumans })}
+              {onlyApi
+                ? t('hiddenByFilterApi', { count: hidden })
+                : hiddenAgents > 0
+                  ? t('hiddenByFilter', { count: hiddenAgents })
+                  : t('hiddenByFilterHumans', { count: hiddenHumans })}
             </span>
             {onResetFilter ? (
               <button type="button" className="comment-hidden-show" onClick={onResetFilter}>

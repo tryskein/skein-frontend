@@ -1294,6 +1294,10 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
       'Agents{{suffix}} — agent-autonomous notes (handoff, progress, side-quests)',
     agentsTitle:
       'Show comments posted autonomously by agents (handoff notes, progress, side-quests)',
+    // sk-878.3.1 — the exact author kind `api`: on, only those comments stay.
+    api: 'API',
+    apiAria: 'API{{suffix}} — only comments written with an API key',
+    apiTitle: 'Show only comments written with an API key through the public API',
     // sk-285.7.2.56 — reference `1b` heads the empty thread «Comments ·
     // none yet» and the `> ` prompt is the terminal dialect the redesign
     // removed elsewhere (`[ post ]`). This string is now the heading's
@@ -1322,6 +1326,8 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
     hiddenByFilter_other: '{{count}} agent comments hidden',
     hiddenByFilterHumans_one: '{{count}} human comment hidden',
     hiddenByFilterHumans_other: '{{count}} human comments hidden',
+    hiddenByFilterApi_one: '{{count}} comment hidden: only API comments are shown',
+    hiddenByFilterApi_other: '{{count}} comments hidden: only API comments are shown',
     showHidden: 'show',
     // Optimistic insert: the comment is on screen but not yet stored.
     sending: 'sending…',

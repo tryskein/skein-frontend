@@ -17,8 +17,8 @@ export interface CommentsSectionProps {
 /**
  * Comments section — artboard 4d.
  *
- * The heading carries the title, the count and, right-aligned, the two
- * author-kind chips; the body is `CommentsThread`. Both read the SAME
+ * The heading carries the title, the count and, right-aligned, the
+ * author-kind chips (Humans, Agents and the exact API kind); the body is `CommentsThread`. Both read the SAME
  * TanStack entry (`useIssueComments`), so the counts on the chips and
  * the rows under them cannot disagree and only one request is made.
  *
@@ -43,17 +43,22 @@ export function CommentsSection({ projectHandle, issueId, count }: CommentsSecti
   // per-screen ephemeral UI, not a global lens like `outboxMode`.
   const [showHumans, setShowHumans] = useState(true);
   const [showAgents, setShowAgents] = useState(true);
+  // sk-878.3.1 — the exact author kind `api` (written with an API key):
+  // off = no narrowing, on = only those comments.
+  const [onlyApi, setOnlyApi] = useState(false);
 
   const commentsQuery = useIssueComments(projectHandle, issueId);
-  const { all, humansCount, agentsCount } = splitCommentsByFilter(
+  const { all, humansCount, agentsCount, apiCount } = splitCommentsByFilter(
     commentsQuery.data,
     showHumans,
     showAgents,
+    onlyApi,
   );
 
   const resetFilter = () => {
     setShowHumans(true);
     setShowAgents(true);
+    setOnlyApi(false);
   };
 
   // No thread, no chips: a filter over nothing is a control that can
@@ -85,6 +90,20 @@ export function CommentsSection({ projectHandle, issueId, count }: CommentsSecti
           title={t('comments:agentsTitle')}
           onToggle={() => setShowAgents((v) => !v)}
         />
+        {/* Only where there is something to pick (the rule above, per
+            chip) — or while it is on, so it can always be turned off. */}
+        {apiCount > 0 || onlyApi ? (
+          <FilterChip
+            on={onlyApi}
+            label={t('comments:api')}
+            count={apiCount}
+            ariaLabel={t('comments:apiAria', {
+              suffix: apiCount > 0 ? ` (${apiCount})` : '',
+            })}
+            title={t('comments:apiTitle')}
+            onToggle={() => setOnlyApi((v) => !v)}
+          />
+        ) : null}
       </span>
     ) : undefined;
 
@@ -107,6 +126,7 @@ export function CommentsSection({ projectHandle, issueId, count }: CommentsSecti
         issueId={issueId}
         showHumans={showHumans}
         showAgents={showAgents}
+        onlyApi={onlyApi}
         onResetFilter={resetFilter}
       />
     </Section>
