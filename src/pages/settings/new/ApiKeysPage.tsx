@@ -86,10 +86,24 @@ const NO_LEVEL = 'none';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function formatTime(iso: string): string {
+/**
+ * A moment of the list, in the reader's local time with the zone named:
+ * the expiry is chosen as the end of a LOCAL day, so it reads back in the
+ * same clock. The machine value stays in `dateTime`.
+ */
+function LocalTime({ iso }: { iso: string }) {
+  const { i18n } = useTranslation('settings');
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return '—';
-  return d.toISOString().slice(0, 16).replace('T', ' ');
+  if (isNaN(d.getTime())) return <span>—</span>;
+  const text = new Intl.DateTimeFormat(i18n.language, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(d);
+  return <time dateTime={d.toISOString()}>{text}</time>;
 }
 
 /** `YYYY-MM-DD` of a moment in local time, the value form of `<input type="date">`. */
@@ -711,7 +725,7 @@ function ExpiryCell({ k, now }: { k: ApiKey; now: number }) {
   const at = new Date(k.expiresAt);
   return (
     <Stack gap={2}>
-      <span>{formatTime(k.expiresAt)}</span>
+      <LocalTime iso={k.expiresAt} />
       <Text size="xs" c="dimmed">
         {relativeFromNow(at, now, i18n.language)}
       </Text>
@@ -1104,11 +1118,13 @@ export function NewApiKeysPage() {
                     <Table.Td>
                       <code style={{ color: 'var(--ink-2)' }}>{k.prefix}…</code>
                     </Table.Td>
-                    <Table.Td>{formatTime(k.createdAt)}</Table.Td>
+                    <Table.Td>
+                      <LocalTime iso={k.createdAt} />
+                    </Table.Td>
                     <Table.Td>
                       <ExpiryCell k={k} now={now} />
                     </Table.Td>
-                    <Table.Td>{k.lastUsedAt ? formatTime(k.lastUsedAt) : '—'}</Table.Td>
+                    <Table.Td>{k.lastUsedAt ? <LocalTime iso={k.lastUsedAt} /> : '—'}</Table.Td>
                     <Table.Td>
                       <StatusCell k={k} />
                     </Table.Td>

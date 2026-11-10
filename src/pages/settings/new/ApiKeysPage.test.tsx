@@ -348,15 +348,20 @@ describe('US-10 — creating a key', () => {
 });
 
 describe('US-10 — the list', () => {
-  it('the expiry is a date and the time left', async () => {
+  it('the expiry is a date in local time and the time left', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2030-01-03T10:00:00Z'));
     api.listApiKeys.mockResolvedValue([key({ expiresAt: '2030-01-15T10:00:00Z' })]);
     renderPage();
     const cell = cellOf(await rowOf('ci-runner'), tk('list.colExpires'));
-    const text = cell.textContent ?? '';
-    expect(text).toContain('2030-01-15 10:00');
-    expect(text.replace('2030-01-15 10:00', '')).toMatch(/\b12\b/);
+    // The date: the same moment, read in the reader's own clock.
+    const moment = within(cell).getByText((_, el) => el?.tagName === 'TIME');
+    expect(moment.getAttribute('datetime')).toBe('2030-01-15T10:00:00.000Z');
+    const local = new Date('2030-01-15T10:00:00Z');
+    expect(moment.textContent).toContain(String(local.getFullYear()));
+    expect(moment.textContent).toContain(String(local.getDate()).padStart(2, '0'));
+    // The time left, beside it: 12 days (15.01 − 03.01).
+    expect((cell.textContent ?? '').replace(moment.textContent ?? '', '')).toMatch(/\b12\b/);
   });
 
   it('an inactive key shows why: revoked or expired', async () => {
