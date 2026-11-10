@@ -754,7 +754,19 @@ function PublicApiBlock({ settings }: { settings: ReturnType<typeof useQuery<Api
   if (settings.isError || !settings.data) {
     return (
       <Alert variant="light" style={ERR_ALERT_VARS} title={t('keys.publicApi.failedTitle')}>
-        {t('keys.publicApi.failed')}
+        <Stack gap="xs" align="flex-start">
+          <span>{t('keys.publicApi.failed')}</span>
+          <Button
+            variant="default"
+            size="compact-xs"
+            loading={settings.isFetching}
+            onClick={() => {
+              void settings.refetch();
+            }}
+          >
+            {t('keys.publicApi.retry')}
+          </Button>
+        </Stack>
       </Alert>
     );
   }

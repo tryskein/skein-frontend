@@ -475,6 +475,19 @@ describe('US-10 — narrowing, reissue, revoke', () => {
 });
 
 describe('US-10 — the public API address block', () => {
+  it('the settings failed to load: a retry loads them without a page reload, and creating a key opens', async () => {
+    api.getApiKeysSettings.mockRejectedValueOnce(new ApiError(503, 'down', 'database_unavailable'));
+    renderPage();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain(tk('publicApi.failedTitle'));
+    const newKey = screen.getByRole('button', { name: tk('list.newKey') }) as HTMLButtonElement;
+    expect(newKey.disabled).toBe(true);
+    fireEvent.click(within(alert).getByRole('button', { name: tk('publicApi.retry') }));
+    await screen.findByRole('link', { name: tk('publicApi.openApi') });
+    await waitFor(() => expect(newKey.disabled).toBe(false));
+    expect(api.getApiKeysSettings).toHaveBeenCalledTimes(2);
+  });
+
   it('turned off: says the public API is off, no link', async () => {
     api.getApiKeysSettings.mockResolvedValue({ ...SETTINGS, publicApiEnabled: false, publicApiUrl: null, openApiUrl: null });
     renderPage();
