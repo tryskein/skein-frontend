@@ -992,6 +992,7 @@ interface ThroughputMatrixProps {
 }
 
 function ThroughputMatrix({ scoring }: ThroughputMatrixProps) {
+  const { t: tDash } = useTranslation('dashboard');
   const metrics = scoring?.metrics ?? [];
   if (metrics.length === 0) {
     return <p className="activity-empty">no metrics in this window</p>;
@@ -1017,7 +1018,7 @@ function ThroughputMatrix({ scoring }: ThroughputMatrixProps) {
             human
           </th>
           <th scope="col" className="axis-d">
-            agent_directed · API
+            agent_directed · {tDash('axis.api')}
           </th>
           <th scope="col" className="axis-a">
             autonomous
@@ -2476,11 +2477,12 @@ export function ActivityDashboard() {
  * directed one, so the `d` axis is labelled with API too.
  */
 function AxisLegend() {
+  const { t } = useTranslation('dashboard');
   return (
     <aside className="activity-axis-legend" aria-label="Axis legend">
       <strong>h</strong> = human (via Web UI)
       <span className="activity-axis-sep">·</span>
-      <strong>d</strong> = agent_directed (agent directed by a human) and API (written with an API key)
+      <strong>d</strong> = agent_directed (agent directed by a human) {t('axis.apiLegend')}
       <span className="activity-axis-sep">·</span>
       <strong>a</strong> = agent_autonomous (agent on its own — handoff, side-quest, progress)
     </aside>

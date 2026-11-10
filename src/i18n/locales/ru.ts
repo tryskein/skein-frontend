@@ -2316,6 +2316,14 @@ collapsedChip: '{{total}} · {{collapsed}} свёрнуто',
     spaceProject: '{{space}} · {{project}}',
   },
 
+  // sk-878.3.1 — дашборд активности: запись с API-ключом считается на оси
+  // «агент по поручению», и ось об этом говорит.
+  dashboard: {
+    axis: {
+      api: 'API',
+      apiLegend: 'и API (записано с API-ключом)',
+    },
+  },
   ticker: {
     title: 'Живая лента',
     tableAria: 'Живая лента событий — свежие сверху',

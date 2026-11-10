@@ -2469,6 +2469,14 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
     spaceProject: '{{space}} · {{project}}',
   },
 
+  // sk-878.3.1 — the activity dashboard: a write with an API key counts on
+  // the agent-on-request axis, which says so.
+  dashboard: {
+    axis: {
+      api: 'API',
+      apiLegend: 'and API (written with an API key)',
+    },
+  },
   ticker: {
     title: 'Live ticker',
     tableAria: 'Live activity ticker — newest first',
