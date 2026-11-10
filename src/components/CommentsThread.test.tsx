@@ -634,3 +634,59 @@ describe('sk-414.5 / sk-416 — the posted comment is never on screen twice', ()
     expect(screen.getAllByText('saved for real').length).toBe(1);
   });
 });
+
+// sk-878.3.1 — «Data: the people group» in the comment thread. A comment
+// written with an API key (`author_kind = api`) belongs to the Humans chip
+// with human and agent_directed, and is told apart by its own «API» mark
+// (INV-4: the owner's label for the value), not by the autonomous one.
+describe('sk-878.3.1 — an api comment is in the Humans group and marked API', () => {
+  function withApi(): CommentDTO[] {
+    return [
+      makeComment({ id: 'c-api', body: 'integration note', authorType: 'agent', authorKind: 'api', author: 'ci-bot' }),
+      makeComment({
+        id: 'c-autonomous',
+        body: 'autonomous agent note',
+        authorType: 'agent',
+        authorKind: 'agent_autonomous',
+        author: 'agent-bob',
+      }),
+    ];
+  }
+
+  test('the api comment carries the API mark, not the autonomous one', async () => {
+    mockedList.mockResolvedValueOnce(withApi());
+    render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('integration note'));
+    expect(screen.getAllByRole('img', { name: /^comment kind: API — / })).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: /^comment kind: autonomous — / })).toHaveLength(1);
+  });
+
+  test('Agents closed keeps the api comment', async () => {
+    mockedList.mockResolvedValueOnce(withApi());
+    render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} showAgents={false} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('integration note'));
+    expect(screen.queryByText('autonomous agent note')).toBeNull();
+  });
+
+  test('Humans closed hides the api comment and counts it as a human one', async () => {
+    mockedList.mockResolvedValueOnce(withApi());
+    const { container } = render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} showHumans={false} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('autonomous agent note'));
+    expect(screen.queryByText('integration note')).toBeNull();
+    const strip = container.querySelector('.comment-hidden-note');
+    expect(strip).not.toBeNull();
+    expect(strip!.textContent).toContain('1 human comment hidden');
+  });
+});

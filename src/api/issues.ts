@@ -76,6 +76,14 @@ export type StatusFilter =
 export type OriginFilter = 'human-driven' | 'agent-autonomous' | 'all';
 
 /**
+ * sk-878.3.1 — the origin choice of the Tasks column: the wire groups of
+ * `OriginFilter` plus the exact source `api` (written with an API key). The
+ * groups travel as `origin=`, `api` as `source=api` with no group; the
+ * human-driven group itself includes `api` on the server.
+ */
+export type TaskOriginFilter = OriginFilter | 'api';
+
+/**
  * Phase 2 ui-redesign — type filter row in the Tasks column. `'all'`
  * means "no filter". Backend's ListIssues has no `Types` field yet —
  * useTasks post-filters on the wire response by `item.type`. Works
@@ -1094,6 +1102,11 @@ export interface ListMineParams {
    */
   origin?: 'human-driven' | 'agent-autonomous' | 'all';
   /**
+   * sk-878.3.1 — exact issue source, the server's closed set; maps to
+   * `?source=`. Intersects with `origin` when both are set.
+   */
+  source?: IssueSource;
+  /**
    * sk-31. Derived blocked-ness filter; same semantics as the project-
    * scoped path. Maps to `?isBlocked=true|false` on the wire.
    */
@@ -1130,6 +1143,7 @@ function buildMineQuery(params: ListMineParams): string {
   if (params.createdBy) sp.set('createdBy', params.createdBy);
   if (params.status) sp.set('status', params.status);
   if (params.origin && params.origin !== 'all') sp.set('origin', params.origin);
+  if (params.source) sp.set('source', params.source);
   if (params.isBlocked !== undefined) sp.set('isBlocked', String(params.isBlocked));
   // sk-303.14 — literal "true" only; absence is the "no selection" value.
   if (params.unreviewed) sp.set('unreviewed', 'true');
@@ -1190,6 +1204,11 @@ export interface ListAllIssuesParams {
    * we keep the literal here so the UI has one source of truth.
    */
   origin?: OriginFilter;
+  /**
+   * sk-878.3.1 — exact issue source, the server's closed set; maps to
+   * `?source=`. Intersects with `origin` when both are set.
+   */
+  source?: IssueSource;
   /** `'me'` resolves to the caller; any other value is a free-form username. */
   assignee?: 'me' | string;
   /**
@@ -1228,6 +1247,7 @@ function buildAllIssuesQuery(params: ListAllIssuesParams): string {
   if (params.status) sp.set('status', params.status);
   if (params.type) sp.set('type', params.type);
   if (params.origin && params.origin !== 'all') sp.set('origin', params.origin);
+  if (params.source) sp.set('source', params.source);
   if (params.assignee) sp.set('assignee', params.assignee);
   if (params.createdBy) sp.set('createdBy', params.createdBy);
   if (params.acceptedAtNull) sp.set('acceptedAt', 'null');

@@ -14,7 +14,7 @@ import {
   IconX,
 } from '@tabler/icons-react';
 import type {
-  OriginFilter,
+  TaskOriginFilter,
   PriorityFilter,
   StatusFilter,
   TasksSortKey,
@@ -166,8 +166,8 @@ export interface TaskFiltersProps {
    * status chips, and picking any of them drops it.
    */
   showUnreviewedChip?: boolean;
-  originFilter: OriginFilter;
-  onOriginChange: (v: OriginFilter) => void;
+  originFilter: TaskOriginFilter;
+  onOriginChange: (v: TaskOriginFilter) => void;
   typeFilter: TypeFilter;
   onTypeChange: (v: TypeFilter) => void;
   /**
@@ -372,7 +372,7 @@ export interface ActiveFilterCountInput {
   statusFilter: StatusFilter;
   priorityFilter: PriorityFilter;
   typeFilter: TypeFilter;
-  originFilter: OriginFilter;
+  originFilter: TaskOriginFilter;
   assigneeFilter: string | null;
   /**
    * sk-285.2.6 — how many projects the board's focus is narrowing to
@@ -504,7 +504,7 @@ function priorityOptions(t: TFunction): ReadonlyArray<FilterOption<PriorityFilte
   ];
 }
 
-function originOptions(t: TFunction): ReadonlyArray<FilterOption<OriginFilter>> {
+function originOptions(t: TFunction): ReadonlyArray<FilterOption<TaskOriginFilter>> {
   return [
     { value: 'all', label: t('origin.all'), description: t('origin.allTitle') },
     {
@@ -516,6 +516,13 @@ function originOptions(t: TFunction): ReadonlyArray<FilterOption<OriginFilter>> 
       value: 'agent-autonomous',
       label: t('origin.agent'),
       description: t('origin.agentTitle'),
+    },
+    // sk-878.3.1 — the exact source of a write with an API key; it is also
+    // part of «From a human» (the human-driven group).
+    {
+      value: 'api',
+      label: t('origin.api'),
+      description: t('origin.apiTitle'),
     },
   ];
 }

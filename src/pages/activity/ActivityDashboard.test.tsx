@@ -1967,6 +1967,30 @@ describe('ActivityDashboard — live declaration', () => {
   });
 });
 
+// sk-878.3.1 — «Activity dashboard»: a write with an API key (`api`) is
+// counted by skein-api on the agent-on-request axis, which therefore carries
+// the owner's «API» label next to its name — in the throughput matrix header
+// and in the axis legend.
+describe('ActivityDashboard — sk-878.3.1 the directed axis is labelled API', () => {
+  test('the directed column and the legend name API', async () => {
+    mockedScoring.mockResolvedValue(scoring());
+    mockedFeed.mockResolvedValue(feedSample());
+    render(
+      <Wrap>
+        <ActivityDashboard />
+      </Wrap>,
+    );
+    const matrix = await screen.findByRole('table', { name: 'Throughput matrix' });
+    const directed = within(matrix).getByRole('columnheader', { name: /^agent_directed/ });
+    expect(directed.textContent).toMatch(/\bAPI\b/);
+    const legends = screen.getAllByRole('complementary', { name: 'Axis legend' });
+    expect(legends.length).toBeGreaterThan(0);
+    for (const legend of legends) {
+      expect(legend.textContent).toMatch(/agent_directed[^·]*\bAPI\b/);
+    }
+  });
+});
+
 // ───────────────────────── sk-674.18 T056 — the space choice ─────────────────────────
 //
 // Row 248 of the matrix (US-13, SC-014, screens 1.12): "All my

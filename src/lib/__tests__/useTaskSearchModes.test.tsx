@@ -22,7 +22,7 @@ import {
   type UseTaskSearchModesResult,
 } from '../useTaskSearchModes';
 import type {
-  OriginFilter,
+  TaskOriginFilter,
   PriorityFilter,
   StatusFilter,
   TasksSortKey,
@@ -32,7 +32,7 @@ import type {
 interface HostState {
   search: string;
   statusFilter: StatusFilter;
-  originFilter: OriginFilter;
+  originFilter: TaskOriginFilter;
   typeFilter: TypeFilter;
   priorityFilter: PriorityFilter;
   sort: TasksSortKey;
@@ -988,7 +988,7 @@ describe('useTaskSearchModes — sk-86 priority overlay', () => {
  * recording holds two entries; a value derived during render never does.
  * Asserting only the final value cannot tell those two apart.
  */
-let committedOrigins: OriginFilter[] = [];
+let committedOrigins: TaskOriginFilter[] = [];
 let committedStatuses: StatusFilter[] = [];
 let setLensOn: ((v: boolean) => void) | null = null;
 let setSelectOn: ((v: boolean) => void) | null = null;
@@ -1005,7 +1005,7 @@ function SelectionHost({
   lens?: boolean;
   select?: boolean;
   statusFilter?: StatusFilter;
-  originFilter?: OriginFilter;
+  originFilter?: TaskOriginFilter;
   typeFilter?: TypeFilter;
   priorityFilter?: PriorityFilter;
 }) {

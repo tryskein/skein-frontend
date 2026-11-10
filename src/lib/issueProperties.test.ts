@@ -123,6 +123,9 @@ describe('source label — closed set, unknown value is not labelled (row 35)', 
     ['human', 'человек', 'human'],
     ['agent_directed', 'агент по поручению', 'agent on request'],
     ['agent_autonomous', 'агент сам', 'agent on its own'],
+    // INV-4 (sk-878.3.1): a write with an API key is labelled "API" in both
+    // languages — the owner's decision recorded in the spec.
+    ['api', 'API', 'API'],
   ])('%s → a key labelled in ru and en', (value, ruLabel, enLabel) => {
     const key = sourceLabelKey(value);
     expect(key).not.toBeNull();

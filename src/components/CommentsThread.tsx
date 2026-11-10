@@ -44,7 +44,9 @@ export function useIssueComments(projectId: string, issueId: string) {
  * The filter, applied once and reported whole.
  *
  * sk-16 — the wire semantics from skein-api: `human-driven` = human +
- * agent_directed, `agent-autonomous` = agent_autonomous. Both chips off
+ * agent_directed + api, `agent-autonomous` = agent_autonomous. Only the
+ * autonomous kind leaves the Humans chip, so a comment written with an API
+ * key (`api`) is counted and shown there. Both chips off
  * yields an empty list on purpose — there is no implicit «show all»
  * fallback, because a filter that quietly stops filtering is worse than
  * an empty screen that says why.
@@ -117,7 +119,7 @@ export interface CommentsThreadProps {
   issueId: string;
   /** When true, hide the composer (e.g. closed issues — kept editable for now). */
   disabled?: boolean;
-  /** Show human + agent_directed comments. Default true. */
+  /** Show human, agent_directed and api comments. Default true. */
   showHumans?: boolean;
   /** Show agent_autonomous comments. Default true. */
   showAgents?: boolean;
@@ -393,9 +395,10 @@ export function CommentsThread({
 
 /**
  * sk-16 — the INTENT chip beside the author. `human` carries none (the
- * default / common case stays uncluttered); `agent_directed` and
- * `agent_autonomous` each get one, so the reader can tell an answer
- * from an agent's own note without reading the body.
+ * default / common case stays uncluttered); `agent_directed`,
+ * `agent_autonomous` and `api` (written with an API key through the
+ * public REST API) each get one, so the reader can tell an answer from an
+ * agent's own note or an integration's write without reading the body.
  *
  * Intent is not transport. The avatar and the `· agent` / `· system`
  * suffix on the timestamp say WHO wrote; this says who decided to. The
@@ -406,11 +409,17 @@ function CommentKindBadge({ kind }: { kind: CommentDTO['authorKind'] }) {
   const { t } = useTranslation('comments');
   if (kind === 'human') return null;
   const label =
-    kind === 'agent_directed' ? t('kind.directed') : t('kind.autonomous');
+    kind === 'agent_directed'
+      ? t('kind.directed')
+      : kind === 'api'
+        ? t('kind.api')
+        : t('kind.autonomous');
   const title =
     kind === 'agent_directed'
       ? t('kind.directedTitle')
-      : t('kind.autonomousTitle');
+      : kind === 'api'
+        ? t('kind.apiTitle')
+        : t('kind.autonomousTitle');
   // sk-16 review fix W6 — class-driven instead of inline-style, so the
   // theme tokens and the forced-colors repair reach it.
   //
@@ -420,7 +429,7 @@ function CommentKindBadge({ kind }: { kind: CommentDTO['authorKind'] }) {
   // name on a non-interactive span (per ARIA 1.2 Accessible Name spec).
   return (
     <span
-      className={`comment-kind-badge ${kind === 'agent_directed' ? 'directed' : 'autonomous'}`}
+      className={`comment-kind-badge ${kind === 'agent_directed' ? 'directed' : kind === 'api' ? 'api' : 'autonomous'}`}
       role="img"
       aria-label={t('kind.aria', { label, title })}
       title={title}
