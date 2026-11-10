@@ -23,6 +23,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import i18n from '../../../i18n/config';
 import type { ApiKey, ApiKeyCreateResponse, ApiKeysSettings } from '../../../api/api-keys';
+import { ApiError, BusinessError } from '../../../api/client';
 
 const api = vi.hoisted(() => ({
   listApiKeys: vi.fn(),
@@ -490,5 +491,89 @@ describe('US-10 — the public API address block', () => {
     expect(screen.getByText('https://api.example.net')).toBeTruthy();
     expect(screen.queryByText(tk('publicApi.disabledTitle'))).toBeNull();
     expect(screen.queryByText(tk('publicApi.noAddressTitle'))).toBeNull();
+  });
+});
+
+describe('US-10 — refusals are told by their machine code', () => {
+  /** The alert that carries the refusal, found by its role. */
+  async function refusalText(): Promise<string> {
+    const alert = await screen.findByRole('alert');
+    return alert.textContent ?? '';
+  }
+
+  async function submitCreate() {
+    renderPage();
+    const form = await openCreateForm();
+    typeLabel(form, 'refused');
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.create') }));
+  }
+
+  it.each([
+    'no_permission',
+    'admin_requires_scope_all',
+    'admin_not_available',
+    'invalid_scope',
+    'scope_unavailable',
+    'expiry_out_of_range',
+    'not_narrowing',
+  ])('422 invalid_grant with rule %s → the text of that rule', async (rule) => {
+    api.createApiKey.mockRejectedValue(
+      new BusinessError(422, 'server wording', 'invalid_grant', { details: { rule } }),
+    );
+    await submitCreate();
+    const text = await refusalText();
+    expect(text).toContain(tk(`errors.rule.${rule}`));
+    expect(text).not.toContain('server wording');
+  });
+
+  it('422 invalid_grant with a rule the page does not know → the server message', async () => {
+    api.createApiKey.mockRejectedValue(
+      new BusinessError(422, 'server wording', 'invalid_grant', { details: { rule: 'some_future_rule' } }),
+    );
+    await submitCreate();
+    expect(await refusalText()).toContain('server wording');
+  });
+
+  it('400 validation_error with details.staleClient → "refresh the page"', async () => {
+    api.createApiKey.mockRejectedValue(
+      new ApiError(400, 'server wording', 'validation_error', { details: { staleClient: true } }),
+    );
+    await submitCreate();
+    const text = await refusalText();
+    expect(text).toContain(tk('errors.staleClient'));
+    expect(text).not.toContain('server wording');
+  });
+
+  it('a 5xx answer → the general internal-error text, not the server message', async () => {
+    api.createApiKey.mockRejectedValue(new ApiError(500, 'stack details', 'internal_error'));
+    await submitCreate();
+    const text = await refusalText();
+    expect(text).toContain(tk('errors.internal'));
+    expect(text).not.toContain('stack details');
+  });
+
+  it('422 key_revoked on reissue → "the key is revoked"', async () => {
+    api.listApiKeys.mockResolvedValue([key()]);
+    api.reissueApiKey.mockRejectedValue(new BusinessError(422, 'server wording', 'key_revoked'));
+    renderPage();
+    const row = await rowOf('ci-runner');
+    fireEvent.click(within(row).getByRole('button', { name: tk('actions.reissueAria', { label: 'ci-runner', prefix: 'ska_AbCdEfGh' }) }));
+    const confirm = await screen.findByRole('dialog', { name: tk('actions.reissueTitle') });
+    fireEvent.click(within(confirm).getByRole('button', { name: tk('actions.reissue') }));
+    expect(await refusalText()).toContain(tk('errors.keyRevoked'));
+  });
+
+  it('422 key_expired on narrowing → "the key has expired"', async () => {
+    api.listApiKeys.mockResolvedValue([key()]);
+    api.narrowApiKey.mockRejectedValue(new BusinessError(422, 'server wording', 'key_expired'));
+    renderPage();
+    const row = await rowOf('ci-runner');
+    const narrow = within(row).getByRole('button', { name: tk('actions.narrowAria', { label: 'ci-runner', prefix: 'ska_AbCdEfGh' }) });
+    await waitFor(() => expect((narrow as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(narrow);
+    const form = await screen.findByRole('form', { name: tk('form.narrowAria') });
+    fireEvent.click(within(form).getByRole('radio', { name: tk('level.read') }));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.narrowSave') }));
+    expect(await refusalText()).toContain(tk('errors.keyExpired'));
   });
 });
