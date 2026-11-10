@@ -183,6 +183,19 @@ function cellOf(row: HTMLElement, header: string): HTMLElement {
   return within(row).getAllByRole('cell')[index];
 }
 
+/** `YYYY-MM-DD` of a moment in local time — what the date field holds. */
+function dayValue(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Pick "until a date" and type the day into the date field of a form. */
+function chooseDay(form: HTMLElement, d: Date) {
+  fireEvent.click(within(form).getByRole('radio', { name: tk('form.expiryDate') }));
+  fireEvent.change(within(form).getByLabelText(tk('form.expiryDateLabel')), { target: { value: dayValue(d) } });
+}
+
+const DAY = 86400 * 1000;
+
 beforeEach(() => {
   vi.clearAllMocks();
   who.role = 'user';
@@ -310,22 +323,32 @@ describe('US-10 — creating a key', () => {
     expect(within(form).queryByRole('checkbox', { name: new RegExp(tk('form.admin')) })).toBeNull();
   });
 
-  it('a chosen date sends an expiry on that day', async () => {
+  it('a chosen date sends an expiry at the end of that local day ("expires at the end of")', async () => {
     renderPage();
     const form = await openCreateForm();
     typeLabel(form, 'short-lived');
-    fireEvent.click(within(form).getByRole('radio', { name: tk('form.expiryDate') }));
-    const day = new Date(Date.now() + 10 * 86400 * 1000);
-    const value = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
-    fireEvent.change(within(form).getByLabelText(tk('form.expiryDateLabel')), { target: { value } });
+    const day = new Date(Date.now() + 10 * DAY);
+    chooseDay(form, day);
     fireEvent.click(within(form).getByRole('button', { name: tk('form.create') }));
 
     await waitFor(() => expect(api.createApiKey).toHaveBeenCalledTimes(1));
-    const sent = new Date(api.createApiKey.mock.calls[0][0].expiresAt);
-    expect(sent.getFullYear()).toBe(day.getFullYear());
-    expect(sent.getMonth()).toBe(day.getMonth());
-    expect(sent.getDate()).toBe(day.getDate());
-    expect(sent.getTime()).toBeGreaterThan(Date.now());
+    const end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 23, 59, 59);
+    expect(api.createApiKey.mock.calls[0][0].expiresAt).toBe(end.toISOString());
+  });
+
+  it('a day past the maximum lifetime: the key is created with the maximum, never later', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date('2030-03-01T12:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    renderPage();
+    const form = await openCreateForm();
+    typeLabel(form, 'too-long');
+    chooseDay(form, new Date(t0 + 400 * DAY));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.create') }));
+
+    await waitFor(() => expect(api.createApiKey).toHaveBeenCalledTimes(1));
+    // SETTINGS.maxTtlSeconds = 365 days from now.
+    expect(api.createApiKey.mock.calls[0][0].expiresAt).toBe(new Date(t0 + 365 * DAY).toISOString());
   });
 
   it('the secret is shown once: in the reveal dialog, and nowhere after it is dismissed', async () => {
@@ -454,6 +477,75 @@ describe('US-10 — narrowing, reissue, revoke', () => {
     expect(screen.queryByRole('form', { name: tk('form.narrowAria') })).toBeNull();
     await openNarrow('ci-runner');
     expect(screen.queryByRole('form', { name: tk('form.createAria') })).toBeNull();
+  });
+
+  it('a key with admin keeps the whole scope until admin is removed; then it narrows to projects', async () => {
+    who.role = 'admin';
+    api.listApiKeys.mockResolvedValue([key({ permissions: { level: 'write', admin: true } })]);
+    renderPage();
+    const form = await openNarrow('ci-runner');
+    const admin = within(form).getByRole('checkbox', { name: new RegExp(tk('form.admin')) }) as HTMLInputElement;
+    expect(admin.checked).toBe(true);
+    const projects = within(form).getByRole('radio', { name: tk('scopeMode.projects') }) as HTMLInputElement;
+    const spaces = within(form).getByRole('radio', { name: tk('scopeMode.spaces') }) as HTMLInputElement;
+    expect(projects.disabled).toBe(true);
+    expect(spaces.disabled).toBe(true);
+
+    fireEvent.click(admin);
+    expect(projects.disabled).toBe(false);
+    fireEvent.click(projects);
+    fireEvent.click(await within(form).findByRole('checkbox', { name: 'Alpha' }));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.narrowSave') }));
+
+    await waitFor(() => expect(api.narrowApiKey).toHaveBeenCalledTimes(1));
+    expect(api.narrowApiKey.mock.calls[0][1]).toEqual({
+      permissions: { level: 'write', admin: false },
+      scope: { mode: 'projects', projects: [PROJECT_A] },
+    });
+  });
+
+  it('a key limited to spaces narrows to those spaces or to projects that live in them', async () => {
+    api.listApiKeys.mockResolvedValue([
+      key({ scope: { mode: 'spaces', projects: [], spaces: [{ id: 'm7y2q4rb', name: 'Lab' }] } }),
+    ]);
+    renderPage();
+    const form = await openNarrow('ci-runner');
+    expect(within(form).queryByRole('radio', { name: tk('scopeMode.all') })).toBeNull();
+    fireEvent.click(within(form).getByRole('radio', { name: tk('scopeMode.projects') }));
+    const space = within(form).getByRole('combobox', { name: tk('form.projectSpace') }) as HTMLSelectElement;
+    expect([...space.options].map((o) => o.textContent)).toEqual(['Lab']);
+    await within(form).findByRole('checkbox', { name: 'Gamma' });
+    expect(within(form).getByRole('checkbox', { name: 'Beta' })).toBeTruthy();
+    expect(within(form).queryByRole('checkbox', { name: 'Alpha' })).toBeNull();
+    expect(picker.calls.some((c) => c.space === 'm7y2q4rb')).toBe(true);
+    fireEvent.click(within(form).getByRole('checkbox', { name: 'Gamma' }));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.narrowSave') }));
+
+    await waitFor(() => expect(api.narrowApiKey).toHaveBeenCalledTimes(1));
+    expect(api.narrowApiKey.mock.calls[0][1].scope).toEqual({ mode: 'projects', projects: [PROJECT_C] });
+  });
+
+  it('the expiry is shortened in place; a day after the current expiry gives the current expiry, never later', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date('2030-03-01T12:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const current = new Date(t0 + 20 * DAY).toISOString();
+    api.listApiKeys.mockResolvedValue([key({ expiresAt: current })]);
+    renderPage();
+
+    let form = await openNarrow('ci-runner');
+    const earlier = new Date(t0 + 5 * DAY);
+    chooseDay(form, earlier);
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.narrowSave') }));
+    await waitFor(() => expect(api.narrowApiKey).toHaveBeenCalledTimes(1));
+    const endOfEarlier = new Date(earlier.getFullYear(), earlier.getMonth(), earlier.getDate(), 23, 59, 59);
+    expect(api.narrowApiKey.mock.calls[0][1].expiresAt).toBe(endOfEarlier.toISOString());
+
+    form = await openNarrow('ci-runner');
+    chooseDay(form, new Date(t0 + 30 * DAY));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.narrowSave') }));
+    await waitFor(() => expect(api.narrowApiKey).toHaveBeenCalledTimes(2));
+    expect(api.narrowApiKey.mock.calls[1][1].expiresAt).toBe(current);
   });
 
   it('reissue calls the reissue client and shows the new secret', async () => {
