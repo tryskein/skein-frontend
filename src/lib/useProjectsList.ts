@@ -43,11 +43,14 @@ const PAGE_SIZE = 100;
  * Single-page projects fetch — kept for callers that only need a
  * lookup map. Shape matches the pre-infinite-scroll behaviour.
  */
-export function useProjectsList() {
+export function useProjectsList(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: projectsListQueryKey,
     queryFn: () => listProjects({ archived: 'all', limit: PAGE_SIZE }),
     staleTime: 60_000,
+    // A surface that needs the list only behind an open form (the API key
+    // scope picker) reads it only then.
+    enabled: options.enabled ?? true,
   });
 }
 

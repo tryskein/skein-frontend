@@ -41,6 +41,7 @@ export type ApiKeyScopeMode = 'projects' | 'spaces' | 'all';
 
 /** One project or space of a key's scope, as listed. */
 export interface ApiKeyScopeMember {
+  /** Project id (UUID), or the space short id. */
   id: string;
   name: string;
 }
@@ -53,8 +54,9 @@ export interface ApiKeyScope {
 }
 
 /**
- * A key's scope in a create or narrow request: member ids. `projects` is
- * sent with mode `projects`, `spaces` with mode `spaces`, neither with `all`.
+ * A key's scope in a create or narrow request: member ids — project ids
+ * (UUID) and space short ids. `projects` is sent with mode `projects`,
+ * `spaces` with mode `spaces`, neither with `all`.
  */
 export interface ApiKeyScopeInput {
   mode: ApiKeyScopeMode;

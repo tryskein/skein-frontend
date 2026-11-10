@@ -118,6 +118,13 @@ vi.mock('../../../api/api-keys', () => ({
   listApiKeys: async () => [],
   createApiKey: vi.fn(),
   revokeApiKey: vi.fn(),
+  getApiKeysSettings: async () => ({
+    publicApiEnabled: true,
+    publicApiUrl: null,
+    openApiUrl: null,
+    defaultTtlSeconds: 7776000,
+    maxTtlSeconds: 31536000,
+  }),
 }));
 
 import { AccountPage } from './AccountPage';
