@@ -71,6 +71,16 @@ describe('US-10 — API keys client', () => {
     expect(sentRequest().body).toMatchObject({ permissions: { level: null, admin: true }, scope: { mode: 'all' } });
   });
 
+  test('create without an expiry leaves it to the default lifetime', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({}, 201));
+    await createApiKey({
+      label: 'ci',
+      permissions: { level: 'read', admin: false },
+      scope: { mode: 'all' },
+    });
+    expect(sentRequest().body).not.toHaveProperty('expiresAt');
+  });
+
   test('narrowing patches the key with the new grant', async () => {
     fetchSpy.mockResolvedValue(jsonResponse({}));
     await narrowApiKey(KEY_ID, {

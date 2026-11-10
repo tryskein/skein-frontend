@@ -6,8 +6,9 @@
  * Wire shapes mirror the skein-api cabinet contract:
  *  - POST returns the plain key (`plainKey`) exactly once. The caller MUST
  *    store/show it immediately; subsequent GETs strip the field. POST
- *    requires the label, permissions, scope and expiry; a body without the
- *    three grant fields answers 400 `validation_error` with
+ *    requires the label, permissions and scope; without an expiry the key
+ *    gets the default lifetime. A body without permissions, scope and
+ *    expiry answers 400 `validation_error` with
  *    `details.staleClient = true` and creates nothing.
  *  - GET returns audit-safe rows: prefix, timestamps, status with its
  *    reason, permissions, scope, and the permissions the owner lost.
@@ -103,13 +104,16 @@ export interface ApiKeyCreateResponse extends ApiKey {
   plainKey: string;
 }
 
-/** Body of POST /me/api-keys: every field is required by the server. */
+/** Body of POST /me/api-keys. */
 export interface CreateApiKeyInput {
   label: string;
   permissions: ApiKeyPermissions;
   scope: ApiKeyScopeInput;
-  /** RFC 3339; after now and no later than now + `maxTtlSeconds`. */
-  expiresAt: string;
+  /**
+   * RFC 3339; after now and no later than now + `maxTtlSeconds`. Omitted:
+   * the key gets the default lifetime (`defaultTtlSeconds`).
+   */
+  expiresAt?: string;
 }
 
 /** Body of PATCH /me/api-keys/{id}: the new grant, no wider than the current one. */
