@@ -18,6 +18,7 @@ import {
   ApiKey,
   ApiKeyCreateResponse,
   createApiKey,
+  getApiKeysSettings,
   listApiKeys,
   revokeApiKey,
 } from '../../../api/api-keys';
@@ -156,7 +157,17 @@ export function NewApiKeysPage() {
   const [createdKey, setCreatedKey] = useState<ApiKeyCreateResponse | null>(null);
 
   const createMutation = useMutation<ApiKeyCreateResponse, Error, string>({
-    mutationFn: (label) => createApiKey(label),
+    // Interim grant until the create form offers permissions, scope and
+    // lifetime: read on everything the owner sees, default lifetime.
+    mutationFn: async (label) => {
+      const settings = await getApiKeysSettings();
+      return createApiKey({
+        label,
+        permissions: { level: 'read', admin: false },
+        scope: { mode: 'all' },
+        expiresAt: new Date(Date.now() + settings.defaultTtlSeconds * 1000).toISOString(),
+      });
+    },
     onSuccess: (created) => {
       setCreatedKey(created);
       setShowCreateRow(false);

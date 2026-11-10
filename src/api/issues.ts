@@ -147,12 +147,14 @@ export type IssueType =
  * Issue origin — the server's closed set (sk-421.1 US-11). `human` —
  * created by a person (web UI / REST); `agent_directed` — created by an
  * agent on a person's instruction; `agent_autonomous` — created by an
- * agent on its own initiative. The detail DTO, the task-list `source`
+ * agent on its own initiative; `api` — written with an API key through the
+ * public REST API without an explicit kind (counted as `agent_directed` and
+ * in the human-driven origin group, shown as "API"). The detail DTO, the task-list `source`
  * param and the `/search` `source` param all use this one type, so a
  * value outside the server set fails the type build instead of hitting
  * `400 invalid_source` at runtime.
  */
-export type IssueSource = 'human' | 'agent_directed' | 'agent_autonomous';
+export type IssueSource = 'human' | 'agent_directed' | 'agent_autonomous' | 'api';
 
 export type CommentAuthorType = 'human' | 'agent' | 'system';
 
@@ -703,14 +705,16 @@ export interface CommitRef {
  *                         ("leave a comment with my answer below")
  *  - `agent_autonomous` — posted by an agent on its own initiative
  *                         (handoff note, progress update, side-quest)
+ *  - `api`              — posted with an API key through the public REST
+ *                         API without an explicit kind; shown as "API"
  *
- * The Humans / Agents filter chips on the comment thread fold the first
- * two into "Humans" (a human is semantically behind the comment) and
- * surface `agent_autonomous` separately as "Agents". `authorType`
+ * The Humans / Agents filter chips on the comment thread fold `human`,
+ * `agent_directed` and `api` into "Humans" (a human is semantically behind
+ * the comment) and surface `agent_autonomous` separately as "Agents". `authorType`
  * (`human` / `agent` / `system`) is preserved on the wire — it reports
  * HOW the comment was posted, not WHO is behind it.
  */
-export type CommentAuthorKind = 'human' | 'agent_directed' | 'agent_autonomous';
+export type CommentAuthorKind = 'human' | 'agent_directed' | 'agent_autonomous' | 'api';
 
 export interface CommentDTO {
   id: string;
@@ -897,8 +901,8 @@ export interface ListIssuesParams {
   componentId?: string;
   /**
    * Filter by issue origin — one of the server's closed set
-   * (`IssueSource`: `human` / `agent_directed` / `agent_autonomous`).
-   * Vision §F24/§F25. Server validates and returns 400 invalid_source
+   * (`IssueSource`: `human` / `agent_directed` / `agent_autonomous` /
+   * `api`). Vision §F24/§F25. Server validates and returns 400 invalid_source
    * on anything else.
    *
    * Distinct from `origin` above: `source` filters on the creator-set

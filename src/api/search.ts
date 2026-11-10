@@ -112,8 +112,8 @@ export interface SearchParams {
   labels?: string[];
   /**
    * Filter issues by origin — one of the server's closed set
-   * (`IssueSource`: `human` / `agent_directed` / `agent_autonomous`).
-   * Vision §F24/§F25. Server returns 400 invalid_source on anything
+   * (`IssueSource`: `human` / `agent_directed` / `agent_autonomous` /
+   * `api`). Vision §F24/§F25. Server returns 400 invalid_source on anything
    * else; silently dropped server-side when kind excludes 'issue'.
    */
   source?: IssueSource;

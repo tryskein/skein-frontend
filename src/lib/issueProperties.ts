@@ -199,7 +199,7 @@ function parsesAsUrl(value: string): boolean {
 // ───────────────────────── source ─────────────────────────
 
 /** i18n keys (namespace `details`) of the three source labels (US-10). */
-const SOURCE_LABEL_KEYS: Record<IssueSource, string> = {
+const SOURCE_LABEL_KEYS: Record<Exclude<IssueSource, 'api'>, string> = {
   human: 'properties.source.human',
   agent_directed: 'properties.source.agentDirected',
   agent_autonomous: 'properties.source.agentAutonomous',
@@ -216,6 +216,6 @@ const SOURCE_LABEL_KEYS: Record<IssueSource, string> = {
 export function sourceLabelKey(source: string | null | undefined): string | null {
   if (typeof source !== 'string') return null;
   return Object.prototype.hasOwnProperty.call(SOURCE_LABEL_KEYS, source)
-    ? SOURCE_LABEL_KEYS[source as IssueSource]
+    ? SOURCE_LABEL_KEYS[source as Exclude<IssueSource, 'api'>]
     : null;
 }
