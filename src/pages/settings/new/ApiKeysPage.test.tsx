@@ -336,14 +336,16 @@ describe('US-10 — creating a key', () => {
     expect(api.createApiKey.mock.calls[0][0].expiresAt).toBe(end.toISOString());
   });
 
-  it('a day past the maximum lifetime: the key is created with the maximum, never later', async () => {
+  it('the last allowed day: the key ends at the maximum lifetime, not at the end of that day', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const t0 = new Date('2030-03-01T12:00:00Z').getTime();
     vi.setSystemTime(t0);
     renderPage();
     const form = await openCreateForm();
-    typeLabel(form, 'too-long');
-    chooseDay(form, new Date(t0 + 400 * DAY));
+    typeLabel(form, 'longest');
+    // The day the maximum falls on ends after the maximum itself. A later
+    // day is refused by the date field (its max) before anything is sent.
+    chooseDay(form, new Date(t0 + 365 * DAY));
     fireEvent.click(within(form).getByRole('button', { name: tk('form.create') }));
 
     await waitFor(() => expect(api.createApiKey).toHaveBeenCalledTimes(1));
@@ -525,7 +527,7 @@ describe('US-10 — narrowing, reissue, revoke', () => {
     expect(api.narrowApiKey.mock.calls[0][1].scope).toEqual({ mode: 'projects', projects: [PROJECT_C] });
   });
 
-  it('the expiry is shortened in place; a day after the current expiry gives the current expiry, never later', async () => {
+  it('the expiry is shortened in place; the day of the current expiry gives the current expiry, never later', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const t0 = new Date('2030-03-01T12:00:00Z').getTime();
     vi.setSystemTime(t0);
@@ -542,7 +544,7 @@ describe('US-10 — narrowing, reissue, revoke', () => {
     expect(api.narrowApiKey.mock.calls[0][1].expiresAt).toBe(endOfEarlier.toISOString());
 
     form = await openNarrow('ci-runner');
-    chooseDay(form, new Date(t0 + 30 * DAY));
+    chooseDay(form, new Date(current));
     fireEvent.click(within(form).getByRole('button', { name: tk('form.narrowSave') }));
     await waitFor(() => expect(api.narrowApiKey).toHaveBeenCalledTimes(2));
     expect(api.narrowApiKey.mock.calls[1][1].expiresAt).toBe(current);
