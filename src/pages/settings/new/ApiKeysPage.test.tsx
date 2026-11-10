@@ -53,15 +53,42 @@ vi.mock('../../../lib/useAuthConfig', () => ({
 const PROJECT_A = '0193aaaa-0000-7000-8000-00000000000a';
 const PROJECT_B = '0193bbbb-0000-7000-8000-00000000000b';
 
+const PROJECT_C = '0193cccc-0000-7000-8000-00000000000c';
+const PROJECTS = [
+  { id: PROJECT_A, name: 'Alpha', spaceId: 'k3x9p2qa' },
+  { id: PROJECT_B, name: 'Beta', spaceId: 'm7y2q4rb' },
+  { id: PROJECT_C, name: 'Gamma', spaceId: 'm7y2q4rb' },
+];
+
+/**
+ * The picker hook, answered from PROJECTS: the search and the space
+ * narrow the rows as the server would. Its own request (active projects,
+ * no lens, pages) is `src/lib/__tests__/useProjectsPicker.test.tsx`.
+ */
+const picker = vi.hoisted(() => ({
+  calls: [] as Array<{ query: string; space?: string; enabled?: boolean }>,
+  hasNextPage: false,
+  fetchNextPage: vi.fn(),
+}));
 vi.mock('../../../lib/useProjectsList', () => ({
-  useProjectsList: () => ({
-    data: {
-      items: [
-        { id: PROJECT_A, name: 'Alpha', spaceId: 'k3x9p2qa' },
-        { id: PROJECT_B, name: 'Beta', spaceId: 'm7y2q4rb' },
-      ],
-    },
-  }),
+  useProjectsPicker: (query: string, opts: { space?: string; enabled?: boolean } = {}) => {
+    picker.calls.push({ query, ...opts });
+    const q = query.trim().toLowerCase();
+    const items =
+      opts.enabled === false
+        ? []
+        : PROJECTS.filter((p) => (!opts.space || p.spaceId === opts.space) && p.name.toLowerCase().includes(q));
+    return {
+      items,
+      total: items.length,
+      isLoading: false,
+      isFetching: false,
+      isFetchingNextPage: false,
+      isError: false,
+      hasNextPage: picker.hasNextPage,
+      fetchNextPage: picker.fetchNextPage,
+    };
+  },
 }));
 
 vi.mock('../../../lib/useMySpaces', () => ({
@@ -158,6 +185,8 @@ function cellOf(row: HTMLElement, header: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   who.role = 'user';
+  picker.calls = [];
+  picker.hasNextPage = false;
   api.listApiKeys.mockResolvedValue([]);
   api.getApiKeysSettings.mockResolvedValue(SETTINGS);
   api.createApiKey.mockResolvedValue(created());
@@ -210,6 +239,34 @@ describe('US-10 — creating a key', () => {
       permissions: { level: 'manage', admin: false },
       scope: { mode: 'projects', projects: [PROJECT_A, PROJECT_B] },
     });
+  });
+
+  it('projects are found by search; a chosen project stays chosen when the search changes', async () => {
+    renderPage();
+    const form = await openCreateForm();
+    typeLabel(form, 'beta-only');
+    fireEvent.click(within(form).getByRole('radio', { name: tk('scopeMode.projects') }));
+    const search = within(form).getByRole('searchbox', { name: tk('form.projectSearch') });
+    fireEvent.change(search, { target: { value: 'bet' } });
+    await waitFor(() => expect(within(form).queryByRole('checkbox', { name: 'Alpha' })).toBeNull());
+    fireEvent.click(within(form).getByRole('checkbox', { name: 'Beta' }));
+    fireEvent.change(search, { target: { value: 'alp' } });
+    await within(form).findByRole('checkbox', { name: 'Alpha' });
+    expect((within(form).getByRole('checkbox', { name: 'Beta' }) as HTMLInputElement).checked).toBe(true);
+    expect(picker.calls.some((c) => c.query === 'alp' && c.space === undefined)).toBe(true);
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.create') }));
+
+    await waitFor(() => expect(api.createApiKey).toHaveBeenCalledTimes(1));
+    expect(api.createApiKey.mock.calls[0][0].scope).toEqual({ mode: 'projects', projects: [PROJECT_B] });
+  });
+
+  it('more projects than one page: the picker asks for the next page', async () => {
+    picker.hasNextPage = true;
+    renderPage();
+    const form = await openCreateForm();
+    fireEvent.click(within(form).getByRole('radio', { name: tk('scopeMode.projects') }));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.loadMore') }));
+    expect(picker.fetchNextPage).toHaveBeenCalledTimes(1);
   });
 
   it('chosen spaces go by their short id', async () => {

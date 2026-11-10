@@ -8,6 +8,7 @@ import {
   Checkbox,
   Group,
   Loader,
+  NativeSelect,
   Radio,
   Stack,
   Table,
@@ -15,6 +16,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useDebouncedValue } from '@mantine/hooks';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '../../../auth/AuthContext';
@@ -44,7 +46,7 @@ import { resolveMcpUrl } from '../../../lib/mcpUrl';
 import { ERR_ALERT_VARS } from '../../../lib/mantineVariantVars';
 import { useAuthConfig } from '../../../lib/useAuthConfig';
 import { useMySpaces } from '../../../lib/useMySpaces';
-import { useProjectsList } from '../../../lib/useProjectsList';
+import { useProjectsPicker } from '../../../lib/useProjectsList';
 
 /**
  * /settings/api-keys — the owner's API keys (US-10), in the new-shell
@@ -235,6 +237,119 @@ interface ScopeOption {
 }
 
 /**
+ * Where the projects of a `projects` scope come from: a fixed list (a key
+ * already limited to projects narrows only within them), or a search over
+ * the active projects the owner sees — all of them (`spaces: null`), or
+ * only those of the listed spaces (narrowing a `spaces` key).
+ */
+type ProjectChoice =
+  | { kind: 'fixed'; items: ScopeOption[] }
+  | { kind: 'search'; spaces: ScopeOption[] | null };
+
+/** Pause after the last keystroke before the project search asks the server. */
+const PROJECT_SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * The project part of the scope picker. A search list pages through the
+ * active projects (`useProjectsPicker`: no archived, no header lens) and
+ * keeps the chosen ones on top whatever the current search shows, so a
+ * choice survives a new search.
+ */
+function ProjectPicker({
+  choice,
+  value,
+  names,
+  onChange,
+}: {
+  choice: ProjectChoice;
+  value: string[];
+  names: Record<string, string>;
+  onChange: (ids: string[], names: Record<string, string>) => void;
+}) {
+  const { t } = useTranslation('settings');
+  const [query, setQuery] = useState('');
+  const [debounced] = useDebouncedValue(query, PROJECT_SEARCH_DEBOUNCE_MS);
+  const spaceChoices = choice.kind === 'search' ? choice.spaces : null;
+  const [space, setSpace] = useState<string | undefined>(spaceChoices?.[0]?.id);
+  const found = useProjectsPicker(debounced, {
+    space: spaceChoices ? space : undefined,
+    enabled: choice.kind === 'search',
+  });
+
+  const toggle = (id: string, name: string, checked: boolean) => {
+    if (checked) {
+      onChange(value.includes(id) ? value : [...value, id], { ...names, [id]: name });
+    } else {
+      const rest = { ...names };
+      delete rest[id];
+      onChange(value.filter((v) => v !== id), rest);
+    }
+  };
+
+  const options: ScopeOption[] =
+    choice.kind === 'fixed'
+      ? choice.items
+      : [
+          ...value.map((id) => ({ id, name: names[id] ?? id })),
+          ...found.items.filter((p) => !value.includes(p.id)).map((p) => ({ id: p.id, name: p.name })),
+        ];
+
+  return (
+    <Stack gap={4} pl="md">
+      {choice.kind === 'search' ? (
+        <>
+          {spaceChoices ? (
+            <NativeSelect
+              label={t('keys.form.projectSpace')}
+              data={spaceChoices.map((sp) => ({ value: sp.id, label: sp.name }))}
+              value={space}
+              onChange={(e) => setSpace(e.currentTarget.value)}
+            />
+          ) : null}
+          <TextInput
+            type="search"
+            label={t('keys.form.projectSearch')}
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+          />
+        </>
+      ) : null}
+      <Checkbox.Group label={t('keys.form.projects')} value={value}>
+        <Stack gap={4} mt={4}>
+          {options.map((p) => (
+            <Checkbox
+              key={p.id}
+              value={p.id}
+              label={p.name}
+              onChange={(e) => toggle(p.id, p.name, e.currentTarget.checked)}
+            />
+          ))}
+        </Stack>
+      </Checkbox.Group>
+      {choice.kind === 'search' && found.isError ? (
+        <Text size="sm" c="dimmed">{t('keys.form.projectsFailed')}</Text>
+      ) : choice.kind === 'search' && found.isLoading ? (
+        <Text size="sm" c="dimmed">{t('keys.form.projectsLoading')}</Text>
+      ) : options.length === 0 ? (
+        <Text size="sm" c="dimmed">{t('keys.form.noProjects')}</Text>
+      ) : null}
+      {choice.kind === 'search' && found.hasNextPage ? (
+        <Group>
+          <Button
+            variant="default"
+            size="compact-xs"
+            loading={found.isFetchingNextPage}
+            onClick={() => found.fetchNextPage()}
+          >
+            {t('keys.form.loadMore')}
+          </Button>
+        </Group>
+      ) : null}
+    </Stack>
+  );
+}
+
+/**
  * What the grant form may offer. On create: everything (admin only to an
  * instance admin). On narrow: the current grant and what lies inside it.
  */
@@ -245,7 +360,7 @@ interface GrantLimits {
   adminAllowed: boolean;
   /** Scope modes offered, in display order. */
   scopeModes: ApiKeyScopeMode[];
-  projects: ScopeOption[];
+  projects: ProjectChoice;
   spaces: ScopeOption[];
   /** Latest end of the lifetime a date may give. */
   latestExpiry: Date;
@@ -258,6 +373,8 @@ interface GrantFormState {
   admin: boolean;
   scopeMode: ApiKeyScopeMode;
   projects: string[];
+  /** Names of the chosen projects, shown while a search hides them. */
+  projectNames: Record<string, string>;
   spaces: string[];
   /** `default` — no expiry sent (create: default lifetime; narrow: keep the current one). */
   expiryMode: 'default' | 'date';
@@ -429,19 +546,12 @@ function GrantForm({
         </Radio.Group>
 
         {s.scopeMode === 'projects' ? (
-          <Checkbox.Group
-            label={t('keys.form.projects')}
+          <ProjectPicker
+            choice={limits.projects}
             value={s.projects}
-            onChange={(v) => set({ projects: v })}
-          >
-            <Stack gap={4} mt={4} pl="md">
-              {limits.projects.length === 0 ? (
-                <Text size="sm" c="dimmed">{t('keys.form.noProjects')}</Text>
-              ) : (
-                limits.projects.map((p) => <Checkbox key={p.id} value={p.id} label={p.name} />)
-              )}
-            </Stack>
-          </Checkbox.Group>
+            names={s.projectNames}
+            onChange={(projects, projectNames) => set({ projects, projectNames })}
+          />
         ) : null}
 
         {s.scopeMode === 'spaces' ? (
@@ -521,6 +631,7 @@ function narrowInitial(k: ApiKey): GrantFormState {
     admin: k.permissions.admin,
     scopeMode: k.scope.mode,
     projects: k.scope.projects.map((p) => p.id),
+    projectNames: Object.fromEntries(k.scope.projects.map((p) => [p.id, p.name])),
     spaces: k.scope.spaces.map((sp) => sp.id),
     expiryMode: 'default',
     expiryDate: '',
@@ -536,7 +647,6 @@ function narrowInitial(k: ApiKey): GrantFormState {
  */
 function narrowLimits(
   k: ApiKey,
-  projects: (ScopeOption & { spaceId?: string })[],
   spaces: ScopeOption[],
   maxTtlMs: number,
   now: number,
@@ -547,21 +657,20 @@ function narrowLimits(
     latestExpiry: k.expiresAt ? new Date(k.expiresAt) : new Date(now + maxTtlMs),
   };
   if (k.scope.mode === 'all') {
-    return { ...base, scopeModes: ['all', 'projects', 'spaces'], projects, spaces };
+    return { ...base, scopeModes: ['all', 'projects', 'spaces'], projects: { kind: 'search', spaces: null }, spaces };
   }
   if (k.scope.mode === 'spaces') {
-    const inScope = new Set(k.scope.spaces.map((sp) => sp.id));
     return {
       ...base,
       scopeModes: ['spaces', 'projects'],
-      projects: projects.filter((p) => p.spaceId !== undefined && inScope.has(p.spaceId)),
+      projects: { kind: 'search', spaces: k.scope.spaces },
       spaces: k.scope.spaces,
     };
   }
   return {
     ...base,
     scopeModes: ['projects'],
-    projects: k.scope.projects,
+    projects: { kind: 'fixed', items: k.scope.projects },
     spaces: [],
   };
 }
@@ -682,20 +791,9 @@ export function NewApiKeysPage() {
   const [narrowing, setNarrowing] = useState<ApiKey | null>(null);
   const [narrowError, setNarrowError] = useState<string | null>(null);
 
-  // Projects and spaces feed the scope picker only; the projects list is
-  // read once a form that may pick projects is open.
-  const pickerOpen = showCreateRow || (narrowing !== null && narrowing.scope.mode !== 'projects');
-  const projectsQuery = useProjectsList({ enabled: pickerOpen });
+  // Spaces feed the scope picker and the "sees all your spaces" line; the
+  // projects of the picker are searched by the form itself (ProjectPicker).
   const spacesQuery = useMySpaces();
-  const projectOptions = useMemo<(ScopeOption & { spaceId?: string })[]>(
-    () =>
-      pickerOpen
-        ? (projectsQuery.data?.items ?? [])
-            .filter((p) => !p.archivedAt)
-            .map((p) => ({ id: p.id, name: p.name, spaceId: p.spaceId }))
-        : [],
-    [pickerOpen, projectsQuery.data],
-  );
   const spaceOptions = useMemo<ScopeOption[]>(
     () => (spacesQuery.data?.items ?? []).map((sp) => ({ id: sp.id, name: sp.name })),
     [spacesQuery.data],
@@ -799,7 +897,7 @@ export function NewApiKeysPage() {
     maxLevel: 'manage',
     adminAllowed: isInstanceAdmin,
     scopeModes: ['all', 'projects', 'spaces'],
-    projects: projectOptions,
+    projects: { kind: 'search', spaces: null },
     spaces: spaceOptions,
     latestExpiry: new Date(now + maxTtlMs),
   };
@@ -809,6 +907,7 @@ export function NewApiKeysPage() {
     admin: false,
     scopeMode: 'all',
     projects: [],
+    projectNames: {},
     spaces: [],
     expiryMode: 'default',
     expiryDate: '',
@@ -958,7 +1057,7 @@ export function NewApiKeysPage() {
             <GrantForm
               key={narrowing.id}
               mode="narrow"
-              limits={narrowLimits(narrowing, projectOptions, spaceOptions, maxTtlMs, now)}
+              limits={narrowLimits(narrowing, spaceOptions, maxTtlMs, now)}
               initial={narrowInitial(narrowing)}
               defaultTtlDays={defaultTtlDays}
               pending={narrowMutation.isPending}

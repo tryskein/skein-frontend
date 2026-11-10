@@ -1,7 +1,7 @@
 /**
  * Project listing hooks.
  *
- * Two hooks live here, sharing a base query key:
+ * Three hooks live here, sharing a base query key:
  *
  *   - `useProjectsList()` — single-shot fetch of the first 100 projects.
  *     Consumers that just need a project-id → idPrefix lookup map
@@ -16,6 +16,10 @@
  *     manual reset needed. Surfaces `total` from the first page for the
  *     column-header counter.
  *
+ *   - `useProjectsPicker(query, { space })` — the same paging for a
+ *     project CHOOSER (the API key scope): active projects only, no
+ *     header lens, optionally one space's projects.
+ *
  * Why split: lookup callers want a small, snappy single-page response.
  * The Projects column itself is the only surface that needs the full
  * list — pulling it through useInfiniteQuery there preserves the
@@ -28,7 +32,7 @@
  */
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { listProjects, type ProjectListItem } from '../api/projects';
+import { listProjects, type ListProjectsParams, type ProjectListItem } from '../api/projects';
 import { useLayoutState } from './useLayoutState';
 import { projectsListQueryKey } from './projectHandleCache';
 
@@ -43,14 +47,11 @@ const PAGE_SIZE = 100;
  * Single-page projects fetch — kept for callers that only need a
  * lookup map. Shape matches the pre-infinite-scroll behaviour.
  */
-export function useProjectsList(options: { enabled?: boolean } = {}) {
+export function useProjectsList() {
   return useQuery({
     queryKey: projectsListQueryKey,
     queryFn: () => listProjects({ archived: 'all', limit: PAGE_SIZE }),
     staleTime: 60_000,
-    // A surface that needs the list only behind an open form (the API key
-    // scope picker) reads it only then.
-    enabled: options.enabled ?? true,
   });
 }
 
@@ -71,7 +72,6 @@ export interface UseProjectsInfiniteResult {
 }
 
 export function useProjectsInfinite(query: string = ''): UseProjectsInfiniteResult {
-  const trimmedQuery = query.trim();
   // sk-30 — derive the lens query param from the active lens. Both
   // lenses are mutex upstream so we never have to pick between them.
   // Including `lens` in the queryKey makes lens toggles roll a fresh
@@ -82,19 +82,49 @@ export function useProjectsInfinite(query: string = ''): UseProjectsInfiniteResu
     : outboxMode
       ? 'delegated'
       : undefined;
+  const trimmedQuery = query.trim();
+  return useProjectPages(
+    [...projectsListQueryKey, 'infinite', trimmedQuery, lens ?? 'all'],
+    { archived: 'all', q: trimmedQuery || undefined, lens },
+    true,
+  );
+}
+
+/**
+ * Projects to CHOOSE from — the scope picker of an API key (US-10): every
+ * active project the caller sees, page by page, with the same search as
+ * the Projects column. Unlike `useProjectsInfinite` it ignores the
+ * header lenses (a key's scope is not a view of the caller's tasks, and
+ * the settings pages sit outside the Shell's `LayoutProvider`) and never
+ * offers archived projects. `space` (short id) keeps only that space's
+ * projects. Disabled — no request — while `enabled` is false.
+ */
+export function useProjectsPicker(
+  query: string,
+  opts: { space?: string; enabled?: boolean } = {},
+): UseProjectsInfiniteResult {
+  const trimmedQuery = query.trim();
+  return useProjectPages(
+    [...projectsListQueryKey, 'picker', trimmedQuery, opts.space ?? 'all'],
+    { archived: 'false', q: trimmedQuery || undefined, space: opts.space },
+    opts.enabled ?? true,
+  );
+}
+
+/** The paged projects query both list hooks share. */
+function useProjectPages(
+  queryKey: readonly unknown[],
+  params: Pick<ListProjectsParams, 'archived' | 'q' | 'lens' | 'space'>,
+  enabled: boolean,
+): UseProjectsInfiniteResult {
   const q = useInfiniteQuery({
-    queryKey: [...projectsListQueryKey, 'infinite', trimmedQuery, lens ?? 'all'],
+    queryKey,
     queryFn: ({ pageParam }) =>
-      listProjects({
-        archived: 'all',
-        limit: PAGE_SIZE,
-        cursor: pageParam ?? undefined,
-        q: trimmedQuery || undefined,
-        lens,
-      }),
+      listProjects({ ...params, limit: PAGE_SIZE, cursor: pageParam ?? undefined }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => (last.hasMore ? last.nextCursor ?? undefined : undefined),
     staleTime: 60_000,
+    enabled,
   });
 
   // Flatten pages into a single items[]. Spread is fine here — `pages`
