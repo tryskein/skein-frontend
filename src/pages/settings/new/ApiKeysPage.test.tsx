@@ -446,6 +446,16 @@ describe('US-10 — narrowing, reissue, revoke', () => {
     expect(api.narrowApiKey.mock.calls[0][1].scope).toEqual({ mode: 'projects', projects: [PROJECT_A] });
   });
 
+  it('one form at a time: a new key closes the narrowing, and narrowing closes the new key', async () => {
+    api.listApiKeys.mockResolvedValue([key()]);
+    renderPage();
+    await openNarrow('ci-runner');
+    await openCreateForm();
+    expect(screen.queryByRole('form', { name: tk('form.narrowAria') })).toBeNull();
+    await openNarrow('ci-runner');
+    expect(screen.queryByRole('form', { name: tk('form.createAria') })).toBeNull();
+  });
+
   it('reissue calls the reissue client and shows the new secret', async () => {
     api.listApiKeys.mockResolvedValue([key()]);
     renderPage();

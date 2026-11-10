@@ -1001,6 +1001,9 @@ export function NewApiKeysPage() {
               size="sm"
               disabled={!settings}
               onClick={() => {
+                // One form at a time: a new key closes a narrowing in progress.
+                setNarrowing(null);
+                setNarrowError(null);
                 setShowCreateRow(true);
                 setCreateError(null);
               }}
