@@ -20,7 +20,7 @@ vi.mock('../api/issues', async (importActual) => {
 import { addComment, CommentDTO, listComments } from '../api/issues';
 import { AuthProvider, ME_KEY } from '../auth/AuthContext';
 import type { User } from '../api/auth';
-import { CommentsThread } from './CommentsThread';
+import { CommentsThread, splitCommentsByFilter } from './CommentsThread';
 
 const PROJECT_ID = 'pj-1';
 const ISSUE_ID = 'sk-1';
@@ -661,8 +661,10 @@ describe('sk-878.3.1 — an api comment is in the Humans group and marked API', 
       </Wrap>,
     );
     await waitFor(() => screen.getByText('integration note'));
-    expect(screen.getAllByRole('img', { name: /^comment kind: API — / })).toHaveLength(1);
-    expect(screen.getAllByRole('img', { name: /^comment kind: autonomous — / })).toHaveLength(1);
+    // The kind marks by role, told apart by their labels: API (the owner's
+    // label for the value) and autonomous.
+    expect(screen.getAllByRole('img', { name: /\bAPI\b/ })).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: /\bautonomous\b/ })).toHaveLength(1);
   });
 
   test('Agents closed keeps the api comment', async () => {
@@ -676,17 +678,24 @@ describe('sk-878.3.1 — an api comment is in the Humans group and marked API', 
     expect(screen.queryByText('autonomous agent note')).toBeNull();
   });
 
-  test('Humans closed hides the api comment and counts it as a human one', async () => {
+  test('Humans closed hides the api comment', async () => {
     mockedList.mockResolvedValueOnce(withApi());
-    const { container } = render(
+    render(
       <Wrap>
         <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} showHumans={false} />
       </Wrap>,
     );
     await waitFor(() => screen.getByText('autonomous agent note'));
     expect(screen.queryByText('integration note')).toBeNull();
-    const strip = container.querySelector('.comment-hidden-note');
-    expect(strip).not.toBeNull();
-    expect(strip!.textContent).toContain('1 human comment hidden');
+  });
+
+  test('the api comment is counted in Humans, not in Agents', () => {
+    // The split the heading's chips and the hidden note are drawn from.
+    const all = splitCommentsByFilter(withApi(), true, true);
+    expect(all.humansCount).toBe(1);
+    expect(all.agentsCount).toBe(1);
+    const humansOff = splitCommentsByFilter(withApi(), false, true);
+    expect(humansOff.hiddenHumans).toBe(1);
+    expect(humansOff.hiddenAgents).toBe(0);
   });
 });
