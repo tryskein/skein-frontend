@@ -183,32 +183,38 @@ describe('sk-878.3.1 — the exact API source in the Tasks origin filter', () =>
     expect(within(source).getByRole('radio', { name: 'API' }).getAttribute('aria-checked')).toBe('true');
   });
 
+  /** Pick «API» in the Source row, the way the reader does. */
+  function pickApi() {
+    const source = screen.getByRole('radiogroup', { name: 'Source' });
+    fireEvent.click(within(source).getByRole('radio', { name: 'API' }));
+  }
+
   // Every surface of the column, each on the read it makes. A branch of
-  // `useTasks` that drops `source: wireSource` turns its row red.
+  // `useTasks` that drops `source: wireSource` turns its row red. Under a
+  // lens the chips edit the lens's own filters, so the choice is made there.
   test.each([
-    ['the project list, On me', '/projects/demo', { onMeMode: true }, listIssuesSpy],
     ['all projects', '/', {}, listAllIssuesSpy],
+    ['the project list, On me', '/projects/demo', { onMeMode: true }, listIssuesSpy],
     ['Delegated across projects', '/', { outboxMode: true }, listCreatedByMeSpy],
     ['On me across projects', '/', { onMeMode: true }, listAssignedToMeSpy],
   ] as const)('%s reads with source=api and no group', async (_name, url, lens, spy) => {
-    window.localStorage.setItem(ORIGIN_KEY, 'api');
     renderColumn(url, lens);
     await waitFor(() => expect(spy).toHaveBeenCalled());
-    const params = lastParams<{ source?: string; origin?: string }>(spy);
-    expect(params?.source).toBe('api');
-    expect(params?.origin).toBeUndefined();
+    pickApi();
+    await waitFor(() => expect(lastParams<{ source?: string }>(spy)?.source).toBe('api'));
+    expect(lastParams<{ origin?: string }>(spy)?.origin).toBeUndefined();
   });
 
-  test('a search in the column sends source=api and no group', async () => {
-    window.localStorage.setItem(ORIGIN_KEY, 'api');
+  test('a search within filters sends source=api and no group', async () => {
     renderColumn('/projects/demo');
-    fireEvent.change(screen.getByPlaceholderText('Search by task text or code'), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), {
       target: { value: 'needle' },
     });
-    await waitFor(() => expect(globalSearchSpy).toHaveBeenCalled());
-    const params = lastParams<SearchParams>(globalSearchSpy);
-    expect(params?.source).toBe('api');
-    expect(params?.origin).toBeUndefined();
+    // A plain search runs over the full scope; «within filters» keeps the chips.
+    fireEvent.click(await screen.findByRole('button', { name: 'Search within filters' }));
+    pickApi();
+    await waitFor(() => expect(lastParams<SearchParams>(globalSearchSpy)?.source).toBe('api'));
+    expect(lastParams<SearchParams>(globalSearchSpy)?.origin).toBeUndefined();
   });
 });
 
