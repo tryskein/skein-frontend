@@ -539,6 +539,7 @@ function GrantForm({
                 key={m}
                 value={m}
                 label={t(`keys.scopeMode.${m}`)}
+                description={t(`keys.scopeModeHint.${m}`)}
                 disabled={effectiveAdmin && m !== 'all'}
               />
             ))}
@@ -881,9 +882,9 @@ export function NewApiKeysPage() {
     [authConfig.isSuccess, configuredMcpUrl],
   );
 
-  // sk-674.18 T058 — screens 1.14: "The key sees all your spaces",
-  // only with two spaces or more (an external user has none; with one there
-  // is nothing to tell apart).
+  // sk-674.18 T058 — screens 1.14: what a key sees of your spaces, only with
+  // two spaces or more (an external user has none; with one there is nothing
+  // to tell apart). Since US-10 that depends on the key's scope.
   const spacesCount = spacesQuery.data?.items.length ?? 0;
 
   const listError = keysQuery.error ? describeKeyError(keysQuery.error, t, t('keys.errors.listFailed')) : null;
@@ -962,7 +963,7 @@ export function NewApiKeysPage() {
             {spacesCount >= 2 ? (
               <>
                 {' '}
-                <strong>{t('keys.allSpaces')}</strong>
+                <strong>{t('keys.scopeReach')}</strong>
               </>
             ) : null}
           </>

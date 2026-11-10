@@ -334,10 +334,12 @@ describe('row 251a — "Send email" pauses a minute (E-26)', () => {
 // ─────────────────────────── "API keys" ───────────────────────────
 
 describe('row 251 — "API keys": the spaces line and "Connection"', () => {
-  test('two spaces: "The key sees all your spaces"', async () => {
+  // US-10 (spec Changelog 2026-11-10): what a key sees depends on its scope,
+  // so the line says which scope sees all the spaces.
+  test('two spaces: the line on what a key of each scope sees', async () => {
     world.spaces = [space('p0aa11bb', 'Личное', 'personal'), space('k3x9p2qa', 'Acme', 'regular')];
     render(<Wrap><NewApiKeysPage /></Wrap>);
-    expect(await screen.findByText(i18n.t('settings:keys.allSpaces'))).toBeTruthy();
+    expect(await screen.findByText(i18n.t('settings:keys.scopeReach'))).toBeTruthy();
   });
 
   test('one space: no such line', async () => {
@@ -347,7 +349,7 @@ describe('row 251 — "API keys": the spaces line and "Connection"', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(screen.queryByText(i18n.t('settings:keys.allSpaces'))).toBeNull();
+    expect(screen.queryByText(i18n.t('settings:keys.scopeReach'))).toBeNull();
   });
 
   test('"Connection": where the file goes, which key, how to check', async () => {

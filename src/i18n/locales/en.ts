@@ -2169,7 +2169,8 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
     },
     // sk-674.18 T058 — "API keys" (screens 1.14, K2).
     keys: {
-      allSpaces: 'A key sees all your spaces.',
+      // US-10 — what a key reaches depends on its scope (the line is shown with two spaces or more).
+      scopeReach: 'A key with the scope «All projects you see» sees all your spaces; a key limited to chosen spaces or projects sees only those.',
       connectTitle: 'Connection',
       connectWhere: 'Put this .mcp.json into the agent’s project.',
       connectKey: 'Set the SKEIN_API_KEY environment variable to a key created below.',
@@ -2196,6 +2197,11 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
         all: 'All projects you see',
         projects: 'Selected projects',
         spaces: 'Selected spaces',
+      },
+      scopeModeHint: {
+        all: 'Sees all your spaces and every project you see, including new ones.',
+        projects: 'Sees only the chosen projects.',
+        spaces: 'Sees only the projects of the chosen spaces.',
       },
       status: {
         active: 'Active',
