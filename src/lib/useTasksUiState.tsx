@@ -77,7 +77,7 @@ import {
   type FiltersLayout,
 } from './filtersLayout';
 import type {
-  OriginFilter,
+  TaskOriginFilter,
   PriorityFilter,
   StatusFilter,
   TasksSortKey,
@@ -156,9 +156,10 @@ const STATUS_VALUES: readonly StatusFilter[] = [
   'closed',
   'all',
 ];
-const ORIGIN_VALUES: readonly OriginFilter[] = [
+const ORIGIN_VALUES: readonly TaskOriginFilter[] = [
   'human-driven',
   'agent-autonomous',
+  'api',
   'all',
 ];
 const TYPE_VALUES: readonly TypeFilter[] = [
@@ -333,7 +334,7 @@ export interface TreeRootAnchor {
 
 export interface TasksUiState {
   statusFilter: StatusFilter;
-  originFilter: OriginFilter;
+  originFilter: TaskOriginFilter;
   typeFilter: TypeFilter;
   /**
    * sk-86 — priority filter (the pill row right after the status row).
@@ -448,7 +449,7 @@ export type TasksUiSnapshot = Readonly<TasksUiState>;
 
 export interface TasksUiActions {
   setStatusFilter: (v: StatusFilter) => void;
-  setOriginFilter: (v: OriginFilter) => void;
+  setOriginFilter: (v: TaskOriginFilter) => void;
   setTypeFilter: (v: TypeFilter) => void;
   /** sk-86 — set the priority filter; `'all'` clears it. */
   setPriorityFilter: (v: PriorityFilter) => void;
@@ -537,8 +538,8 @@ export function TasksUiStateProvider({ children }: { children: ReactNode }) {
   const [statusFilter, setStatusFilterState] = useState<StatusFilter>(() =>
     readEnum<StatusFilter>(STORAGE.status, STATUS_VALUES, 'active'),
   );
-  const [originFilter, setOriginFilterState] = useState<OriginFilter>(() =>
-    readEnum<OriginFilter>(STORAGE.origin, ORIGIN_VALUES, 'all'),
+  const [originFilter, setOriginFilterState] = useState<TaskOriginFilter>(() =>
+    readEnum<TaskOriginFilter>(STORAGE.origin, ORIGIN_VALUES, 'all'),
   );
   const [typeFilter, setTypeFilterState] = useState<TypeFilter>(() =>
     readEnum<TypeFilter>(STORAGE.type, TYPE_VALUES, 'all'),
@@ -708,7 +709,7 @@ export function TasksUiStateProvider({ children }: { children: ReactNode }) {
     setStatusFilterState(v);
   }, []);
   const setOriginFilter = useCallback(
-    (v: OriginFilter) => setOriginFilterState(v),
+    (v: TaskOriginFilter) => setOriginFilterState(v),
     [],
   );
   const setTypeFilter = useCallback((v: TypeFilter) => setTypeFilterState(v), []);

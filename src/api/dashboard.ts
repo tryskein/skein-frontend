@@ -30,6 +30,11 @@ export type DashboardWindow = '24h' | '7d' | '30d' | 'all-time';
 export interface MetricRow {
   key: string;
   human: number;
+  /**
+   * Agent on a person's instruction. Also counts records written with an API
+   * key (`source` / `author_kind` = `api`): the server folds them into this
+   * axis, so the dashboard has no separate `api` column.
+   */
   agent_directed: number;
   agent_autonomous: number;
 }

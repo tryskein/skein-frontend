@@ -20,7 +20,7 @@ vi.mock('../api/issues', async (importActual) => {
 import { addComment, CommentDTO, listComments } from '../api/issues';
 import { AuthProvider, ME_KEY } from '../auth/AuthContext';
 import type { User } from '../api/auth';
-import { CommentsThread } from './CommentsThread';
+import { CommentsThread, splitCommentsByFilter } from './CommentsThread';
 
 const PROJECT_ID = 'pj-1';
 const ISSUE_ID = 'sk-1';
@@ -632,5 +632,70 @@ describe('sk-414.5 / sk-416 — the posted comment is never on screen twice', ()
     ).toBe(0);
     expect(container.querySelectorAll('.comment-block').length).toBe(1);
     expect(screen.getAllByText('saved for real').length).toBe(1);
+  });
+});
+
+// sk-878.3.1 — «Data: the people group» in the comment thread. A comment
+// written with an API key (`author_kind = api`) belongs to the Humans chip
+// with human and agent_directed, and is told apart by its own «API» mark
+// (INV-4: the owner's label for the value), not by the autonomous one.
+describe('sk-878.3.1 — an api comment is in the Humans group and marked API', () => {
+  function withApi(): CommentDTO[] {
+    return [
+      makeComment({ id: 'c-api', body: 'integration note', authorType: 'agent', authorKind: 'api', author: 'ci-bot' }),
+      makeComment({
+        id: 'c-autonomous',
+        body: 'autonomous agent note',
+        authorType: 'agent',
+        authorKind: 'agent_autonomous',
+        author: 'agent-bob',
+      }),
+    ];
+  }
+
+  test('the api comment carries the API mark, not the autonomous one', async () => {
+    mockedList.mockResolvedValueOnce(withApi());
+    render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('integration note'));
+    // The kind marks by role, told apart by their labels: API (the owner's
+    // label for the value) and autonomous.
+    expect(screen.getAllByRole('img', { name: /\bAPI\b/ })).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: /\bautonomous\b/ })).toHaveLength(1);
+  });
+
+  test('Agents closed keeps the api comment', async () => {
+    mockedList.mockResolvedValueOnce(withApi());
+    render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} showAgents={false} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('integration note'));
+    expect(screen.queryByText('autonomous agent note')).toBeNull();
+  });
+
+  test('Humans closed hides the api comment', async () => {
+    mockedList.mockResolvedValueOnce(withApi());
+    render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} showHumans={false} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('autonomous agent note'));
+    expect(screen.queryByText('integration note')).toBeNull();
+  });
+
+  test('the api comment is counted in Humans, not in Agents', () => {
+    // The split the heading's chips and the hidden note are drawn from.
+    const all = splitCommentsByFilter(withApi(), true, true);
+    expect(all.humansCount).toBe(1);
+    expect(all.agentsCount).toBe(1);
+    const humansOff = splitCommentsByFilter(withApi(), false, true);
+    expect(humansOff.hiddenHumans).toBe(1);
+    expect(humansOff.hiddenAgents).toBe(0);
   });
 });

@@ -198,16 +198,18 @@ function parsesAsUrl(value: string): boolean {
 
 // ───────────────────────── source ─────────────────────────
 
-/** i18n keys (namespace `details`) of the three source labels (US-10). */
+/** i18n keys (namespace `details`) of the source labels (US-10). */
 const SOURCE_LABEL_KEYS: Record<IssueSource, string> = {
   human: 'properties.source.human',
   agent_directed: 'properties.source.agentDirected',
   agent_autonomous: 'properties.source.agentAutonomous',
+  api: 'properties.source.api',
 };
 
 /**
  * The `details:` i18n key labelling an issue source (US-10): "human" /
- * "agent on request" / "agent on its own". A value outside the known set (a
+ * "agent on request" / "agent on its own" / "API" (a write with an API key
+ * through the public REST API). A value outside the known set (a
  * newer server) → `null`: the segment is not drawn and the raw value is
  * never printed. The parameter is `string`, not `IssueSource`, because
  * the value comes off the wire and the type is a promise the server can

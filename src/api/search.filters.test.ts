@@ -45,12 +45,17 @@ describe('sk-346 — search narrowing on the HTTP boundary', () => {
     expect(query.get('isBlocked')).toBe('false');
   });
 
-  test('leaves existing callers unscoped when the new selections are absent', async () => {
-    await globalSearch({ q: 'needle', source: 'human', origin: [] });
-    const query = sentQuery();
-    expect([...query.keys()].sort()).toEqual(['q', 'source']);
-    expect(query.get('source')).toBe('human');
-  });
+  // sk-878.3.1 — `api` is the exact source the Tasks column sends when the
+  // reader picks «API»: on its own, with no origin group.
+  test.each(['human', 'api'] as const)(
+    'leaves existing callers unscoped when the new selections are absent (source=%s)',
+    async (source) => {
+      await globalSearch({ q: 'needle', source, origin: [] });
+      const query = sentQuery();
+      expect([...query.keys()].sort()).toEqual(['q', 'source']);
+      expect(query.get('source')).toBe(source);
+    },
+  );
 
   test('exposes an expired cursor through the stable HTTP error code', async () => {
     fetchSpy.mockResolvedValue(new Response(JSON.stringify({ error: 'invalid_cursor' }), {

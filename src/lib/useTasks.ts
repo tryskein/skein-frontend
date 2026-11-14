@@ -112,7 +112,9 @@ import {
   type IssueStatus,
   type IssueSummary,
   type OriginFilter,
+  type IssueSource,
   type PriorityFilter,
+  type TaskOriginFilter,
   type StatusFilter,
   type TasksSortKey,
   type TypeFilter,
@@ -217,7 +219,7 @@ export interface UseTasksArgs {
   /** Status filter buttons in the column header. `'all'` = no filter. */
   statusFilter: StatusFilter;
   /** Source / origin filter buttons. `'all'` = no filter. */
-  originFilter: OriginFilter;
+  originFilter: TaskOriginFilter;
   /**
    * Type filter pills (bug/feature/task/.../note + 'all'). The
    * cross-project `/api/v1/issues` surface accepts `type=` on the
@@ -913,8 +915,12 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
   const wireUnreviewed: boolean | undefined =
     statusFilter === 'unreviewed' ? true : undefined;
 
+  // sk-878.3.1 — the origin choice goes on the wire on EVERY surface: a
+  // group as `origin=`, the exact API source as `source=api` with no group.
   const wireOrigin: OriginFilter | undefined =
-    originFilter === 'all' ? undefined : originFilter;
+    originFilter === 'all' || originFilter === 'api' ? undefined : originFilter;
+  const wireSource: IssueSource | undefined =
+    originFilter === 'api' ? 'api' : undefined;
 
   // sk-86 — wire-side priority filter. The pill value is the string union
   // ('all' | '0'..'4'); the wire/board priority is the int 0..4. 'all' →
@@ -981,6 +987,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
           // sk-86 — priority is a wire filter on /search.
           priority: wirePriority,
           origin: wireOrigin ? [wireOrigin] : undefined,
+          source: wireSource,
           createdBy: onMeMode ? 'not-me' : outboxMode ? 'me' : undefined,
           assignee: onMeMode ? 'me' : assigneeFilter ?? undefined,
           acceptedAt: onMeMode ? 'not-null' : undefined,
@@ -1026,6 +1033,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
             createdBy: 'not-me',
             acceptedAtNotNull: true,
             origin: wireOrigin,
+            source: wireSource,
             componentId: selectedComponent ?? undefined,
             // sk-44.2 — search no longer flows through `text=`; a
             // non-empty box routes to the RRF branch above (searchMode),
@@ -1041,6 +1049,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
           // sk-86 — priority is a wire filter on the project-scoped endpoint.
           priority: wirePriority,
           origin: wireOrigin,
+          source: wireSource,
           createdBy: outboxMode ? 'me' : undefined,
           // sk-303.14 — the project-scoped half of the delegated surface.
           // Gated on the lens: the selection narrows THIS surface, and the
@@ -1080,6 +1089,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
           status: wireStatus,
           includeClosed: statusFilter === 'all' ? true : undefined,
           origin: wireOrigin,
+          source: wireSource,
           isBlocked: wireIsBlocked,
           // sk-303.14 — the cross-project half of the same surface. No
           // `includeClosed` rides along: the server lifts its own
@@ -1105,6 +1115,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
           createdBy: 'not-me',
           acceptedAtNotNull: true,
           origin: wireOrigin,
+          source: wireSource,
           isBlocked: wireIsBlocked,
           space: spaceParam,
           cursor,
@@ -1123,6 +1134,7 @@ export function useTasks(args: UseTasksArgs): UseTasksResult {
         status: wireStatus,
         type: typeFilter === 'all' ? undefined : typeFilter,
         origin: wireOrigin,
+        source: wireSource,
         // sk-79 — assignee filter on the cross-project "All projects"
         // surface. null when no project picker is shown.
         assignee: assigneeFilter ?? undefined,

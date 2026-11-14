@@ -44,7 +44,9 @@ export function useIssueComments(projectId: string, issueId: string) {
  * The filter, applied once and reported whole.
  *
  * sk-16 — the wire semantics from skein-api: `human-driven` = human +
- * agent_directed, `agent-autonomous` = agent_autonomous. Both chips off
+ * agent_directed + api, `agent-autonomous` = agent_autonomous. Only the
+ * autonomous kind leaves the Humans chip, so a comment written with an API
+ * key (`api`) is counted and shown there. Both chips off
  * yields an empty list on purpose — there is no implicit «show all»
  * fallback, because a filter that quietly stops filtering is worse than
  * an empty screen that says why.
@@ -64,11 +66,13 @@ export function splitCommentsByFilter(
   comments: CommentDTO[] | undefined,
   showHumans: boolean,
   showAgents: boolean,
+  onlyApi = false,
 ): {
   all: CommentDTO[];
   visible: CommentDTO[];
   humansCount: number;
   agentsCount: number;
+  apiCount: number;
   hiddenHumans: number;
   hiddenAgents: number;
 } {
@@ -76,14 +80,21 @@ export function splitCommentsByFilter(
   const isAutonomous = (c: CommentDTO) => c.authorKind === 'agent_autonomous';
   const humansCount = all.filter((c) => !isAutonomous(c)).length;
   const agentsCount = all.length - humansCount;
-  const visible = all.filter((c) => (isAutonomous(c) ? showAgents : showHumans));
+  const apiCount = all.filter((c) => c.authorKind === 'api').length;
+  // sk-878.3.1 — the exact «API» choice narrows within the two chips: only
+  // comments written with an API key stay (they belong to Humans).
+  const visible = all.filter(
+    (c) => (isAutonomous(c) ? showAgents : showHumans) && (!onlyApi || c.authorKind === 'api'),
+  );
+  const visibleAgents = visible.filter(isAutonomous).length;
   return {
     all,
     visible,
     humansCount,
     agentsCount,
-    hiddenHumans: showHumans ? 0 : humansCount,
-    hiddenAgents: showAgents ? 0 : agentsCount,
+    apiCount,
+    hiddenHumans: humansCount - (visible.length - visibleAgents),
+    hiddenAgents: agentsCount - visibleAgents,
   };
 }
 
@@ -117,10 +128,12 @@ export interface CommentsThreadProps {
   issueId: string;
   /** When true, hide the composer (e.g. closed issues — kept editable for now). */
   disabled?: boolean;
-  /** Show human + agent_directed comments. Default true. */
+  /** Show human, agent_directed and api comments. Default true. */
   showHumans?: boolean;
   /** Show agent_autonomous comments. Default true. */
   showAgents?: boolean;
+  /** sk-878.3.1 — show only comments written with an API key (`api`). Default false. */
+  onlyApi?: boolean;
   /** Turn every chip back on. Supplied by the surface that owns them. */
   onResetFilter?: () => void;
 }
@@ -131,6 +144,7 @@ export function CommentsThread({
   disabled,
   showHumans = true,
   showAgents = true,
+  onlyApi = false,
   onResetFilter,
 }: CommentsThreadProps) {
   const { t } = useTranslation('comments');
@@ -194,7 +208,7 @@ export function CommentsThread({
   };
 
   const { all: allComments, visible: visibleComments, hiddenAgents, hiddenHumans } =
-    splitCommentsByFilter(commentsQuery.data, showHumans, showAgents);
+    splitCommentsByFilter(commentsQuery.data, showHumans, showAgents, onlyApi);
   const hidden = hiddenAgents + hiddenHumans;
 
   // The post is in flight: the row is on screen before the server has
@@ -292,16 +306,17 @@ export function CommentsThread({
         <Box mt="sm">
           <div className="comment-hidden-note">
             <IconFilter size={16} stroke={1.75} aria-hidden />
-            {/* Exactly one of the two is non-zero here, and that is not
-                luck: closing BOTH chips leaves nothing visible, which
-                is the plaque's case rather than this strip's. So the
-                pair is a total choice and needs no neutral third
-                phrasing — which would have been dead code carrying a
-                dead pair of dictionary entries. */}
+            {/* Without the API choice exactly one of the two is non-zero
+                here, and that is not luck: closing BOTH chips leaves
+                nothing visible, which is the plaque's case rather than
+                this strip's. The API choice can hide from both groups at
+                once, so it names its own reason with the whole count. */}
             <span>
-              {hiddenAgents > 0
-                ? t('hiddenByFilter', { count: hiddenAgents })
-                : t('hiddenByFilterHumans', { count: hiddenHumans })}
+              {onlyApi
+                ? t('hiddenByFilterApi', { count: hidden })
+                : hiddenAgents > 0
+                  ? t('hiddenByFilter', { count: hiddenAgents })
+                  : t('hiddenByFilterHumans', { count: hiddenHumans })}
             </span>
             {onResetFilter ? (
               <button type="button" className="comment-hidden-show" onClick={onResetFilter}>
@@ -393,9 +408,10 @@ export function CommentsThread({
 
 /**
  * sk-16 — the INTENT chip beside the author. `human` carries none (the
- * default / common case stays uncluttered); `agent_directed` and
- * `agent_autonomous` each get one, so the reader can tell an answer
- * from an agent's own note without reading the body.
+ * default / common case stays uncluttered); `agent_directed`,
+ * `agent_autonomous` and `api` (written with an API key through the
+ * public REST API) each get one, so the reader can tell an answer from an
+ * agent's own note or an integration's write without reading the body.
  *
  * Intent is not transport. The avatar and the `· agent` / `· system`
  * suffix on the timestamp say WHO wrote; this says who decided to. The
@@ -406,11 +422,17 @@ function CommentKindBadge({ kind }: { kind: CommentDTO['authorKind'] }) {
   const { t } = useTranslation('comments');
   if (kind === 'human') return null;
   const label =
-    kind === 'agent_directed' ? t('kind.directed') : t('kind.autonomous');
+    kind === 'agent_directed'
+      ? t('kind.directed')
+      : kind === 'api'
+        ? t('kind.api')
+        : t('kind.autonomous');
   const title =
     kind === 'agent_directed'
       ? t('kind.directedTitle')
-      : t('kind.autonomousTitle');
+      : kind === 'api'
+        ? t('kind.apiTitle')
+        : t('kind.autonomousTitle');
   // sk-16 review fix W6 — class-driven instead of inline-style, so the
   // theme tokens and the forced-colors repair reach it.
   //
@@ -420,7 +442,7 @@ function CommentKindBadge({ kind }: { kind: CommentDTO['authorKind'] }) {
   // name on a non-interactive span (per ARIA 1.2 Accessible Name spec).
   return (
     <span
-      className={`comment-kind-badge ${kind === 'agent_directed' ? 'directed' : 'autonomous'}`}
+      className={`comment-kind-badge ${kind === 'agent_directed' ? 'directed' : kind === 'api' ? 'api' : 'autonomous'}`}
       role="img"
       aria-label={t('kind.aria', { label, title })}
       title={title}

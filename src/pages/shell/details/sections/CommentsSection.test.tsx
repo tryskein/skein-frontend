@@ -450,3 +450,54 @@ describe('CommentsThread author_kind filter (sk-16), driven from the heading', (
     expect(mockedList).toHaveBeenCalledTimes(1);
   });
 });
+
+// sk-878.3.1 — the exact author kind `api` is a filter of the UI (spec,
+// «Data: record source»): next to the Humans / Agents chips, an «API» chip
+// keeps only the comments written with an API key.
+describe('sk-878.3.1 — the API chip keeps only api comments', () => {
+  const withApi = (): CommentDTO[] => [
+    ...mixed(),
+    comment({ id: 'c-api', body: 'integration note', author: 'ci-bot', authorType: 'agent', authorKind: 'api' }),
+  ];
+
+  test('choosing API leaves only the api comment; choosing it again brings the rest back', async () => {
+    mockedList.mockResolvedValue(withApi());
+    renderSection(4);
+    await waitFor(() => screen.getByText('integration note'));
+    const api = screen.getByRole('button', { name: /^API/ });
+    expect(api.getAttribute('aria-pressed')).toBe('false');
+    expect(api.textContent).toContain('1');
+
+    fireEvent.click(api);
+    await waitFor(() => expect(screen.queryByText('human note')).toBeNull());
+    expect(screen.queryByText('directed agent note')).toBeNull();
+    expect(screen.queryByText('autonomous agent note')).toBeNull();
+    expect(screen.getByText('integration note')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^API/ }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: /^API/ }));
+    await waitFor(() => expect(screen.getByText('human note')).toBeTruthy());
+    expect(screen.getByText('autonomous agent note')).toBeTruthy();
+    expect(screen.getByText('integration note')).toBeTruthy();
+  });
+
+  test('API narrows within Humans: with Humans off nothing is left', async () => {
+    mockedList.mockResolvedValue(withApi());
+    renderSection(4);
+    await waitFor(() => screen.getByText('integration note'));
+    fireEvent.click(screen.getByRole('button', { name: /^API/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Humans/ }));
+    await waitFor(() => expect(screen.queryByText('integration note')).toBeNull());
+    // The emptied thread offers the way back, and it clears the API choice too.
+    fireEvent.click(screen.getByRole('button', { name: 'Reset filter' }));
+    await waitFor(() => expect(screen.getByText('human note')).toBeTruthy());
+    expect(screen.getByRole('button', { name: /^API/ }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  test('a thread without api comments gets no API chip', async () => {
+    mockedList.mockResolvedValue(mixed());
+    renderSection(3);
+    await waitFor(() => screen.getByText('human note'));
+    expect(screen.queryByRole('button', { name: /^API/ })).toBeNull();
+  });
+});

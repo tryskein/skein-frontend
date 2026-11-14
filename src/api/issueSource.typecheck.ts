@@ -2,7 +2,7 @@
  * sk-421.1 SC-007 / US-11 — the three frontend places that type an issue
  * source (the detail DTO field, the task-list `source` param and the
  * `/search` `source` param) accept exactly the server's closed set
- * `human` / `agent_directed` / `agent_autonomous`.
+ * `human` / `agent_directed` / `agent_autonomous` / `api`.
  *
  * A compile-time pin, checked by `npm run typecheck` (`tsc -b`, which
  * covers `src/**`) and never executed: if any place still admits the
@@ -21,6 +21,7 @@ export const detailSourcePin: DetailSource[] = [
   'human',
   'agent_directed',
   'agent_autonomous',
+  'api',
   // @ts-expect-error — legacy value outside the server set
   'agent',
 ];
@@ -29,6 +30,7 @@ export const listSourcePin: ListSource[] = [
   'human',
   'agent_directed',
   'agent_autonomous',
+  'api',
   // @ts-expect-error — legacy value outside the server set
   'agent',
 ];
@@ -37,6 +39,7 @@ export const searchSourcePin: SearchSource[] = [
   'human',
   'agent_directed',
   'agent_autonomous',
+  'api',
   // @ts-expect-error — legacy value outside the server set
   'agent',
 ];

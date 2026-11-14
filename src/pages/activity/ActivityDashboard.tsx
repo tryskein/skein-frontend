@@ -992,6 +992,7 @@ interface ThroughputMatrixProps {
 }
 
 function ThroughputMatrix({ scoring }: ThroughputMatrixProps) {
+  const { t: tDash } = useTranslation('dashboard');
   const metrics = scoring?.metrics ?? [];
   if (metrics.length === 0) {
     return <p className="activity-empty">no metrics in this window</p>;
@@ -1017,7 +1018,7 @@ function ThroughputMatrix({ scoring }: ThroughputMatrixProps) {
             human
           </th>
           <th scope="col" className="axis-d">
-            agent_directed
+            agent_directed · {tDash('axis.api')}
           </th>
           <th scope="col" className="axis-a">
             autonomous
@@ -2471,14 +2472,17 @@ export function ActivityDashboard() {
  * The split mirrors the sk-16 `comments.author_kind` axis exactly:
  * `human` = posted via Web UI, `agent_directed` = agent posted on
  * the human user's instruction, `agent_autonomous` = agent decided
- * on its own (handoff note, side-quest, progress update).
+ * on its own (handoff note, side-quest, progress update). A write with an
+ * API key (`api`) has no axis of its own: skein-api counts it on the
+ * directed one, so the `d` axis is labelled with API too.
  */
 function AxisLegend() {
+  const { t } = useTranslation('dashboard');
   return (
     <aside className="activity-axis-legend" aria-label="Axis legend">
       <strong>h</strong> = human (via Web UI)
       <span className="activity-axis-sep">·</span>
-      <strong>d</strong> = agent_directed (agent directed by a human)
+      <strong>d</strong> = agent_directed (agent directed by a human) {t('axis.apiLegend')}
       <span className="activity-axis-sep">·</span>
       <strong>a</strong> = agent_autonomous (agent on its own — handoff, side-quest, progress)
     </aside>

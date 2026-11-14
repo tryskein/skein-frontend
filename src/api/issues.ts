@@ -76,6 +76,14 @@ export type StatusFilter =
 export type OriginFilter = 'human-driven' | 'agent-autonomous' | 'all';
 
 /**
+ * sk-878.3.1 — the origin choice of the Tasks column: the wire groups of
+ * `OriginFilter` plus the exact source `api` (written with an API key). The
+ * groups travel as `origin=`, `api` as `source=api` with no group; the
+ * human-driven group itself includes `api` on the server.
+ */
+export type TaskOriginFilter = OriginFilter | 'api';
+
+/**
  * Phase 2 ui-redesign — type filter row in the Tasks column. `'all'`
  * means "no filter". Backend's ListIssues has no `Types` field yet —
  * useTasks post-filters on the wire response by `item.type`. Works
@@ -147,12 +155,14 @@ export type IssueType =
  * Issue origin — the server's closed set (sk-421.1 US-11). `human` —
  * created by a person (web UI / REST); `agent_directed` — created by an
  * agent on a person's instruction; `agent_autonomous` — created by an
- * agent on its own initiative. The detail DTO, the task-list `source`
+ * agent on its own initiative; `api` — written with an API key through the
+ * public REST API without an explicit kind (counted as `agent_directed` and
+ * in the human-driven origin group, shown as "API"). The detail DTO, the task-list `source`
  * param and the `/search` `source` param all use this one type, so a
  * value outside the server set fails the type build instead of hitting
  * `400 invalid_source` at runtime.
  */
-export type IssueSource = 'human' | 'agent_directed' | 'agent_autonomous';
+export type IssueSource = 'human' | 'agent_directed' | 'agent_autonomous' | 'api';
 
 export type CommentAuthorType = 'human' | 'agent' | 'system';
 
@@ -703,14 +713,16 @@ export interface CommitRef {
  *                         ("leave a comment with my answer below")
  *  - `agent_autonomous` — posted by an agent on its own initiative
  *                         (handoff note, progress update, side-quest)
+ *  - `api`              — posted with an API key through the public REST
+ *                         API without an explicit kind; shown as "API"
  *
- * The Humans / Agents filter chips on the comment thread fold the first
- * two into "Humans" (a human is semantically behind the comment) and
- * surface `agent_autonomous` separately as "Agents". `authorType`
+ * The Humans / Agents filter chips on the comment thread fold `human`,
+ * `agent_directed` and `api` into "Humans" (a human is semantically behind
+ * the comment) and surface `agent_autonomous` separately as "Agents". `authorType`
  * (`human` / `agent` / `system`) is preserved on the wire — it reports
  * HOW the comment was posted, not WHO is behind it.
  */
-export type CommentAuthorKind = 'human' | 'agent_directed' | 'agent_autonomous';
+export type CommentAuthorKind = 'human' | 'agent_directed' | 'agent_autonomous' | 'api';
 
 export interface CommentDTO {
   id: string;
@@ -897,8 +909,8 @@ export interface ListIssuesParams {
   componentId?: string;
   /**
    * Filter by issue origin — one of the server's closed set
-   * (`IssueSource`: `human` / `agent_directed` / `agent_autonomous`).
-   * Vision §F24/§F25. Server validates and returns 400 invalid_source
+   * (`IssueSource`: `human` / `agent_directed` / `agent_autonomous` /
+   * `api`). Vision §F24/§F25. Server validates and returns 400 invalid_source
    * on anything else.
    *
    * Distinct from `origin` above: `source` filters on the creator-set
@@ -1090,6 +1102,11 @@ export interface ListMineParams {
    */
   origin?: 'human-driven' | 'agent-autonomous' | 'all';
   /**
+   * sk-878.3.1 — exact issue source, the server's closed set; maps to
+   * `?source=`. Intersects with `origin` when both are set.
+   */
+  source?: IssueSource;
+  /**
    * sk-31. Derived blocked-ness filter; same semantics as the project-
    * scoped path. Maps to `?isBlocked=true|false` on the wire.
    */
@@ -1126,6 +1143,7 @@ function buildMineQuery(params: ListMineParams): string {
   if (params.createdBy) sp.set('createdBy', params.createdBy);
   if (params.status) sp.set('status', params.status);
   if (params.origin && params.origin !== 'all') sp.set('origin', params.origin);
+  if (params.source) sp.set('source', params.source);
   if (params.isBlocked !== undefined) sp.set('isBlocked', String(params.isBlocked));
   // sk-303.14 — literal "true" only; absence is the "no selection" value.
   if (params.unreviewed) sp.set('unreviewed', 'true');
@@ -1186,6 +1204,11 @@ export interface ListAllIssuesParams {
    * we keep the literal here so the UI has one source of truth.
    */
   origin?: OriginFilter;
+  /**
+   * sk-878.3.1 — exact issue source, the server's closed set; maps to
+   * `?source=`. Intersects with `origin` when both are set.
+   */
+  source?: IssueSource;
   /** `'me'` resolves to the caller; any other value is a free-form username. */
   assignee?: 'me' | string;
   /**
@@ -1224,6 +1247,7 @@ function buildAllIssuesQuery(params: ListAllIssuesParams): string {
   if (params.status) sp.set('status', params.status);
   if (params.type) sp.set('type', params.type);
   if (params.origin && params.origin !== 'all') sp.set('origin', params.origin);
+  if (params.source) sp.set('source', params.source);
   if (params.assignee) sp.set('assignee', params.assignee);
   if (params.createdBy) sp.set('createdBy', params.createdBy);
   if (params.acceptedAtNull) sp.set('acceptedAt', 'null');

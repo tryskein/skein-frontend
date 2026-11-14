@@ -89,7 +89,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  OriginFilter,
+  TaskOriginFilter,
   PriorityFilter,
   StatusFilter,
   TasksSortKey,
@@ -137,7 +137,7 @@ export interface UseTaskSearchModesArgs {
   // persisted prefs are only ever mutated through the persisted setters
   // below, and only when NO lens is active (sk-69).
   statusFilter: StatusFilter;
-  originFilter: OriginFilter;
+  originFilter: TaskOriginFilter;
   typeFilter: TypeFilter;
   /** sk-86 — live persisted priority filter; same overlay treatment as the rest. */
   priorityFilter: PriorityFilter;
@@ -149,7 +149,7 @@ export interface UseTaskSearchModesArgs {
   // prefs — the sk-46 invariant). The caller wires the chips' onChange to
   // the effective setters, not to these directly.
   setStatusFilter: (v: StatusFilter) => void;
-  setOriginFilter: (v: OriginFilter) => void;
+  setOriginFilter: (v: TaskOriginFilter) => void;
   setTypeFilter: (v: TypeFilter) => void;
   /** sk-86 — persisted priority setter (routed like the others). */
   setPriorityFilter: (v: PriorityFilter) => void;
@@ -203,7 +203,7 @@ export interface UseTaskSearchModesResult {
    * state is never mutated — these are a pure derivation.
    */
   effectiveStatusFilter: StatusFilter;
-  effectiveOriginFilter: OriginFilter;
+  effectiveOriginFilter: TaskOriginFilter;
   effectiveTypeFilter: TypeFilter;
   /** sk-86 — EFFECTIVE priority filter (cleared during unfiltered search; lens preset under a lens). */
   effectivePriorityFilter: PriorityFilter;
@@ -218,7 +218,7 @@ export interface UseTaskSearchModesResult {
    * persisted, so writes there always belong to the persisted prefs.
    */
   effectiveSetStatusFilter: (v: StatusFilter) => void;
-  effectiveSetOriginFilter: (v: OriginFilter) => void;
+  effectiveSetOriginFilter: (v: TaskOriginFilter) => void;
   effectiveSetTypeFilter: (v: TypeFilter) => void;
   /** sk-86 — EFFECTIVE priority setter (lens-ephemeral under a lens, persisted otherwise). */
   effectiveSetPriorityFilter: (v: PriorityFilter) => void;
@@ -259,7 +259,7 @@ export interface UseTaskSearchModesResult {
  */
 const FILTERS_CLEARED = {
   statusFilter: 'all' as StatusFilter,
-  originFilter: 'all' as OriginFilter,
+  originFilter: 'all' as TaskOriginFilter,
   typeFilter: 'all' as TypeFilter,
   priorityFilter: 'all' as PriorityFilter,
 };
@@ -267,7 +267,7 @@ const FILTERS_CLEARED = {
 /** The four filter axes the lens overlay owns, as one value. */
 interface LensFilters {
   statusFilter: StatusFilter;
-  originFilter: OriginFilter;
+  originFilter: TaskOriginFilter;
   typeFilter: TypeFilter;
   priorityFilter: PriorityFilter;
 }
@@ -434,7 +434,7 @@ export function useTaskSearchModes(
     [],
   );
   const setLensOriginFilter = useCallback(
-    (v: OriginFilter) => setLensFiltersState((p) => ({ ...p, originFilter: v })),
+    (v: TaskOriginFilter) => setLensFiltersState((p) => ({ ...p, originFilter: v })),
     [],
   );
   const setLensTypeFilter = useCallback(
