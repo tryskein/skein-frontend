@@ -473,7 +473,10 @@ describe('sk-421.3 T14 — branch progress indicator', () => {
     // (PL-6a), so the width is read as a number. Before, here stood
     // `'78%'` — the very entry that let rounding reach
     // the screen as a value.
-    expect(widthOf(fills(container)[0])).toBeCloseTo((7 / 9) * 100, 6);
+    // Four decimals, not six: jsdom 31 serialises a CSS percentage
+    // the way browsers do, to six significant digits (`77.7778%`). Four
+    // still tells the exact share from any whole-percent rounding.
+    expect(widthOf(fills(container)[0])).toBeCloseTo((7 / 9) * 100, 4);
   });
 
   test('F-06 — the segment size is PROPORTIONAL, and it is the ONLY one', () => {

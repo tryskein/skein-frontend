@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Loader, Modal, NativeSelect, Stack, Table, Text, TextInput } from '@mantine/core';
 import { IconPlus, IconSettings } from '@tabler/icons-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/AuthContext';
 import { BusinessError } from '../../../api/client';

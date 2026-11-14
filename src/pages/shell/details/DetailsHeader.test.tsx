@@ -15,11 +15,11 @@
  */
 
 import { ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi, type Mock } from 'vitest';
 import { render, screen, cleanup, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('../../../auth/AuthContext', async (importActual) => {
@@ -425,7 +425,7 @@ describe('DetailsHeader — sk-118 retire guard reachability', () => {
       { childIds: ['sk-42.3', 'sk-42.5'] },
     );
 
-  async function openRetireModal(onChangeStatus: ReturnType<typeof vi.fn>) {
+  async function openRetireModal(onChangeStatus: Mock<(...args: any[]) => any>) {
     const user = userEvent.setup();
     render(
       <Wrapper>

@@ -80,6 +80,19 @@ if (typeof window !== 'undefined') {
       return 0;
     },
   });
+  /*
+   * The same height, read the way @tanstack/virtual-core reads it since
+   * 3.18: the size of the scroll element comes from `clientHeight`
+   * (`getRect` in its dist), no longer from `offsetHeight`. A browser
+   * reports both; the stand reports both for the same one element.
+   */
+  Object.defineProperty(Element.prototype, 'clientHeight', {
+    configurable: true,
+    get(this: Element): number {
+      if (this.matches('.col-body')) return VIRTUAL_VIEWPORT_PX;
+      return 0;
+    },
+  });
 
   // Mantine's combobox calls `scrollIntoView()` on the active option
   // during keyboard navigation. jsdom has no layout engine and no such

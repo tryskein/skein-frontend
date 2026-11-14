@@ -25,7 +25,9 @@ interface FactoryOptions {
 const factoryOptions: FactoryOptions[] = [];
 
 vi.mock('@zxcvbn-ts/core', () => ({
-  ZxcvbnFactory: vi.fn().mockImplementation((options: unknown) => {
+  // `passwordStrength.ts` builds it with `new`; since vitest 4 a mock called
+  // with `new` constructs, so the implementation is a `function`, not an arrow.
+  ZxcvbnFactory: vi.fn().mockImplementation(function (options: unknown) {
     factoryCallCount += 1;
     factoryOptions.push(options as FactoryOptions);
     if (failNextFactoryCall) {

@@ -36,7 +36,7 @@ import type { BlockerRef, IssueDetail } from '../../../../api/issues';
 import { isDerivedBlocked, statusChipText } from '../../../../components/Attribute';
 import { SkeinTooltip } from '../../../../components/SkeinTooltip';
 import type { UseIssueDetailResult } from '../../../../lib/useIssueDetail';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 export interface BlockedBySectionProps {
   issue: IssueDetail;

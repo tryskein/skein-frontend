@@ -13,13 +13,13 @@
  * we mount the hook under a `MemoryRouter` with a route pattern that
  * matches the URL each test puts on the stack. The navigation helpers
  * call `useNavigate()`; we spy on the returned function via a partial
- * `vi.mock` of `react-router-dom` that preserves every other export.
+ * `vi.mock` of `react-router` that preserves every other export.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, render, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { COL_BOUNDS, COL_STORAGE_MAX, LayoutProvider, useLayoutState } from '../useLayoutState';
 
@@ -29,8 +29,8 @@ import { COL_BOUNDS, COL_STORAGE_MAX, LayoutProvider, useLayoutState } from '../
 // pre-navigation state and every lens assertion would test nothing.
 // The spy records the arguments and then forwards to the real router.
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return {
     ...actual,
     useNavigate: () => {

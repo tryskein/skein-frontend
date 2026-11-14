@@ -15,7 +15,7 @@ import {
   useNavigationType,
   useParams,
   useSearchParams,
-} from 'react-router-dom';
+} from 'react-router';
 import type { ViewMode } from '../api/issues';
 import type { NavLayout } from '../api/uiPrefs';
 import {

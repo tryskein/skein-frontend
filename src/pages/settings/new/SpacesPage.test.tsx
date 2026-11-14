@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import i18n from '../../../i18n/config';
 import type { CannotCreateSpaceReason, MySpace, MySpacesResponse } from '../../../api/spaces';
 import { BusinessError } from '../../../api/client';

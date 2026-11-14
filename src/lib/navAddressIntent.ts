@@ -35,7 +35,7 @@
  * the layout provider's (plan P12), and it runs only with the sections
  * layout active.
  */
-import { NavigationType } from 'react-router-dom';
+import { NavigationType } from 'react-router';
 import { TAB_PARAM } from './shellUrlState';
 
 /** The `location.state` field that carries the one-shot nonce. */

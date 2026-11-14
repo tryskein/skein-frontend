@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Group, Loader, Modal, PasswordInput, Stack, Text } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { deleteMyAccount, getAccountDeletionPreview } from '../../../api/account';
 import { BusinessError } from '../../../api/client';

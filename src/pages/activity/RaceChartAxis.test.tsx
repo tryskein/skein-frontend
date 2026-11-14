@@ -29,7 +29,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../api/dashboard', async () => {
   const actual = await vi.importActual<typeof import('../../api/dashboard')>('../../api/dashboard');

@@ -12,7 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { MantineProvider } from '@mantine/core';
 
 // ═══════════════════ 7. The rendered half ═════════════════════════════
@@ -44,8 +44,8 @@ vi.mock('../../../lib/useLayoutState', () => ({
   // file mocks the layout wholesale, so there is no context to hand back.
   useOptionalLayoutState: () => null,
 }));
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => vi.fn() };
 });
 vi.mock('../../../lib/useReminders', () => ({ useRingingTaskCount: () => 0, useRingEpoch: () => 0 }));

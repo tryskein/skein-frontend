@@ -25,7 +25,7 @@
 import { createElement, Fragment } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import * as signalr from '@microsoft/signalr';
 import i18n from '../i18n/config';

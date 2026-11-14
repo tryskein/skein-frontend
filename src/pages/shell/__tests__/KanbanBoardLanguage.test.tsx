@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import i18n from '../../../i18n/config';

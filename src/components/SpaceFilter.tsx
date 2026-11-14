@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { MySpace } from '../api/spaces';
 import { useMySpaces } from '../lib/useMySpaces';

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@mantine/core';
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { AccountErrorCode, confirmEmail } from '../api/auth';
 import { TAB_PARAM } from '../lib/shellUrlState';
 import { useAuthConfig } from '../lib/useAuthConfig';

@@ -56,7 +56,7 @@ async function loadGraph() {
   return {
     React: await import('react'),
     rtl: await import('@testing-library/react'),
-    rr: await import('react-router-dom'),
+    rr: await import('react-router'),
     rq: await import('@tanstack/react-query'),
     ls: (await import('../useLayoutState')) as LayoutModule,
     prefs: await import('../useUiPrefs'),

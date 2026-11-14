@@ -44,8 +44,8 @@ import type {
 // reads `useNavigate`; this file's stand has no router. A navigation spy
 // replaces the router; the earlier tests of the file do not navigate and do not notice the spy.
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return { ...actual, useNavigate: () => router.navigate };
 });
 

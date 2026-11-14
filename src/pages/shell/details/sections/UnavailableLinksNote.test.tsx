@@ -16,7 +16,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import type { BlockerRef, IssueDetail } from '../../../../api/issues';
 import i18n, { DEFAULT_LANGUAGE } from '../../../../i18n/config';
 

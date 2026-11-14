@@ -1,7 +1,7 @@
 import { useMemo, useState, type ClipboardEvent, type ReactNode, type Ref } from 'react';
 import { Loader, Select, TextInput } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { TFunction } from 'i18next';
 import {
   IconChevronDown,

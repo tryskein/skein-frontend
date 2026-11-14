@@ -28,7 +28,7 @@ import {
   within,
 } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import {
   countActiveFilters,

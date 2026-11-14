@@ -83,7 +83,7 @@ import {
   type ProjectFocus,
 } from '../../lib/kanbanProjectFocus';
 import { useMySpaces } from '../../lib/useMySpaces';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { TaskFilters, type AssigneeOption, type ProjectFocusOption } from './TaskFilters';
 import {
   TaskTreeVirtualList,

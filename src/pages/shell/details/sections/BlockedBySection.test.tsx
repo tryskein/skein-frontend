@@ -13,7 +13,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import type { DependencyEdge, DependencyList } from '../../../../api/dependencies';
 import type { BlockerRef, IssueDetail } from '../../../../api/issues';
 import i18n, { DEFAULT_LANGUAGE } from '../../../../i18n/config';
@@ -32,8 +32,8 @@ vi.mock('../../../../lib/useLayoutState', () => ({
 // Review F-3 — a blocker link navigates by path (`/projects/<pid>/issues/<id>`),
 // so the navigation spy is `useNavigate`, not the layout helper.
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return { ...actual, useNavigate: () => router.navigate };
 });
 

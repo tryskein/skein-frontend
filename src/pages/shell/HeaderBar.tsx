@@ -25,7 +25,7 @@ import {
   IconX,
 } from '@tabler/icons-react';
 import { Popover } from '@mantine/core';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { Avatar } from '../../components/Avatar';
 import { LanguageChoiceList, LanguageSwitcher } from '../../components/LanguageSwitcher';

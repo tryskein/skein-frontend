@@ -17,11 +17,12 @@
  * signup, the invitation preview, the confirmation), the session (none),
  * the shell and `window.turnstile`.
  */
+import type { TOptions } from 'i18next';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import i18n from '../i18n/config';
 
 const world = vi.hoisted(() => ({
@@ -102,7 +103,7 @@ function installTurnstile() {
   return { widgets, fake };
 }
 
-const t = (key: string, opts?: Record<string, unknown>) => i18n.t(key, opts) as string;
+const t = (key: string, opts: TOptions = {}) => i18n.t(key, opts) as string;
 const signupButton = () => screen.getByRole('button', { name: t('auth:signup.submit') });
 const consentBox = () => screen.getByRole('checkbox');
 

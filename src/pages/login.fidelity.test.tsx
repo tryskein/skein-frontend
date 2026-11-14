@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import { skeinTheme } from '../theme';
 import { en } from '../i18n/locales/en';

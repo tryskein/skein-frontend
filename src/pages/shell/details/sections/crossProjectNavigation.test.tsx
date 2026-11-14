@@ -20,7 +20,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import type { DependencyList } from '../../../../api/dependencies';
 import type { IssueDetail, IssueTreeNode } from '../../../../api/issues';

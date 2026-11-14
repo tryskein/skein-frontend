@@ -70,7 +70,7 @@ import {
   defaultScheduler,
   notifyManager,
 } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 import type {
   FetchIssueTreeArgs,

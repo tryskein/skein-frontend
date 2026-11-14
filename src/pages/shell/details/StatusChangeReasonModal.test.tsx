@@ -24,11 +24,11 @@
  */
 
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi, type Mock } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('../../../auth/AuthContext', async (importActual) => {
@@ -253,7 +253,7 @@ describe('StatusChangeReasonModal — outcome pick on close (US-1, US-2)', () =>
 
 describe('StatusChangeReasonModal — the outcome path through the card header', () => {
   const openCloseModal = async (
-    onChangeStatus: ReturnType<typeof vi.fn>,
+    onChangeStatus: Mock<(...args: any[]) => any>,
   ): Promise<ReturnType<typeof userEvent.setup>> => {
     const u = userEvent.setup();
     render(

@@ -33,9 +33,9 @@ Russian.
 
 ## Stack
 
-- React 18, TypeScript 5, Vite 5
+- React 19, TypeScript 6, Vite 8
 - Mantine 7, Tabler icons
-- TanStack Query 5 and TanStack Virtual, React Router 6
+- TanStack Query 5 and TanStack Virtual, React Router 8
 - `@microsoft/signalr` for live updates
 - `markdown-it` + `shiki` + `dompurify` to render descriptions and comments
 - i18next / react-i18next, `@dnd-kit/core`, `@zxcvbn-ts/*` for password

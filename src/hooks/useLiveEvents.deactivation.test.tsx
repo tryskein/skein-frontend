@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import * as signalr from '@microsoft/signalr';
 import { AuthProvider } from '../auth/AuthContext';
 import { RequireAuth } from '../auth/RequireAuth';

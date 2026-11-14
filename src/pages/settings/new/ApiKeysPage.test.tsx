@@ -15,12 +15,13 @@
  * `{mode, projects | spaces}` with project UUIDs and space short ids, an
  * optional `expiresAt`. Elements are found by role and accessible name.
  */
+import type { TOptions } from 'i18next';
 import { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import i18n from '../../../i18n/config';
 import type { ApiKey, ApiKeyCreateResponse, ApiKeysSettings } from '../../../api/api-keys';
 import { ApiError, BusinessError } from '../../../api/client';
@@ -105,7 +106,7 @@ vi.mock('../../../lib/useMySpaces', () => ({
 
 import { NewApiKeysPage } from './ApiKeysPage';
 
-const tk = (key: string, opts?: Record<string, unknown>) => i18n.t(`settings:keys.${key}`, opts);
+const tk = (key: string, opts: TOptions = {}) => i18n.t(`settings:keys.${key}`, opts);
 
 const SETTINGS: ApiKeysSettings = {
   publicApiEnabled: true,

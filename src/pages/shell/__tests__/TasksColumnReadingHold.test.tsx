@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import * as signalr from '@microsoft/signalr';
 import i18n from '../../../i18n/config';
 

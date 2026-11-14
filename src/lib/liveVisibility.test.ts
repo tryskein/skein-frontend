@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { InfiniteQueryObserver, QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query';
-import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router-dom';
+import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router';
 import * as signalr from '@microsoft/signalr';
 import '../i18n/config';
 import { AuthProvider } from '../auth/AuthContext';

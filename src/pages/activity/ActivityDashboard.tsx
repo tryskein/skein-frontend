@@ -35,7 +35,7 @@ import {
   type ReactNode,
 } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { IconFlame, IconTrophyOff } from '@tabler/icons-react';
 
 import {

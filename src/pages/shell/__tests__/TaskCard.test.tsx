@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { TaskCard } from '../TaskCard';

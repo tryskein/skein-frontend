@@ -21,7 +21,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { useMemo, useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { EMPTY_REMINDERS_LIST } from '../../../api/reminders';

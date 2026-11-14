@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { render, screen, cleanup, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../auth/AuthContext', () => ({
   // sk-551.8 — LayoutProvider reads the layout via useNavLayoutOptional;

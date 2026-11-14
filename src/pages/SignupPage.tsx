@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { Button, Group, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router';
 import { BusinessError } from '../api/client';
 import {
   AccountErrorCode,

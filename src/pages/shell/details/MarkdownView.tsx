@@ -59,6 +59,11 @@ const md = new MarkdownIt({
   linkify: true,
   breaks: true,
 });
+// markdown-it 15 ships linkify-it 6, which no longer recognizes
+// schemaless links (`example.com/path`, `www.example.com`) by default.
+// Notes written before the upgrade rely on them being linked, so the
+// previous recognition is kept explicitly.
+md.linkify.set({ fuzzyLink: true });
 
 // sk-41 — Shiki syntax-highlighting plugin install state.
 //

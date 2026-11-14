@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { Button, Group, Loader, Stack, Table, Text, TextInput } from '@mantine/core';
 import { IconArrowLeft } from '@tabler/icons-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/AuthContext';
 import { ApiError, BusinessError } from '../../../api/client';

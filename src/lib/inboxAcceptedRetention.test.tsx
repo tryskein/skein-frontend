@@ -27,7 +27,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { InfiniteQueryObserver, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import '../i18n/config';
 import { LiveEventsProvider, RESYNC_JITTER_MS } from '../hooks/useLiveEvents';
 import { LIVE_INVALIDATION_WINDOW_MS } from './liveInvalidationBatcher';

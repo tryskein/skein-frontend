@@ -16,7 +16,7 @@
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { MantineProvider } from '@mantine/core';
 import type { InboxTab } from '../../../lib/shellUrlState';
 import type { NotificationItem, WatchingListResponse } from '../../../api/notifications';

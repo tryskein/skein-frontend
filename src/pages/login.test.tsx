@@ -16,7 +16,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { MantineProvider } from '@mantine/core';
 import { ApiError, BusinessError } from '../api/client';
 import type { RuntimeAuthConfig } from '../api/auth';

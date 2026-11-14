@@ -33,8 +33,8 @@ vi.mock('../../../../lib/useLayoutState', () => ({
 // Review F-3 — the parent link navigates by path (`/projects/<pid>/issues/<id>`),
 // so the navigation spy is `useNavigate`, not the layout helper.
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return { ...actual, useNavigate: () => router.navigate };
 });
 

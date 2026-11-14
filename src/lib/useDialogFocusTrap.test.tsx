@@ -37,8 +37,9 @@ const STOPS = (
     {/* A text field, so «an input is a stop unless it is hidden» is tested too. */}
     <input type="text" aria-label="last" />
     <span tabIndex={-1}>not a stop</span>
-    {/* React 18's DOM types do not list `inert`; the attribute is real. */}
-    <div {...({ inert: '' } as Record<string, string>)}>
+    {/* React 19 takes `inert` as a boolean; the string `''` it needed under
+        React 18 now reads as false and leaves the attribute off. */}
+    <div inert>
       <button type="button">inert</button>
     </div>
     <div hidden>

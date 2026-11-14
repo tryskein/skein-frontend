@@ -1,6 +1,6 @@
 # skein-frontend
 
-The Skein web UI: a React 18 + Vite + TypeScript + Mantine 7 + TanStack Query
+The Skein web UI: a React 19 + Vite + TypeScript + Mantine 7 + TanStack Query
 SPA, served by nginx from this repository's image. nginx is the only public
 entry point of Skein: it serves the bundle and proxies `/api/`, `/hub`,
 `/mcp`, `/oauth2/` and `/.well-known/oauth-protected-resource[/mcp]` to

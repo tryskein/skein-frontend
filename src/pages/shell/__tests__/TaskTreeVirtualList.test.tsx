@@ -30,7 +30,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { createRef, type RefObject } from 'react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import {
   TaskTreeVirtualList,
@@ -89,7 +89,7 @@ const ROWS: FlatTreeRow[] = Array.from({ length: ROW_COUNT }, (_, i) =>
 );
 
 function renderList(
-  ref?: RefObject<TaskTreeScroller>,
+  ref?: RefObject<TaskTreeScroller | null>,
   rows: FlatTreeRow[] = ROWS,
   columns: readonly TreeOptionalColumn[] = TREE_DEFAULT_COLUMNS,
   anchorScope?: string,
@@ -108,7 +108,7 @@ function renderList(
 
 function listElement(
   client: QueryClient,
-  ref: RefObject<TaskTreeScroller> | undefined,
+  ref: RefObject<TaskTreeScroller | null> | undefined,
   rows: FlatTreeRow[],
   columns: readonly TreeOptionalColumn[],
   anchorScope?: string,

@@ -68,7 +68,7 @@
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { IconLock } from '@tabler/icons-react';
 import type {
   IssueStatus,

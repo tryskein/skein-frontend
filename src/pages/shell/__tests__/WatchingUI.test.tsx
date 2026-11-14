@@ -37,9 +37,10 @@
  * to, and a card-only test would pass with the column wired backwards.
  */
 
+import type { TOptions } from 'i18next';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { MantineProvider } from '@mantine/core';
 import type {
   NotificationItem,
@@ -125,7 +126,7 @@ import { InboxColumn } from '../InboxColumn';
  * WHICH message is shown and with WHICH numbers, it names the key and the
  * values, and a rewording of the sentence leaves it green.
  */
-const tx = (key: string, opts?: Record<string, unknown>) => i18n.t(`inbox:${key}`, opts);
+const tx = (key: string, opts: TOptions = {}) => i18n.t(`inbox:${key}`, opts);
 
 // ── fixtures ────────────────────────────────────────────────────────
 
@@ -266,9 +267,11 @@ describe('row 42 — a subtree subscription is one card, and it is the ancestor'
     mount();
     fireEvent.click(
       // The id badge splits a hierarchical id across two spans, so the
-      // computed name reads «sk-42. 1» — hence the tolerant separator.
+      // computed name may read «sk-42. 1» or «sk-42.1» — hence the tolerant
+      // separator. What follows the id is not a digit or a dot, so the row
+      // of sk-42.1 is told from sk-42.10 and sk-42.1.x.
       screen.getAllByRole('button', {
-        name: /Open descendant issue:\s*sk-42\.\s*1\s/,
+        name: /Open descendant issue:\s*sk-42\.\s*1(?![\d.])/,
       })[0],
     );
     expect(selectInboxIssue).toHaveBeenCalledWith('sk-42.1', 'sk');

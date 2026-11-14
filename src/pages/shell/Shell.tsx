@@ -7,7 +7,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
   COL_BOUNDS,
@@ -127,7 +127,7 @@ function NavLocalStateRoot({ children }: { children: ReactNode }) {
  * column (US-8). `0` until measured (and in jsdom), which leaves the
  * stored width as it is.
  */
-function useElementWidth(ref: RefObject<HTMLElement>, enabled: boolean): number {
+function useElementWidth(ref: RefObject<HTMLElement | null>, enabled: boolean): number {
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     const el = ref.current;
@@ -342,7 +342,7 @@ function restoreFocusAfterPane(lastFocused: Element | null, closedIssue: string)
  * node that has to be marked too. React does not manage the attribute, so
  * nothing re-renders it away.
  */
-function useInertBehindIssueModal(mainRef: RefObject<HTMLElement>, open: boolean): void {
+function useInertBehindIssueModal(mainRef: RefObject<HTMLElement | null>, open: boolean): void {
   useLayoutEffect(() => {
     const main = mainRef.current;
     if (main === null) return;

@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MantineProvider } from '@mantine/core';
 import i18n from '../../../i18n/config';

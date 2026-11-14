@@ -2,7 +2,7 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Divider, Loader, PasswordInput, TextInput } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { ApiError, BusinessError, RateLimitError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { useAuthConfig } from '../lib/useAuthConfig';

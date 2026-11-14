@@ -37,7 +37,7 @@ import { WatchingFilter, focusWatchingFilter } from './WatchingFilter';
 import { WatchingSelectStrip, type WatchingSelectionKind } from './WatchingSelectStrip';
 import { SkeinTooltip } from '../../components/SkeinTooltip';
 import { isHistoricalWatchingCard, type WatchingState } from '../../api/notifications';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 
 interface Props {
   /**

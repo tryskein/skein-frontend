@@ -12,7 +12,7 @@ import type { ReactNode } from 'react';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 
 import type { ProjectListItem } from '../../../api/projects';
 import type { Component } from '../../../api/components';

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { TextInput } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '@mantine/hooks';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import {
   IconLayoutSidebarLeftCollapse,
   IconSearch,

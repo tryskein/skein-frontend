@@ -23,7 +23,7 @@
  * confidently and does nothing.
  */
 
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi, type Mock } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
@@ -361,7 +361,7 @@ describe('T013 / row 19 — a refused write does not touch the screen', () => {
   test('a network failure is the same non-event', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     stubServer({ row: () => json(themeRow('light', savedVariables('light'))) });
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const fetchMock = globalThis.fetch as Mock<(...args: any[]) => any>;
     const inner = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (input: RequestInfo, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : (input as Request).url;

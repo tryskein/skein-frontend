@@ -30,7 +30,7 @@ import { cleanup, render } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import { TaskTreeVirtualList } from '../TaskTreeVirtualList';
 import { TREE_DEFAULT_COLUMNS } from '../../../lib/treeColumns';

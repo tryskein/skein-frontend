@@ -19,6 +19,7 @@
  * notification and would hide the very step that used to wipe the text
  * (see the note in designSection.test.tsx).
  */
+import type { TOptions } from 'i18next';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
@@ -115,7 +116,7 @@ function fixture(): Record<string, unknown> {
   };
 }
 
-const t = (key: string, opts?: Record<string, unknown>) => i18n.t(`details:${key}`, opts);
+const t = (key: string, opts: TOptions = {}) => i18n.t(`details:${key}`, opts);
 
 function Card() {
   const detail = useIssueDetail({ issueId: ID, projectHandle: PID });

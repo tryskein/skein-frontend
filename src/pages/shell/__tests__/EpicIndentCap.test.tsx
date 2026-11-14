@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, test } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { EpicChildrenTree } from '../details/sections/EpicChildrenTree';
 import type { IssueTreeNode, IssueTreeRowItem } from '../../../api/issues';
 

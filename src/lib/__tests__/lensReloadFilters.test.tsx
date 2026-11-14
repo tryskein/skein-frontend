@@ -25,7 +25,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { LayoutProvider, useLayoutState } from '../useLayoutState';
@@ -38,8 +38,8 @@ import { TasksUiStateProvider, useTasksUiState } from '../useTasksUiState';
 // records the call and forwards to the real router (the memory history
 // stays on the "/" route the stack is mounted at).
 const navigateSpy = vi.fn();
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return {
     ...actual,
     useNavigate: () => {

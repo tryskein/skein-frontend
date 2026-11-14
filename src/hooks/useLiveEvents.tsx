@@ -36,7 +36,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { useInRouterContext } from 'react-router-dom';
+import { useInRouterContext } from 'react-router';
 import {
   HubConnection,
   HubConnectionBuilder,

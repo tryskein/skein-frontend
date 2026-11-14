@@ -20,11 +20,12 @@
  * the public account routes, the invitation routes), the session and the
  * shell. Texts come from the dictionary.
  */
+import type { TOptions } from 'i18next';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useLocation, type Location } from 'react-router-dom';
+import { MemoryRouter, useLocation, type Location } from 'react-router';
 import i18n from '../i18n/config';
 import { BusinessError, RateLimitError } from '../api/client';
 
@@ -112,7 +113,7 @@ function renderAt(path: string) {
   );
 }
 
-const t = (key: string, opts?: Record<string, unknown>) => i18n.t(key, opts) as string;
+const t = (key: string, opts: TOptions = {}) => i18n.t(key, opts) as string;
 const refused = (code: string, extra: Record<string, unknown> = {}) =>
   new BusinessError(422, code, code, extra);
 const rateLimited = () => new RateLimitError('rate limited', 'rate_limited');

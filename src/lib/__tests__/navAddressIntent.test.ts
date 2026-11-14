@@ -13,7 +13,7 @@
  * (F8(6)). The module keeps a once-per-document flag, so each case loads
  * a fresh copy of it (`vi.resetModules`) — a fresh document.
  */
-import { NavigationType } from 'react-router-dom';
+import { NavigationType } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type IntentModule = typeof import('../navAddressIntent');

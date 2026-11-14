@@ -15,7 +15,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import type { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { EpicChildrenList } from './EpicChildrenList';
 import type {
   IssueTreeNode,
@@ -27,8 +27,8 @@ import type {
 // spy catches the transition without requiring a real route. The earlier tests of the
 // file do not navigate and do not notice the spy.
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return { ...actual, useNavigate: () => router.navigate };
 });
 

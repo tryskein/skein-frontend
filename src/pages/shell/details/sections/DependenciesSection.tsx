@@ -2,7 +2,7 @@ import { type ReactNode, useRef, useState } from 'react';
 import { IconArrowDownLeft, IconArrowUpRight, IconPlus } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   type DepType,
   type DependencyEdge,

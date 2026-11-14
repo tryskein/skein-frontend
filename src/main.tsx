@@ -5,7 +5,7 @@ import { Notifications } from '@mantine/notifications';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createAppQueryClient } from './lib/appQueryClient';
 import { installMotionIdle } from './lib/motionIdle';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import App from './App';
 import { AuthProvider } from './auth/AuthContext';
 import { ConnectionStatus } from './components/ConnectionStatus';

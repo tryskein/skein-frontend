@@ -76,8 +76,8 @@ export function fitsContentBox(
  * for, not the fallback.
  */
 export function useFitsWidth(
-  containerRef: RefObject<HTMLElement>,
-  measureRef: RefObject<HTMLElement>,
+  containerRef: RefObject<HTMLElement | null>,
+  measureRef: RefObject<HTMLElement | null>,
 ): boolean {
   const [fits, setFits] = useState(true);
   useLayoutEffect(() => {

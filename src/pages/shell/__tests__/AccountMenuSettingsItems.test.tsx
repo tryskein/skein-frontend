@@ -35,7 +35,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { MantineProvider } from '@mantine/core';
 import type { ReactNode } from 'react';
 
@@ -70,8 +70,8 @@ vi.mock('../../../lib/useLayoutState', () => ({
   LayoutProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+vi.mock('react-router', async () => {
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => vi.fn() };
 });
 

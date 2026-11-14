@@ -15,7 +15,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import { TaskTreeVirtualList } from '../TaskTreeVirtualList';
 import {

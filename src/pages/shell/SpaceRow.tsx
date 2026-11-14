@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { IconChevronDown, IconChevronRight, IconSettings } from '@tabler/icons-react';
 import type { MySpace } from '../../api/spaces';
 import { spaceHandle } from '../../lib/shellUrlState';

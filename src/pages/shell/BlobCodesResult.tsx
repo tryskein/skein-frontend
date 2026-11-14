@@ -19,7 +19,7 @@
  * the styling without hardcoded values.
  */
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { IconX, IconQuestionMark, IconBinaryTree2 } from '@tabler/icons-react';
 import { TaskCard } from './TaskCard';

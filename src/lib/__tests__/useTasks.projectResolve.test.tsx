@@ -18,7 +18,7 @@ import { type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import type { IssueSummary, ListIssuesParams, ListIssuesResult } from '../../api/issues';
 import type { ListProjectsParams, ListProjectsResult, ResolveResult } from '../../api/projects';

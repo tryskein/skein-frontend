@@ -41,7 +41,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { Query, QueryCache } from '@tanstack/react-query';
 import { ApiError, BusinessError } from '../api/client';

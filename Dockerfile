@@ -6,17 +6,17 @@
 # changes do not roll the BFF and disrupt SignalR sessions).
 #
 # Stages:
-#   1. frontend-build  — node:22-alpine, runs `npm ci` + `npm run build`
+#   1. frontend-build  — node:26-alpine, runs `npm ci` + `npm run build`
 #                        producing dist/. APP_VERSION baked into
 #                        /version.json before the build so the bundle
 #                        carries its own deployed-version identifier.
-#   2. runtime         — nginxinc/nginx-unprivileged:1.27-alpine with
+#   2. runtime         — nginxinc/nginx-unprivileged:1.30-alpine with
 #                        diagnostic utilities, dist copied to nginx
 #                        document root, project nginx.conf as the
 #                        default server, security-headers snippet.
 
 # ============ Stage 1: frontend-build ============
-FROM node:22-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 
 WORKDIR /build
 
@@ -44,7 +44,7 @@ RUN echo "{\"version\":\"${APP_VERSION}\"}" > public/version.json
 RUN npm run build
 
 # ============ Stage 2: runtime ============
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.30-alpine
 
 # Diagnostic utilities so operators
 # can debug a live pod: HTTP probes, network reach, DNS resolution,

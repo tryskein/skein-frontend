@@ -152,7 +152,7 @@ export function getHighlighter(): Promise<HighlighterCore> {
  * re-render needed when the user flips between light and dark).
  */
 export async function getMarkdownItShikiPlugin(): Promise<
-  (md: import('markdown-it').default) => void
+  (md: import('markdown-it').MarkdownIt) => void
 > {
   // Dynamic import keeps `@shikijs/markdown-it/core` out of the
   // initial bundle. We only load it once both the highlighter and the

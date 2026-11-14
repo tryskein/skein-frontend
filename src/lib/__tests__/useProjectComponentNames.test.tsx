@@ -30,7 +30,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Component } from '../../api/components';
 import { LayoutProvider, useLayoutState } from '../useLayoutState';

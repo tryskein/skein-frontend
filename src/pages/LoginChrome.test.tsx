@@ -25,7 +25,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 import i18n, { DEFAULT_LANGUAGE } from '../i18n/config';
 import { LoginPage } from './login';

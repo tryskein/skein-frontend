@@ -26,7 +26,7 @@ import {
 } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../auth/AuthContext', () => ({
   useAuth: () => ({ user: { username: 'u', role: 'user' } }),

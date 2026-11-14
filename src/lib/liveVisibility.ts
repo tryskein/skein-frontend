@@ -57,7 +57,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import type { Query } from '@tanstack/react-query';
 import {
   documentHidden,

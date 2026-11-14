@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type JSX } from 'react';
 import { Menu } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import {

@@ -1,5 +1,5 @@
 import { Center, Loader, Stack, Text } from '@mantine/core';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router';
 import { useAuth } from './AuthContext';
 import { PushSoftAsk } from '../components/PushSoftAsk';
 

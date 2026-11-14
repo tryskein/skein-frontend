@@ -41,7 +41,7 @@ function tabStops(root: HTMLElement): HTMLElement[] {
  * so the next Tab from the header comes back into the dialog by document
  * order on its own.
  */
-export function useDialogFocusTrap(ref: RefObject<HTMLElement>, active: boolean): void {
+export function useDialogFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean): void {
   useEffect(() => {
     const root = ref.current;
     if (!active || root === null) return;

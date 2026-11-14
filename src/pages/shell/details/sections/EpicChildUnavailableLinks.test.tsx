@@ -18,8 +18,8 @@ import type { IssueTreeNode, IssueTreeRowItem } from '../../../../api/issues';
 import i18n, { DEFAULT_LANGUAGE } from '../../../../i18n/config';
 
 const router = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock('react-router-dom', async (importActual) => {
-  const actual = await importActual<typeof import('react-router-dom')>();
+vi.mock('react-router', async (importActual) => {
+  const actual = await importActual<typeof import('react-router')>();
   return { ...actual, useNavigate: () => router.navigate };
 });
 

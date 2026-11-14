@@ -18,7 +18,8 @@ import {
   TextInput,
 } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../../auth/AuthContext';
 import { useAuthConfig } from '../../../lib/useAuthConfig';
@@ -1192,7 +1193,7 @@ function OwnedSpacesLinks({ spaces }: { spaces: { id: string; slug: string; name
 
 /** The consequences of removing a person from one space — as the removal dialog of 2.3 names them. */
 function removalLines(
-  t: (key: string, opts?: Record<string, unknown>) => string,
+  t: TFunction<'spaces'>,
   sp: { name: string; openAssignedIssues: number; claimedIssues: number; ownedProjects: { name: string }[] },
   username: string,
 ): string[] {

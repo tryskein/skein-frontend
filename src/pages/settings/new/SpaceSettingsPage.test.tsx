@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import i18n from '../../../i18n/config';
 import type { SpaceDetail, SpaceMember } from '../../../api/spaces';
 import { BusinessError } from '../../../api/client';

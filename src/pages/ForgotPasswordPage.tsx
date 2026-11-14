@@ -1,7 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { Button, TextInput } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { Link, Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router';
 import { requestPasswordReset } from '../api/auth';
 import { emailLanguage } from '../lib/emailLanguage';
 import { useAuthConfig } from '../lib/useAuthConfig';

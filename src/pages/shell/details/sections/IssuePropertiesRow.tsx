@@ -56,7 +56,7 @@ import {
   splitEstimate,
 } from '../../../../lib/issueProperties';
 import type { UseIssueDetailResult } from '../../../../lib/useIssueDetail';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useProjectComponentNames } from '../../../../lib/useProjectComponentNames';
 import { ForceUnlockButton } from '../ForceUnlockButton';
 

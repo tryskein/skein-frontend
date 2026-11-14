@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Group } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useNavigate, useParams } from 'react-router';
 import { AccountErrorCode, type RuntimeAuthConfig } from '../api/auth';
 import { BusinessError } from '../api/client';
 import {
