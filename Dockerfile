@@ -89,3 +89,10 @@ USER nginx
 # directive is baked into nginx.conf (5102 by default).
 ENV PORT=5102
 EXPOSE 5102
+
+# Liveness for runtimes that read the image healthcheck (plain docker,
+# compose without its own `healthcheck:`). /healthz is answered by nginx
+# itself (nginx.conf) and checks no upstream. The port is the literal
+# `listen` of nginx.conf, not $PORT, which nginx does not read.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS -o /dev/null http://127.0.0.1:5102/healthz || exit 1
