@@ -94,13 +94,10 @@ whoever builds or deploys the image will come across them.
   prefix to reach the browser at all — and it must be added to this file.
 <!-- unchecked:end -->
 
-## A stale comment, not a variable
+## No variable for the backend address
 
-`nginx.conf` carries a comment saying that `SKEIN_BFF_URL` "is templated by
-`envsubst` at container start (entrypoint hook)". **There is no such variable.**
-The backend address in that file is the literal `http://skein-web:8080`, the file
-contains no `${…}` placeholder, and the Dockerfile installs no entrypoint hook —
-it copies `nginx.conf` straight to `conf.d/default.conf`. To point the proxy
-somewhere else today, edit the file and rebuild. The comment is described here,
-rather than in a list of variables, so that nobody sets `SKEIN_BFF_URL` and
-expects it to be read.
+The backend address in `nginx.conf` is the literal `http://skein-web:8080`. The
+file contains no `${…}` placeholder, and the Dockerfile installs no entrypoint
+hook: it copies `nginx.conf` straight to `conf.d/default.conf`. An earlier
+comment in the file named a `SKEIN_BFF_URL` templated by `envsubst`; no such
+variable is read. To point the proxy somewhere else, edit the file and rebuild.
