@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { CommitRef } from '../../../../api/issues';
 import { formatRelative, formatTimestamp } from '../../../../components/format';
+import { classifyExternalRef } from '../../../../lib/issueProperties';
 import { Section } from '../Section';
 
 export interface CommitsSectionProps {
@@ -14,7 +15,10 @@ export interface CommitsSectionProps {
  * The IssueDetail wire shape carries `commitRefs[]`; we render one
  * row per commit. When the project's git provider integration was
  * able to resolve a `url`, the hash links out — otherwise we render
- * just the short hash.
+ * just the short hash. The `url` is written by whoever linked the
+ * commit, so it links out only when it is an absolute `http(s)` address
+ * (`lib/issueProperties.ts#classifyExternalRef`, the rule of the
+ * external reference); any other value leaves the hash as text.
  *
  * sk-285.6.2 — with no commits the section still SHOWS (the heading is
  * what tells a reader the field exists), but it costs one collapsed row
@@ -48,9 +52,10 @@ function CommitRow({ commit }: { commit: CommitRef }) {
     ? commit.message.split('\n')[0]
     : t('commits.noMessage');
 
-  const hashEl = commit.url ? (
+  const link = classifyExternalRef(commit.url);
+  const hashEl = link.kind === 'link' ? (
     <a
-      href={commit.url}
+      href={link.href}
       target="_blank"
       rel="noopener noreferrer"
       className="commit-hash"
