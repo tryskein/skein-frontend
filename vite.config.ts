@@ -43,6 +43,9 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // No source maps in the production bundle: dist/ is copied into the
+    // image as is, and nginx would serve every `*.js.map` beside its
+    // script. Nothing consumes them; `npm run dev` maps sources by itself.
+    sourcemap: false,
   },
 });
