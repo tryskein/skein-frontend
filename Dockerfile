@@ -22,8 +22,15 @@ WORKDIR /build
 
 # Restore in a separate layer so dependency restore is cached when
 # only source files change.
+#
+# --ignore-scripts: no install script of a dependency runs in the build,
+# so a compromised package cannot execute code here and alter the bundle.
+# The build needs none: the native bindings of the toolchain (rolldown,
+# lightningcss) arrive as platform-specific optional packages, and the
+# only dependency with an install script is fsevents, which is macOS-only
+# and never installed on Linux.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY . .
 
