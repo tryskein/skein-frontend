@@ -1,11 +1,18 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  hashKey,
+  Query,
+  QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { loginApi, LoginPayload, logoutApi, meApi, User } from '../api/auth';
 import { clearDensityBootCache } from '../lib/densityBootCache';
 import { clearNavLayoutBootCache } from '../lib/navLayoutBootCache';
 import { clearThemeBootCache } from '../lib/themeBootCache';
 import { releaseAllAccepted } from '../lib/inboxAcceptedRetention';
-import { useAuthConfig, authConfigQueryOptions } from '../lib/useAuthConfig';
+import { AUTH_CONFIG_KEY, useAuthConfig, authConfigQueryOptions } from '../lib/useAuthConfig';
 import { checkLogoutRedirect } from './logoutRedirect';
 import { toaster } from '../components/Toaster';
 
@@ -15,6 +22,32 @@ import { toaster } from '../components/Toaster';
  * value RequireAuth reads to decide whether to bounce to /login.
  */
 export const ME_KEY = ['auth', 'me'] as const;
+
+/**
+ * The two entries that are not data of the signed-in person: «who is signed
+ * in?» itself, which the caller writes right after a clear, and the anonymous
+ * deployment config (`useAuthConfig`), which the logout still reads.
+ */
+const SESSION_INDEPENDENT_HASHES = new Set([hashKey(ME_KEY), hashKey(AUTH_CONFIG_KEY)]);
+
+function isSessionQuery(query: Query): boolean {
+  return !SESSION_INDEPENDENT_HASHES.has(query.queryHash);
+}
+
+/**
+ * Drop every cached answer the server gave on behalf of the person who is
+ * signing out. Invalidating is not enough: the data stays in the cache for
+ * `gcTime`, and the next person who signs in in the same tab (no page
+ * reload) would get it rendered from the cache by the same query keys
+ * before, or instead of, their own answer. Removing also cancels the
+ * requests still in flight for the previous person.
+ *
+ * Called before `ME_KEY` is set to `null`, by the logout and by the 401
+ * handler (`lib/appQueryClient.ts#createAppQueryClient`).
+ */
+export function clearSessionQueries(client: QueryClient): void {
+  client.removeQueries({ predicate: isSessionQuery });
+}
 
 interface AuthContextValue {
   user: User | null;
@@ -33,7 +66,7 @@ interface AuthContextValue {
   sessionResolved: boolean;
   /** Log in. Throws on failure (BusinessError / RateLimitError / network). */
   login: (payload: LoginPayload) => Promise<User>;
-  /** Log out. Resolves once the cookie is cleared and cache invalidated. */
+  /** Log out. Resolves once the cookie is cleared and the session's cache dropped. */
   logout: () => Promise<void>;
 }
 
@@ -75,13 +108,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // that took them and `useInbox`'s projection depends on the identity, so
   // the first render for the next person (or for nobody) lays none of them
   // back; this drops them from memory.
+  //
+  // The query cache follows the same rule when a signed-in identity is
+  // replaced: `/me` answering nobody (a re-read with a dead cookie returns
+  // `null` without passing the 401 handler) or another person. The logout
+  // and the 401 handler have already removed the data by then; this covers
+  // the other two. Reset rather than remove: the shell may still be mounted
+  // (another person), and reset clears the data of the queries its
+  // observers hold and refetches them as the new identity.
   const identity = meQuery.data?.id ?? null;
   const shownIdentity = useRef(identity);
   useEffect(() => {
-    if (shownIdentity.current === identity) return;
+    const previous = shownIdentity.current;
+    if (previous === identity) return;
     shownIdentity.current = identity;
     releaseAllAccepted();
-  }, [identity]);
+    if (previous !== null) {
+      void queryClient.resetQueries({ predicate: isSessionQuery });
+    }
+  }, [identity, queryClient]);
 
   const loginMutation = useMutation({
     mutationFn: loginApi,
@@ -99,8 +144,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onSettled: async (result) => {
       // Even on failure (e.g. the cookie was already invalid), clear local
       // state. The protected routes will redirect to /login on next render.
+      clearSessionQueries(queryClient);
       queryClient.setQueryData<User | null>(ME_KEY, null);
-      await queryClient.invalidateQueries();
 
       // sk-285.7.2.48 — drop the boot-readable mirror of the SERVER's
       // theme (`skein.theme.boot`). It is the one piece of this

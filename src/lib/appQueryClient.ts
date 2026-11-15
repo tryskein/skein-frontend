@@ -4,7 +4,7 @@ import {
   QueryClient,
 } from '@tanstack/react-query';
 import { UnauthorizedError } from '../api/client';
-import { ME_KEY } from '../auth/AuthContext';
+import { clearSessionQueries, ME_KEY } from '../auth/AuthContext';
 
 /**
  * The app's single QueryClient, with session death wired to sign-out.
@@ -25,7 +25,9 @@ import { ME_KEY } from '../auth/AuthContext';
  * `Tasks 0` + "Failed to load tasks" while the URL stays on `/`.
  *
  * Clearing the cached user is enough to fix it — RequireAuth already
- * redirects to `/login` the moment `user` is falsy. We hook the CACHE
+ * redirects to `/login` the moment `user` is falsy. The rest of the cache
+ * goes first (`clearSessionQueries`): it is the previous person's data, and
+ * the next person to sign in in this tab must not be shown it. We hook the CACHE
  * rather than each call site so a 401 from ANY query or mutation —
  * tasks, projects, comments, reminders — routes to the same place.
  *
@@ -49,6 +51,7 @@ export function createAppQueryClient(): QueryClient {
     // Read through the client we are about to build — see the closure note
     // below; the variable is assigned before any query can run.
     if (client.getQueryData(ME_KEY) === null) return;
+    clearSessionQueries(client);
     client.setQueryData(ME_KEY, null);
   };
 

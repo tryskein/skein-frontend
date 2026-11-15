@@ -526,9 +526,9 @@ export function LiveEventsProvider({ children }: LiveEventsProviderProps) {
 
       const currentUserId = userIdRef.current;
       if (!currentUserId) {
-        // Logged out mid-flight — don't invalidate: the logout marked the
-        // whole cache stale (`AuthContext` `invalidateQueries()`, the cache
-        // itself is kept), and no reader of this session is left.
+        // Logged out mid-flight — don't invalidate: the logout removed the
+        // session's queries (`AuthContext#clearSessionQueries`), and no
+        // reader of this session is left.
         return;
       }
       // sk-622.21 T042 (K18 "User events"): `user.deactivated`
