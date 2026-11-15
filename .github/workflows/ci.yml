@@ -1,6 +1,6 @@
 name: CI
 
-# Type check and unit tests. e2e (Playwright against the live stack) and
+# Type check, unit tests and an audit of the production dependencies. e2e (Playwright against the live stack) and
 # mutation testing are run by hand and are not part of this workflow.
 
 on:
@@ -73,3 +73,18 @@ jobs:
             echo "::error::vitest reported failures"
             exit 1
           fi
+
+  audit:
+    name: Audit production dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+      # Reads package-lock.json against the npm advisory database; nothing is
+      # installed. Only the dependencies that ship in the bundle are audited,
+      # and a high or critical advisory fails the job.
+      - name: npm audit
+        run: npm audit --omit=dev --audit-level=high
