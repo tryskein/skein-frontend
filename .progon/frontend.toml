@@ -1,0 +1,24 @@
+schema = 1
+root = ".."
+
+[defaults]
+adapter = "js"
+image = "node:22-bookworm"
+prepare_image = true
+network = "grant"
+cpu = 2
+memory_mib = 4096
+
+[kind.unit]
+[kind.unit.options]
+runner = "vitest"
+
+# Advisory: the output is the list of surviving mutants, not a score.
+[kind.mutation]
+adapter = "stryker-js"
+cpu = 4
+memory_mib = 6144
+timeout_seconds = 7200
+[kind.mutation.options]
+config = "stryker.config.mjs"
+workers = 4

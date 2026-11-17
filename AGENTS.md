@@ -86,6 +86,19 @@ not change the nginx port (see `docs/env-reference.md`).
 | source-reading checks | not used | none are added; existing ones are kept as they are | — | — | — |
 | artifact contract | not used | — | — | — | — |
 
+### Running on the test VMs (progon)
+
+The profile is `.progon/frontend.toml`; run from the repository root:
+
+| Kind | Command | Narrowed run |
+|---|---|---|
+| unit | `progon frontend unit` | `progon frontend unit src/lib/accessLoss.test.ts -t '<name pattern>'` |
+| mutation | `progon frontend mutation <file>` | the arguments are Stryker `--mutate` patterns; `--since <ref>` limits it to changed lines |
+
+The product e2e suite runs from the umbrella repository: `progon skein e2e`
+(see its `AGENTS.md`). A mutation run without targets uses the `mutate` slice
+of `stryker.config.mjs`.
+
 ### Project specifics
 
 - e2e is the only end-to-end suite of Skein, so it also covers the skein-api
