@@ -210,11 +210,6 @@ export type AccountErrorCodeValue = (typeof AccountErrorCode)[keyof typeof Accou
 /** Language of a transactional email: the interface language, not stored on the user. */
 export type EmailLanguage = 'ru' | 'en';
 
-/** The email language for an i18next interface language: ru for any Russian locale, en otherwise. */
-export function emailLanguageOf(language: string): EmailLanguage {
-  return language.toLowerCase().startsWith('ru') ? 'ru' : 'en';
-}
-
 /** Body of POST /api/auth/signup. */
 export interface SignupInput {
   email: string;

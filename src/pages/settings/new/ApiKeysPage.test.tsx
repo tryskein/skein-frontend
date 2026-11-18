@@ -701,3 +701,34 @@ describe('US-10 — refusals are told by their machine code', () => {
     expect(await refusalText()).toContain(tk('errors.keyExpired'));
   });
 });
+
+// sk-977.7.49: the owner's email about a new key is in the interface
+// language — the page passes it with both create and reissue.
+describe('US-10 — the language of the new-key email', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('ru');
+  });
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  it('create passes the Russian interface language', async () => {
+    renderPage();
+    const form = await openCreateForm();
+    typeLabel(form, 'deploy-bot');
+    fireEvent.click(within(form).getByRole('radio', { name: new RegExp(tk('preset.write')) }));
+    fireEvent.click(within(form).getByRole('button', { name: tk('form.create') }));
+    await waitFor(() => expect(api.createApiKey).toHaveBeenCalledTimes(1));
+    expect(api.createApiKey.mock.calls[0][0].language).toBe('ru');
+  });
+
+  it('reissue passes the Russian interface language', async () => {
+    api.listApiKeys.mockResolvedValue([key()]);
+    renderPage();
+    const row = await rowOf('ci-runner');
+    fireEvent.click(within(row).getByRole('button', { name: tk('actions.reissueAria', { label: 'ci-runner', prefix: 'ska_AbCdEfGh' }) }));
+    const confirm = await screen.findByRole('dialog', { name: tk('actions.reissueTitle') });
+    fireEvent.click(within(confirm).getByRole('button', { name: tk('actions.reissue') }));
+    await waitFor(() => expect(api.reissueApiKey).toHaveBeenCalledWith('k-1', 'ru'));
+  });
+});

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { emailLanguageOf } from './auth';
+import { emailLanguage } from './emailLanguage';
 
 // The language of a transactional email follows the interface language:
 // any Russian locale gives ru, everything else en (the API knows ru and en).
-describe('emailLanguageOf', () => {
+describe('emailLanguage', () => {
   test.each([
     ['ru', 'ru'],
     ['ru-RU', 'ru'],
@@ -13,6 +13,6 @@ describe('emailLanguageOf', () => {
     ['de', 'en'],
     ['', 'en'],
   ])('%j → %s', (language, want) => {
-    expect(emailLanguageOf(language)).toBe(want);
+    expect(emailLanguage(language)).toBe(want);
   });
 });

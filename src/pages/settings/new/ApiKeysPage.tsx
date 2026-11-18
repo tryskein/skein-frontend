@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '../../../auth/AuthContext';
 import { ApiError, BusinessError } from '../../../api/client';
-import { emailLanguageOf } from '../../../api/auth';
+import { emailLanguage } from '../../../lib/emailLanguage';
 import {
   ApiKey,
   ApiKeyCreateResponse,
@@ -830,7 +830,7 @@ export function NewApiKeysPage() {
   const invalidateKeys = () => queryClient.invalidateQueries({ queryKey: ['api-keys'], exact: true });
 
   const createMutation = useMutation<ApiKeyCreateResponse, Error, CreateApiKeyInput>({
-    mutationFn: (input) => createApiKey({ ...input, language: emailLanguageOf(i18n.language) }),
+    mutationFn: (input) => createApiKey({ ...input, language: emailLanguage(i18n.language) }),
     onSuccess: (created) => {
       setRevealedKey(created);
       setShowCreateRow(false);
@@ -853,7 +853,7 @@ export function NewApiKeysPage() {
   const [confirmReissue, setConfirmReissue] = useState<ApiKey | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const reissueMutation = useMutation<ApiKeyCreateResponse, Error, string>({
-    mutationFn: (id) => reissueApiKey(id, emailLanguageOf(i18n.language)),
+    mutationFn: (id) => reissueApiKey(id, emailLanguage(i18n.language)),
     onSuccess: (created) => {
       setConfirmReissue(null);
       setActionError(null);
