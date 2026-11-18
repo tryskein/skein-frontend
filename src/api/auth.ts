@@ -267,11 +267,17 @@ export async function requestPasswordReset(email: string, language: EmailLanguag
 
 /**
  * POST /api/auth/password-reset/{token} — 204 with no body. The password is
- * set and every other session of the user ends (API keys keep working). A
- * session of the SAME user stays logged in; without a session, or with
- * another user's, no session is issued — the SPA sends the visitor to
- * `/login`. Refusals: 422 `password_login_disabled`, `email_disabled`,
- * `token_invalid`, `password_weak`, `password_pwned`; 429.
+ * set and every other session of the user ends (API keys keep working). The
+ * 204 ALWAYS carries a Set-Cookie with a new session, whatever cookie the
+ * request came with (none, the same user's, or another user's). Refusals:
+ * 422 `password_login_disabled`, `email_disabled`, `token_invalid`,
+ * `password_weak`, `password_pwned`; 429. Two 502 answers, both with `error`
+ * `upstream_unavailable` (`ApiError.code`), are told apart ONLY by
+ * `ApiError.extra.type` (`detail`, i.e. `ApiError.message`, is not a marker):
+ * `https://skein.local/errors/password-changed-session-not-issued` — the
+ * password HAS been changed, no session was issued, no Set-Cookie; and
+ * `https://skein.local/errors/upstream-unavailable` — no confirmation that
+ * the change happened.
  */
 export async function completePasswordReset(token: string, password: string): Promise<void> {
   await apiFetch(`/api/auth/password-reset/${encodeURIComponent(token)}`, {
