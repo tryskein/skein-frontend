@@ -98,15 +98,21 @@ describe('US-10 — API keys client', () => {
     });
   });
 
-  test.each([
-    ['reissue', () => reissueApiKey(KEY_ID), 'POST', `/api/v1/me/api-keys/${KEY_ID}/reissue`, 201],
-    ['revoke', () => revokeApiKey(KEY_ID), 'DELETE', `/api/v1/me/api-keys/${KEY_ID}`, 204],
-  ])('%s calls its own route', async (_name, call, method, path, status) => {
-    fetchSpy.mockResolvedValue(status === 204 ? new Response(null, { status }) : jsonResponse({}, status));
-    await call();
+  test('reissue sends the language of the new-key email', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({}, 201));
+    await reissueApiKey(KEY_ID, 'ru');
     const sent = sentRequest();
-    expect(sent.method).toBe(method);
-    expect(sent.path).toBe(path);
+    expect(sent.method).toBe('POST');
+    expect(sent.path).toBe(`/api/v1/me/api-keys/${KEY_ID}/reissue`);
+    expect(sent.body).toEqual({ language: 'ru' });
+  });
+
+  test('revoke calls its own route', async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+    await revokeApiKey(KEY_ID);
+    const sent = sentRequest();
+    expect(sent.method).toBe('DELETE');
+    expect(sent.path).toBe(`/api/v1/me/api-keys/${KEY_ID}`);
     expect(sent.body).toBeUndefined();
   });
 

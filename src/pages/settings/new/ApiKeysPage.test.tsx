@@ -232,6 +232,7 @@ describe('US-10 — creating a key', () => {
       label: 'deploy-bot',
       permissions: { level: 'write', admin: false },
       scope: { mode: 'all' },
+      language: 'en',
     });
     expect('expiresAt' in body).toBe(false);
     expect(api.narrowApiKey).not.toHaveBeenCalled();
@@ -559,7 +560,7 @@ describe('US-10 — narrowing, reissue, revoke', () => {
     const confirm = await screen.findByRole('dialog', { name: tk('actions.reissueTitle') });
     fireEvent.click(within(confirm).getByRole('button', { name: tk('actions.reissue') }));
 
-    await waitFor(() => expect(api.reissueApiKey).toHaveBeenCalledWith('k-1'));
+    await waitFor(() => expect(api.reissueApiKey).toHaveBeenCalledWith('k-1', 'en'));
     expect(await screen.findByText('ska_REISSUEDSECRET0000000')).toBeTruthy();
     expect(api.createApiKey).not.toHaveBeenCalled();
     expect(api.revokeApiKey).not.toHaveBeenCalled();

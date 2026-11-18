@@ -23,6 +23,7 @@
  *    and the key lifetime policy.
  */
 
+import type { EmailLanguage } from './auth';
 import { apiFetch, apiJson } from './client';
 
 /** Permission level of a key: `read` ⊂ `write` ⊂ `manage`. */
@@ -116,6 +117,8 @@ export interface CreateApiKeyInput {
    * the key gets the default lifetime (`defaultTtlSeconds`).
    */
   expiresAt?: string;
+  /** Language of the owner's email about the new key (the interface language). Omitted: en. */
+  language?: EmailLanguage;
 }
 
 /** Body of PATCH /me/api-keys/{id}: the new grant, no wider than the current one. */
@@ -161,10 +164,14 @@ export async function narrowApiKey(id: string, input: NarrowApiKeyInput): Promis
   });
 }
 
-/** Reissue a key: a new key and secret with the same label and grant. */
-export async function reissueApiKey(id: string): Promise<ApiKeyCreateResponse> {
+/**
+ * Reissue a key: a new key and secret with the same label and grant.
+ * `language` is the language of the owner's email about the new key.
+ */
+export async function reissueApiKey(id: string, language: EmailLanguage): Promise<ApiKeyCreateResponse> {
   return apiJson<ApiKeyCreateResponse>(`/api/v1/me/api-keys/${encodeURIComponent(id)}/reissue`, {
     method: 'POST',
+    body: JSON.stringify({ language }),
   });
 }
 

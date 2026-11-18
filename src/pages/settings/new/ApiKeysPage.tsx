@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '../../../auth/AuthContext';
 import { ApiError, BusinessError } from '../../../api/client';
+import { emailLanguageOf } from '../../../api/auth';
 import {
   ApiKey,
   ApiKeyCreateResponse,
@@ -793,7 +794,7 @@ function PublicApiBlock({ settings }: { settings: ReturnType<typeof useQuery<Api
 
 export function NewApiKeysPage() {
   const { user } = useAuth();
-  const { t } = useTranslation('settings');
+  const { t, i18n } = useTranslation('settings');
   const queryClient = useQueryClient();
   const isInstanceAdmin = user?.role === 'admin';
 
@@ -829,7 +830,7 @@ export function NewApiKeysPage() {
   const invalidateKeys = () => queryClient.invalidateQueries({ queryKey: ['api-keys'], exact: true });
 
   const createMutation = useMutation<ApiKeyCreateResponse, Error, CreateApiKeyInput>({
-    mutationFn: (input) => createApiKey(input),
+    mutationFn: (input) => createApiKey({ ...input, language: emailLanguageOf(i18n.language) }),
     onSuccess: (created) => {
       setRevealedKey(created);
       setShowCreateRow(false);
@@ -852,7 +853,7 @@ export function NewApiKeysPage() {
   const [confirmReissue, setConfirmReissue] = useState<ApiKey | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const reissueMutation = useMutation<ApiKeyCreateResponse, Error, string>({
-    mutationFn: (id) => reissueApiKey(id),
+    mutationFn: (id) => reissueApiKey(id, emailLanguageOf(i18n.language)),
     onSuccess: (created) => {
       setConfirmReissue(null);
       setActionError(null);
