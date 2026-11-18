@@ -45,6 +45,7 @@ import { SkeinTooltip } from '../../../components/SkeinTooltip';
 import { spaceHandle } from '../../../lib/shellUrlState';
 import { noSeatsLeft, seatsLabel } from '../../../lib/spaceQuota';
 import { MY_SPACES_QUERY_PREFIX, useMySpaces } from '../../../lib/useMySpaces';
+import { PASSWORD_MAX_BYTES, PASSWORD_MIN_CHARS, passwordProblem } from '../../../lib/passwordPolicy';
 import { SettingsLayout, SettingsPanel } from './SettingsLayout';
 
 /**
@@ -728,8 +729,12 @@ export function NewUsersPage() {
               setCreateError('Email, name, and password are required.');
               return;
             }
-            if (createForm.password.length < 8) {
-              setCreateError('Password must be at least 8 characters.');
+            if (passwordProblem(createForm.password) === 'tooShort') {
+              setCreateError(`Password must be at least ${PASSWORD_MIN_CHARS} characters.`);
+              return;
+            }
+            if (passwordProblem(createForm.password) === 'tooLong') {
+              setCreateError(`Password must not exceed ${PASSWORD_MAX_BYTES} bytes once UTF-8 encoded.`);
               return;
             }
             createMutation.mutate({
@@ -794,7 +799,7 @@ export function NewUsersPage() {
             <PasswordInput
               label="Password"
               required
-              minLength={8}
+              minLength={PASSWORD_MIN_CHARS}
               autoComplete="new-password"
               value={createForm.password}
               onChange={(e) =>
@@ -905,8 +910,12 @@ export function NewUsersPage() {
                 payload.role = editForm.role;
               }
               if (editForm.password) {
-                if (editForm.password.length < 8) {
-                  setEditError('Password must be at least 8 characters.');
+                if (passwordProblem(editForm.password) === 'tooShort') {
+                  setEditError(`Password must be at least ${PASSWORD_MIN_CHARS} characters.`);
+                  return;
+                }
+                if (passwordProblem(editForm.password) === 'tooLong') {
+                  setEditError(`Password must not exceed ${PASSWORD_MAX_BYTES} bytes once UTF-8 encoded.`);
                   return;
                 }
                 payload.password = editForm.password;
@@ -990,9 +999,9 @@ export function NewUsersPage() {
                 )
               ) : null}
               <PasswordInput
-                label="Reset password (optional, min 8 chars)"
+                label={`Reset password (optional, min ${PASSWORD_MIN_CHARS} chars)`}
                 placeholder="Leave blank to keep current"
-                minLength={8}
+                minLength={PASSWORD_MIN_CHARS}
                 autoComplete="new-password"
                 onChange={(e) =>
                   setEditForm({

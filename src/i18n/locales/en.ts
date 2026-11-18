@@ -99,7 +99,7 @@ export const en = {
       usernameInvalid:
         '3 to 30 characters: lowercase Latin letters, digits, “_” and “-”; must start with a letter or a digit.',
       passwordWeak:
-        'The password is too weak: at least 8 bytes once UTF-8 encoded, at most 72.',
+        'The password is too weak: at least 12 characters, and at most 72 bytes once UTF-8 encoded (about 36 Cyrillic letters).',
       passwordPwned: 'This password has appeared in a known data breach — choose a different one.',
       termsRequired: 'Accept the terms of use and the privacy policy to continue.',
       captchaFailed: 'The check did not pass. Complete it again.',
@@ -1981,13 +1981,13 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
       new: 'New password',
       confirm: 'Confirm new password',
       newHint:
-        'At least {{min}} bytes long once UTF-8 encoded (most characters are 1 byte; some scripts and emoji use more). 15+ recommended — length matters more than mixing character types.',
+        'At least {{min}} characters. At most {{max}} bytes once UTF-8 encoded — a technical limit of password hashing: a Latin letter or digit takes 1 byte, a Cyrillic letter 2, an emoji up to 4. 15+ characters recommended — length matters more than mixing character types.',
     },
     submit: 'Change password',
     errors: {
       currentRequired: 'Enter your current password.',
       newRequired: 'Enter a new password.',
-      tooShort: 'Password must be at least {{min}} bytes once UTF-8 encoded.',
+      tooShort: 'Password must be at least {{min}} characters.',
       tooLong:
         'Password must not exceed {{max}} bytes once UTF-8 encoded — try a shorter one.',
       mismatch: 'Passwords do not match.',

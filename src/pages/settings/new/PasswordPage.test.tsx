@@ -139,7 +139,7 @@ describe('form shape', () => {
     expect(document.activeElement).toBe(confirmField());
   });
 
-  test('a too-short new password (< 8 bytes) is blocked client-side before submit', () => {
+  test('a too-short new password (< 12 characters) is blocked client-side before submit', () => {
     mount();
     fireEvent.change(currentField(), { target: { value: 'oldP@ssword1' } });
     fireEvent.change(newField(), { target: { value: 'short' } });
@@ -147,7 +147,7 @@ describe('form shape', () => {
     fireEvent.click(submitButton());
 
     expect(
-      screen.getByText('Password must be at least 8 bytes once UTF-8 encoded.'),
+      screen.getByText('Password must be at least 12 characters.'),
     ).toBeTruthy();
     expect(changeMyPasswordSpy).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(newField());
@@ -246,8 +246,8 @@ describe('server error branches', () => {
     mount();
 
     fireEvent.change(currentField(), { target: { value: 'oldP@ssword1' } });
-    fireEvent.change(newField(), { target: { value: 'password' } });
-    fireEvent.change(confirmField(), { target: { value: 'password' } });
+    fireEvent.change(newField(), { target: { value: 'password1234' } });
+    fireEvent.change(confirmField(), { target: { value: 'password1234' } });
     fireEvent.click(submitButton());
 
     await waitFor(() =>
@@ -295,18 +295,18 @@ describe('server error branches', () => {
   // had UI branches with no test coverage.
   test('invalid_password (400) — inline error under new password', async () => {
     changeMyPasswordSpy.mockRejectedValue(
-      new ApiError(400, 'password must be at least 8 characters', 'invalid_password'),
+      new ApiError(400, 'password must be at least 12 characters', 'invalid_password'),
     );
     mount();
 
     fireEvent.change(currentField(), { target: { value: 'oldP@ssword1' } });
-    fireEvent.change(newField(), { target: { value: 'shortpw1' } });
-    fireEvent.change(confirmField(), { target: { value: 'shortpw1' } });
+    fireEvent.change(newField(), { target: { value: 'shortpw1234x' } });
+    fireEvent.change(confirmField(), { target: { value: 'shortpw1234x' } });
     fireEvent.click(submitButton());
 
     await waitFor(() =>
       expect(
-        screen.getByText('Password must be at least 8 bytes once UTF-8 encoded.'),
+        screen.getByText('Password must be at least 12 characters.'),
       ).toBeTruthy(),
     );
     expect(document.activeElement).toBe(newField());

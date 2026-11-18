@@ -6,6 +6,7 @@ import { changeMyPassword, getPasswordPolicy } from '../../../api/users';
 import { checkPwnedHint, type PwnedHintState } from '../../../lib/pwnedCheck';
 import { useTranslation } from 'react-i18next';
 import { scorePassword, type PasswordStrength } from '../../../lib/passwordStrength';
+import { PASSWORD_MAX_BYTES, PASSWORD_MIN_CHARS, passwordProblem } from '../../../lib/passwordPolicy';
 import {
   ERR_ALERT_VARS,
   INFO_ALERT_VARS,
@@ -83,18 +84,6 @@ const STRENGTH_COLORS = [
   'var(--ok)',
 ] as const;
 
-// Mirrors internal/users.PasswordMinLen / passwordMaxBytes on the server
-// (see skein-api store.go) — bcrypt's structural ceiling is a BYTE count,
-// not a character count, so both bounds are checked on the UTF-8 encoding,
-// never on `.length` (UTF-16 code units). Checking client-side avoids a
-// pointless round trip for input the server will reject anyway; the server
-// remains the actual point of enforcement (see module doc).
-const PASSWORD_MIN_BYTES = 8;
-const PASSWORD_MAX_BYTES = 72;
-
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
 
 interface FormErrors {
   currentPassword?: string;
@@ -288,7 +277,7 @@ function PasswordPanel() {
           setFieldErrors({ currentPassword: t('errors.currentIncorrect') });
           return;
         case 'invalid_password':
-          setFieldErrors({ newPassword: t('errors.tooShort', { min: PASSWORD_MIN_BYTES }) });
+          setFieldErrors({ newPassword: t('errors.tooShort', { min: PASSWORD_MIN_CHARS }) });
           return;
         case 'password_too_long':
           setFieldErrors({ newPassword: t('errors.tooLong', { max: PASSWORD_MAX_BYTES }) });
@@ -414,10 +403,10 @@ function PasswordPanel() {
     if (!newPassword) {
       errs.newPassword = t('errors.newRequired');
     } else {
-      const bytes = byteLength(newPassword);
-      if (bytes < PASSWORD_MIN_BYTES) {
-        errs.newPassword = t('errors.tooShort', { min: PASSWORD_MIN_BYTES });
-      } else if (bytes > PASSWORD_MAX_BYTES) {
+      const problem = passwordProblem(newPassword);
+      if (problem === 'tooShort') {
+        errs.newPassword = t('errors.tooShort', { min: PASSWORD_MIN_CHARS });
+      } else if (problem === 'tooLong') {
         errs.newPassword = t('errors.tooLong', { max: PASSWORD_MAX_BYTES });
       }
     }
@@ -482,7 +471,7 @@ function PasswordPanel() {
               error={fieldErrors.newPassword}
               aria-invalid={Boolean(fieldErrors.newPassword)}
               disabled={changeMutation.isPending}
-              description={t('fields.newHint', { min: PASSWORD_MIN_BYTES })}
+              description={t('fields.newHint', { min: PASSWORD_MIN_CHARS, max: PASSWORD_MAX_BYTES })}
             />
 
             {newPassword && strength ? (

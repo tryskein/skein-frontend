@@ -185,7 +185,7 @@ describe('NewUsersPage external users (sk-163 S8)', () => {
       target: { value: 'New Partner' },
     });
     fireEvent.change(d.getByLabelText(/^Password/), {
-      target: { value: 'passw0rd!' },
+      target: { value: 'passw0rd!2025' },
     });
     fireEvent.click(d.getByRole('button', { name: /^create$/i }));
 
