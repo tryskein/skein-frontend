@@ -149,6 +149,14 @@ export interface PasswordPolicy {
    * PasswordPage.tsx.
    */
   pwnedCheckEnabled: boolean;
+  /**
+   * Whether the browser may run its own breach-check hint against the
+   * PUBLIC Pwned Passwords API: true only when the server check is on and the
+   * server itself uses that public API — with a mirror configured the
+   * browser must not call the public service. Absent from an older server:
+   * treated as false.
+   */
+  pwnedClientHintEnabled?: boolean;
 }
 
 /**

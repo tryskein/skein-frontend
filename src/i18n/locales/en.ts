@@ -1981,7 +1981,7 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
       new: 'New password',
       confirm: 'Confirm new password',
       newHint:
-        'At least {{min}} characters. At most {{max}} bytes once UTF-8 encoded — a technical limit of password hashing: a Latin letter or digit takes 1 byte, a Cyrillic letter 2, an emoji up to 4. 15+ characters recommended — length matters more than mixing character types.',
+        'At least {{min}} characters. At most {{max}} bytes once UTF-8 encoded — a technical limit of password hashing: a basic Latin letter, digit or punctuation mark (ASCII) takes 1 byte, a Cyrillic letter 2, any single character at most 4 (an emoji may be several characters). 15+ characters recommended — length matters more than mixing character types.',
     },
     submit: 'Change password',
     errors: {

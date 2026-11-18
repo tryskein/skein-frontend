@@ -418,7 +418,7 @@ describe('accessibility wiring', () => {
   });
 
   test('the pwned-hint container is joined to the New password field via aria-describedby', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     fetchSpy.mockResolvedValue(
       new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:3730471\r\n', { status: 200 }),
     );
@@ -439,7 +439,7 @@ describe('accessibility wiring', () => {
   });
 
   test('a cleared field removes the strength/pwned ids from aria-describedby instead of leaving a dangling reference', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     fetchSpy.mockResolvedValue(
       new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:3730471\r\n', { status: 200 }),
     );
@@ -496,8 +496,22 @@ describe('pwned hint — gated by server policy, on blur only, never blocks subm
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // sk-977.7.20: the server checks against a mirror — the browser must not
+  // call the public service the operator replaced.
+  test('server check on but client hint not allowed (mirror): blur never calls fetch', async () => {
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: false });
+    mount();
+    await waitFor(() => expect(getPasswordPolicySpy).toHaveBeenCalled());
+
+    fireEvent.change(newField(), { target: { value: 'password' } });
+    fireEvent.blur(newField());
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   test('policy enabled: blur fires exactly one request to the range endpoint; a match renders the found hint', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     // SHA-1('password') = 5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8
     fetchSpy.mockResolvedValue(
       new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:3730471\r\n', { status: 200 }),
@@ -526,7 +540,7 @@ describe('pwned hint — gated by server policy, on blur only, never blocks subm
   });
 
   test('policy enabled: a fetch rejection leaves the UI quiet, submit still enabled', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     fetchSpy.mockRejectedValue(new TypeError('network unreachable'));
     mount();
 
@@ -548,7 +562,7 @@ describe('pwned hint — gated by server policy, on blur only, never blocks subm
   // sk-303.20 review (claude+codex+grok Warning) — a 'found' result must
   // never keep describing a password the user has since edited away from.
   test('editing the field after a "found" result clears the stale hint (no reblur needed)', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     fetchSpy.mockResolvedValue(
       new Response('1E4C9B93F3F0682250B6CF8331B7EE68FD8:3730471\r\n', { status: 200 }),
     );
@@ -574,7 +588,7 @@ describe('pwned hint — gated by server policy, on blur only, never blocks subm
   // not let an earlier (now-stale) response overwrite the later one's
   // result, regardless of which HTTP response arrives first.
   test('a stale response from an earlier blur never overwrites the latest blur\'s result', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     let resolveFirst!: (body: string) => void;
     let resolveSecond!: (body: string) => void;
     const first = new Promise<string>((resolve) => {
@@ -618,7 +632,7 @@ describe('pwned hint — gated by server policy, on blur only, never blocks subm
   });
 
   test('unmounting mid-check does not throw and does not leave a pending "checking" state visible', async () => {
-    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true });
+    getPasswordPolicySpy.mockResolvedValue({ pwnedCheckEnabled: true, pwnedClientHintEnabled: true });
     let resolveFetch!: (body: string) => void;
     const pending = new Promise<string>((resolve) => {
       resolveFetch = resolve;

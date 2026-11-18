@@ -166,7 +166,9 @@ function PasswordPanel() {
     queryKey: ['password-policy'],
     queryFn: getPasswordPolicy,
   });
-  const pwnedCheckEnabled = policyQuery.data?.pwnedCheckEnabled ?? false;
+  // The browser hint calls the public Pwned Passwords API, so it runs only
+  // when the server allows it (check on, no mirror) — sk-977.7.20.
+  const pwnedCheckEnabled = policyQuery.data?.pwnedClientHintEnabled ?? false;
 
   // Live strength estimate — recomputed on every keystroke, debounced only
   // so a fast typist doesn't pile up zxcvbn passes on every render. No
