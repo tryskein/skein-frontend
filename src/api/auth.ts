@@ -267,8 +267,10 @@ export async function requestPasswordReset(email: string, language: EmailLanguag
 
 /**
  * POST /api/auth/password-reset/{token} — 204 with no body. The password is
- * set and every other session of the user ends (API keys keep working). The
- * 204 ALWAYS carries a Set-Cookie with a new session, whatever cookie the
+ * set. The incoming session key and the session tickets found in the index of
+ * the reset account are revoked (API keys keep working), and the current
+ * browser receives a new session. The API rejects credentials issued before
+ * the reset (the account's epoch changes). The 204 ALWAYS carries a Set-Cookie with a new session, whatever cookie the
  * request came with (none, the same user's, or another user's). Refusals:
  * 422 `password_login_disabled`, `email_disabled`, `token_invalid`,
  * `password_weak`, `password_pwned`; 429. Two 502 answers, both with `error`
