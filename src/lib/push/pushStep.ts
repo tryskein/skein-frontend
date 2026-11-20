@@ -40,8 +40,10 @@ export function live(step: PushStep): void {
 }
 
 /**
- * Sends one push operation of the step. The answer of a step that is no
- * longer live is not a basis for anything; "user changed" ends the step.
+ * Sends one push operation of the step. "User changed" ends the step as
+ * such even when the step ended meanwhile: the server's answer is known and
+ * the caller must not act as if it were not. Any other answer of a step that
+ * is no longer live is not a basis for anything.
  */
 export async function request<T>(
   step: PushStep,
@@ -49,8 +51,8 @@ export async function request<T>(
 ): Promise<PushOutcome<T>> {
   live(step);
   const outcome = await send(step.signal);
-  live(step);
   if (outcome.kind === 'userChanged') throw new StepEnded('userChanged');
+  live(step);
   return outcome;
 }
 

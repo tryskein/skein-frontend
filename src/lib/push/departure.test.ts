@@ -351,6 +351,22 @@ describe('row 65 — the appearance grows after the click', () => {
   });
 });
 
+describe('row 64 (b) — "user changed" that arrives as the step ends', () => {
+  test('is still "user changed": the logout does not go on', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => {
+      noteLogin(A);
+      return { kind: 'userChanged' };
+    });
+    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+
+    expect(await clickLogout().verdict).toBe('userChanged');
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+  });
+});
+
 describe('row 65 — the appearance grows while a write waits for skein.push.store', () => {
   test('a new login of the same user before the lock is granted: nothing is written', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
