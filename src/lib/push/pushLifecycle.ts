@@ -912,6 +912,25 @@ function failure(error: unknown): PushActionResult {
   return { kind: 'failed', reason: 'storage' };
 }
 
+/**
+ * Publishes the list and this device as they are after an explicit action,
+ * read again in the action's step. A list that does not come leaves the
+ * shown one; nothing else is done.
+ */
+async function publishAfterAction(step: Step): Promise<void> {
+  const userId = step.token.userId;
+  try {
+    const read = await readChannel();
+    const listed = await request(step, (signal) => pushListDevices(userId, signal));
+    const ownEndpoint = readConsent(userId).endpoint;
+    const endpoint = read.kind === 'channel' ? read.channel.endpoint : ownEndpoint;
+    const thisDeviceHash = endpoint === null ? null : await endpointFingerprint(endpoint);
+    publish(step, listed.kind === 'ok' ? { devices: listed.value, thisDeviceHash } : { thisDeviceHash });
+  } catch (error) {
+    if (error instanceof StepEnded) throw error;
+  }
+}
+
 /** Reads the confirmed list of the step's user; `null` when it did not come. */
 async function confirmUser(step: Step): Promise<PushDevice[] | null> {
   const list = await request(step, (signal) => pushListDevices(step.token.userId, signal));
@@ -1065,11 +1084,11 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
         await undoRegistration(step, label, channel.endpoint);
         return { kind: 'failed', reason: 'storage' };
       }
-      publish(step, {});
+      await publishAfterAction(step);
       return { kind: 'done' };
     case 'revoked':
       await goOffAfterRevoked(ctx, channel.endpoint);
-      publish(step, {});
+      await publishAfterAction(step);
       return { kind: 'failed', reason: 'revoked' };
     case 'notFound':
     case 'refused':
@@ -1231,7 +1250,7 @@ export function disablePush(): Promise<PushActionResult> {
     const server = await revokeDeviceOnServer(step);
     if (!server.confirmed) return { kind: 'failed', reason: 'unconfirmed' };
     if (server.endpoint !== null) await removeLocalChannel(step, server.endpoint);
-    publish(step, {});
+    await publishAfterAction(step);
     return server.revoked ? { kind: 'done' } : { kind: 'failed', reason: 'unconfirmed' };
   });
 }
@@ -1249,8 +1268,7 @@ export function removeOtherDevice(id: string): Promise<PushActionResult> {
       pushRemoveDevice({ expectedUserId: step.token.userId, id }, signal),
     );
     if (outcome.kind !== 'ok' && outcome.kind !== 'notFound') return { kind: 'failed', reason: 'unconfirmed' };
-    const devices = getPushLifecycleState().appearance === step.token ? getPushLifecycleState().devices : null;
-    publish(step, { devices: devices === null ? null : devices.filter((d) => d.id !== id) });
+    await publishAfterAction(step);
     return { kind: 'done' };
   });
 }

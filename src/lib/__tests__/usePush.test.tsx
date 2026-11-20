@@ -59,6 +59,7 @@ vi.mock('../push/browserPush', async (importOriginal) => ({
 }));
 
 import { usePush, type UsePushResult } from '../usePush';
+import { startPushLifecycle, stopPushLifecycle } from '../push/pushLifecycle';
 
 let locks: FakeLocks;
 const hosts: Array<UsePushResult | null> = [];
@@ -84,6 +85,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  stopPushLifecycle();
   cleanup();
   noteSignedOut();
   await settle(locks);
@@ -148,5 +150,39 @@ describe('row 78 — usePush', () => {
       expect.any(AbortSignal),
     );
     expect(browser.channel).toBeNull();
+  });
+});
+
+describe('row 78 — the actions of usePush with the controller running', () => {
+  test('an enable whose answer is lost is not registered again in the same appearance', async () => {
+    startPushLifecycle();
+    render(<Host index={0} />);
+    await act(async () => {
+      await settle(locks);
+    });
+    api.pushSubscribe.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    await act(async () => {
+      expect(await hosts[0]!.enable()).toEqual({ kind: 'failed', reason: 'unconfirmed' });
+      await settle(locks);
+    });
+
+    expect(api.pushSubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  test('after a done enable the shown list has the new device', async () => {
+    startPushLifecycle();
+    render(<Host index={0} />);
+    await act(async () => {
+      await settle(locks);
+    });
+
+    await act(async () => {
+      expect(await hosts[0]!.enable()).toEqual({ kind: 'done' });
+    });
+
+    const shown = hosts[0]!.state;
+    expect(shown.devices).toHaveLength(1);
+    expect(shown.thisDeviceHash).toBe(shown.devices![0].endpointHash);
   });
 });

@@ -15,7 +15,7 @@
  * user's gesture.
  */
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { type Appearance, currentAppearance, subscribeAppearance } from '../auth/appearance';
 import {
   disablePush,
@@ -89,27 +89,15 @@ function subscribe(listener: () => void): () => void {
 export function usePush(): UsePushResult {
   const state = useSyncExternalStore(subscribe, stateOfCurrentAppearance, stateOfCurrentAppearance);
 
-  // Not async: `enablePush` must start in the caller's click (the
-  // permission prompt), so it is called before anything is awaited.
-  const enable = useCallback(() => {
-    const action = enablePush();
-    return action.then(async (result) => {
-      await repeatPushDecision();
-      return result;
-    });
-  }, []);
-
-  const disable = useCallback(async () => {
-    const result = await disablePush();
-    await repeatPushDecision();
-    return result;
-  }, []);
-
-  const removeDevice = useCallback(async (id: string) => {
-    const result = await removeOtherDevice(id);
-    await repeatPushDecision();
-    return result;
-  }, []);
-
-  return { state, enable, disable, removeDevice, retry: repeatPushDecision };
+  // The actions publish the list as it is after them; the decision of the
+  // appearance is not run again (a lost answer stays unconfirmed until the
+  // next appearance, US-1). `enablePush` is passed as is: it must start in
+  // the caller's click (the permission prompt).
+  return {
+    state,
+    enable: enablePush,
+    disable: disablePush,
+    removeDevice: removeOtherDevice,
+    retry: repeatPushDecision,
+  };
 }
