@@ -74,6 +74,8 @@ describe('row 33 — outcome of a push answer', () => {
     ['422 invalid_subscription', { status: 422, headers: V2, body: { error: 'invalid_subscription', message: 'm' } }, 'refused'],
     ['422 session_stale', { status: 422, headers: V2, body: { error: 'session_stale', message: 'm' } }, 'sessionEnded'],
     // a code that names a property of a plain object is still an unknown code
+    ['422 with an unknown code', { status: 422, headers: V2, body: { error: 'brand_new_code', message: 'm' } }, 'refused'],
+    ['422 without a body', { status: 422, headers: V2 }, 'refused'],
     ['422 with code constructor', { status: 422, headers: V2, body: { error: 'constructor', message: 'm' } }, 'refused'],
     ['422 with code toString', { status: 422, headers: V2, body: { error: 'toString', message: 'm' } }, 'refused'],
     ['422 with code __proto__', { status: 422, headers: V2, body: { error: '__proto__', message: 'm' } }, 'refused'],
@@ -285,6 +287,16 @@ describe('row 34 — wire of the contract v2 operations', () => {
     expect(outcome.kind).toBe('ok');
     const devices = (outcome as { kind: 'ok'; value: Array<{ deviceLabel: string | null; version: number }> }).value;
     expect(devices.map((d) => [d.deviceLabel, d.version])).toEqual([[LABEL, 3], [null, 1]]);
+  });
+
+  test.each<[string, unknown]>([
+    ['no body', undefined],
+    ['a list instead of a subscription', [DTO]],
+    ['a subscription without version', { ...DTO, version: undefined }],
+  ])('pushSubscribe: a 200 with the marker and %s breaks the contract: lost', async (_name, body) => {
+    answer({ status: 200, headers: V2, body });
+    const outcome = await pushSubscribe({ expectedUserId: USER, endpoint: ENDPOINT, keys: { p256dh: 'P', auth: 'A' }, deviceLabel: LABEL, mode: 'upsert' });
+    expect(outcome.kind).toBe('lost');
   });
 
   test('a v2 list row without deviceLabel or version breaks the contract: lost', async () => {
