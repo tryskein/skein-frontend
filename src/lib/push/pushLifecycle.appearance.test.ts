@@ -254,16 +254,22 @@ describe('row 49 — the appearance is replaced after a write the row prepared, 
 });
 
 describe('row 49 — the appearance is replaced while the browser removes a channel', () => {
-  test('the controller passes its liveness to the browser: the channel stays', async () => {
+  test('the controller passes its liveness to the browser: the unsubscription of that removal is stopped', async () => {
     const a = channel('a');
     browser.channel = a;
     seed({ [A]: { state: 'off', endpoint: a.endpoint } });
     await load();
-    const remove = browserApi.removeChannel.getMockImplementation()!;
-    browserApi.removeChannel.mockImplementationOnce(async (endpoint: string, precondition?: () => void) => {
+    let stopped = false;
+    browserApi.removeChannel.mockImplementationOnce(async (_endpoint: string, precondition?: () => void) => {
       // The appearance changes after the browser read its subscription.
       noteLogin(A);
-      return remove(endpoint, precondition);
+      try {
+        precondition?.();
+      } catch (error) {
+        stopped = true;
+        throw error;
+      }
+      throw new Error('the precondition did not stop the removal');
     });
     api.pushListDevices.mockImplementation(async (userId: string) =>
       api.pushListDevices.mock.calls.length > 1 ? { kind: 'lost' } : model.list(userId),
@@ -271,7 +277,7 @@ describe('row 49 — the appearance is replaced while the browser removes a chan
 
     await appear(A);
 
-    expect(browser.channel).toEqual(a);
+    expect(stopped).toBe(true);
   });
 });
 
