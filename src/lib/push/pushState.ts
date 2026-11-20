@@ -380,9 +380,10 @@ export interface BeginLabelArgs {
 
 /**
  * Creates a new device label and writes it into the consent as "enabled,
- * not confirmed" — before the registration that carries it is sent. Only
- * from "no mark" or "explicitly off". Refused with {@link PushLabelLimitError}
- * when S is full.
+ * not confirmed" — before the registration that carries it is sent. An
+ * explicit enable starts from "no mark" or "explicitly off"; an accept of an
+ * existing subscription (row 6) only from "no mark". Refused with
+ * {@link PushLabelLimitError} when S is full.
  */
 export async function beginConsentLabel(userId: string, args: BeginLabelArgs): Promise<Consent> {
   return commit((record) => {
@@ -390,6 +391,9 @@ export async function beginConsentLabel(userId: string, args: BeginLabelArgs): P
     checkExpectation(consent, args.expect);
     if (consent.state === 'enabled') {
       throw new PushStateConflictError('the consent is already enabled');
+    }
+    if (args.kind === 'accept' && consent.state !== 'none') {
+      throw new PushStateConflictError('an existing subscription is accepted only from no mark');
     }
     if (consent.labels.length >= MAX_CONSENT_LABELS) throw new PushLabelLimitError();
     const label = newId();

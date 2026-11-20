@@ -293,6 +293,21 @@ describe('row 38 — the label set S', () => {
     expect(second.label).not.toBe(l1);
   });
 
+  test('an accept is refused from explicitly off and the record is unchanged', async () => {
+    await revokeConsent(A, { endpoint: ENDPOINT, guard: 'absent' });
+    const before = raw();
+    await expect(beginConsentLabel(A, { expect: { gen: readConsentGen(A) }, kind: 'accept', endpoint: ENDPOINT, keysFingerprint: null }))
+      .rejects.toBeInstanceOf(PushStateConflictError);
+    expect(raw()).toBe(before);
+  });
+
+  test('an explicit enable from explicitly off creates a new label', async () => {
+    await revokeConsent(A, { endpoint: ENDPOINT, guard: 'absent' });
+    const c = await beginConsentLabel(A, { expect: { gen: readConsentGen(A) }, kind: 'enable', endpoint: ENDPOINT, keysFingerprint: null });
+    expect(c).toMatchObject({ state: 'enabled', pending: { kind: 'enable' } });
+    expect(c.labels).toEqual([c.label]);
+  });
+
   test('with 1000 labels in S no new label is created', async () => {
     seedConsent(A, labelsOf(1000));
     const before = raw();
