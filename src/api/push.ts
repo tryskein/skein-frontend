@@ -84,15 +84,20 @@ export interface PushDevice {
 
 /**
  * Fetch the push configuration. An empty `publicKey` means push is
- * disabled server-side; the per-field default guards against a malformed
- * wire response so callers always get a string.
+ * disabled server-side. Rejects when the answer does not come or carries no
+ * string key — the caller then does not know whether push is on.
  */
 export async function getPushConfig(signal?: AbortSignal): Promise<PushConfig> {
   const raw = await apiJson<Partial<PushConfig>>('/api/v1/push/config', {
     method: 'GET',
     signal,
   });
-  return { publicKey: typeof raw.publicKey === 'string' ? raw.publicKey : '' };
+  // Only a string key says anything: the empty string is "push disabled", a
+  // missing or malformed key is an answer the page cannot read.
+  if (raw === null || typeof raw !== 'object' || typeof raw.publicKey !== 'string') {
+    throw new Error('the push configuration carries no public key');
+  }
+  return { publicKey: raw.publicKey };
 }
 
 // ───────────────────────── Contract v2 ─────────────────────────

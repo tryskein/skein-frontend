@@ -857,7 +857,7 @@ describe('row 54a — the key fingerprint and a channel that changed before the 
 });
 
 describe('the push configuration of the server could not be read', () => {
-  test('is not "push off on the server": row 4 still registers; the request carries the step signal', async () => {
+  test('allows no registration (rule 9, as push off); the request carries the step signal', async () => {
     const a = channel('a');
     seed({ [A]: enabledConsent(LABEL_A, a, await keysFingerprint(a.keys)) });
     browser.channel = a;
@@ -867,7 +867,7 @@ describe('the push configuration of the server could not be read', () => {
     await appear(A);
 
     expect(api.getPushConfig).toHaveBeenCalledWith(expect.any(AbortSignal));
-    expect(api.pushSubscribe).toHaveBeenCalledTimes(1);
+    expect(api.pushSubscribe).not.toHaveBeenCalled();
     expect(getPushLifecycleState().serverPush).toBe('unknown');
   });
 

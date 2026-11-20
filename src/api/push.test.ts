@@ -11,6 +11,7 @@
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
+  getPushConfig,
   pushListDevices,
   pushRemoveChannel,
   pushRemoveDevice,
@@ -303,5 +304,23 @@ describe('row 34 — wire of the contract v2 operations', () => {
     const { deviceLabel: _l, version: _v, ...legacyRow } = DTO;
     answer({ status: 200, headers: V2, body: [legacyRow] });
     expect((await pushListDevices(USER)).kind).toBe('lost');
+  });
+});
+
+describe('GET /push/config — only a string key is an answer', () => {
+  test.each([
+    { case: 'a key', body: { publicKey: 'BPk' }, expected: 'BPk' },
+    { case: 'an empty key (push off on the server)', body: { publicKey: '' }, expected: '' },
+  ])('$case', async ({ body, expected }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    expect(await getPushConfig()).toEqual({ publicKey: expected });
+  });
+
+  test.each([
+    { case: 'no key', body: {} },
+    { case: 'a key that is not a string', body: { publicKey: 42 } },
+  ])('$case: rejected, not "push off"', async ({ body }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    await expect(getPushConfig()).rejects.toThrow();
   });
 });

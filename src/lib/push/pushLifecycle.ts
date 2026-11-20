@@ -785,9 +785,10 @@ async function decideOnAppearance(step: Step): Promise<void> {
     channel,
     list,
     permission,
-    // Only a server known to have push off holds the registrations back;
-    // row 2 still needs the key to create a channel.
-    serverPushEnabled: server.state !== 'disabled',
+    // Registrations need push known to be on: a configuration that could
+    // not be read allows only removals and revocations, as push off does
+    // (rule 9) — it may well hide a server with push off.
+    serverPushEnabled: server.state === 'enabled',
     blocks: {
       ownRevokePending: works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId),
       foreignRemovalPending: works.some((w) => w.type === 'localUnsubscribe'),

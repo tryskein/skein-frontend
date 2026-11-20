@@ -32,7 +32,6 @@ describe('row 75 — shouldShowSoftAsk', () => {
   test.each([
     { case: 'permission default', change: {} },
     { case: 'permission granted', change: { permission: 'granted' as const } },
-    { case: 'the server configuration could not be read', change: { serverPush: 'unknown' as const } },
   ])('shown: $case, no mark, decided, supported, push on the server', ({ change }) => {
     expect(shouldShowSoftAsk({ ...SHOWN, ...change })).toBe(true);
   });
@@ -41,6 +40,7 @@ describe('row 75 — shouldShowSoftAsk', () => {
     { case: 'push unsupported', change: { supported: false } },
     { case: 'no decision with a read list yet (rows 0, 1)', change: { decided: false } },
     { case: 'push disabled on the server', change: { serverPush: 'disabled' as const } },
+    { case: 'the server configuration could not be read', change: { serverPush: 'unknown' as const } },
     { case: 'permission denied', change: { permission: 'denied' as const } },
     { case: 'consent enabled', change: { consentState: 'enabled' as const } },
     { case: 'consent explicitly off', change: { consentState: 'off' as const } },

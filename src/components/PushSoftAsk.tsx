@@ -31,7 +31,7 @@ export function shouldShowSoftAsk(args: {
   supported: boolean;
   /** The decision of this appearance ran with a read list. */
   decided: boolean;
-  /** Push on the server; only `disabled` hides the banner. */
+  /** Push on the server; the banner needs it known to be `enabled` (US-12). */
   serverPush: ServerPush;
   permission: NotificationPermissionState;
   /** The consent of the current user. */
@@ -40,7 +40,7 @@ export function shouldShowSoftAsk(args: {
   userId: string;
   now: number;
 }): boolean {
-  if (!args.supported || !args.decided || args.serverPush === 'disabled') return false;
+  if (!args.supported || !args.decided || args.serverPush !== 'enabled') return false;
   if (args.permission === 'denied') return false;
   if (args.consentState !== 'none') return false;
   return !isBannerDismissed(args.userId, args.now);
