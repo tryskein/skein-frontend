@@ -202,13 +202,13 @@ export type PushOutcome<T = void> =
   | { kind: 'sessionEnded' }
   | { kind: 'lost' };
 
-const REFUSAL_BY_CODE: Readonly<Record<string, PushRefusal>> = {
-  expected_user_mismatch: 'userChanged',
-  device_revoked: 'revoked',
-  endpoint_taken: 'taken',
-  subscription_not_found: 'notFound',
-  invalid_subscription: 'refused',
-};
+const REFUSAL_BY_CODE: ReadonlyMap<string, PushRefusal> = new Map<string, PushRefusal>([
+  ['expected_user_mismatch', 'userChanged'],
+  ['device_revoked', 'revoked'],
+  ['endpoint_taken', 'taken'],
+  ['subscription_not_found', 'notFound'],
+  ['invalid_subscription', 'refused'],
+]);
 
 /**
  * Transport of the push operations: `fetch` with the session cookie and JSON,
@@ -257,7 +257,7 @@ export function classifyPushResponse(res: PushResponse): PushOutcome<unknown> {
       ? (res.body as { error: string }).error
       : '';
   if (code === 'session_stale') return { kind: 'sessionEnded' };
-  return { kind: REFUSAL_BY_CODE[code] ?? 'refused' };
+  return { kind: REFUSAL_BY_CODE.get(code) ?? 'refused' };
 }
 
 /**

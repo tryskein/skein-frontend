@@ -73,6 +73,10 @@ describe('row 33 — outcome of a push answer', () => {
     ['422 subscription_not_found', { status: 422, headers: V2, body: { error: 'subscription_not_found', message: 'm' } }, 'notFound'],
     ['422 invalid_subscription', { status: 422, headers: V2, body: { error: 'invalid_subscription', message: 'm' } }, 'refused'],
     ['422 session_stale', { status: 422, headers: V2, body: { error: 'session_stale', message: 'm' } }, 'sessionEnded'],
+    // a code that names a property of a plain object is still an unknown code
+    ['422 with code constructor', { status: 422, headers: V2, body: { error: 'constructor', message: 'm' } }, 'refused'],
+    ['422 with code toString', { status: 422, headers: V2, body: { error: 'toString', message: 'm' } }, 'refused'],
+    ['422 with code __proto__', { status: 422, headers: V2, body: { error: '__proto__', message: 'm' } }, 'refused'],
     // 401 ends the session with or without the marker
     ['401 with the marker', { status: 401, headers: V2, body: { error: 'session_revoked' } }, 'sessionEnded'],
     ['401 of the api without the marker', { status: 401, body: { error: 'session_revoked', message: 'm' } }, 'sessionEnded'],
