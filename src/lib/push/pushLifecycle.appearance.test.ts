@@ -518,6 +518,57 @@ describe('row 52 — "user changed", "session ended", "lost"', () => {
   });
 });
 
+describe('row 52 — "user changed" on the request of a row leaves nothing the row prepared', () => {
+  const withoutRev = (c: Consent) => ({ ...c, rev: 0 });
+  const userChanged = async () => ({ kind: 'userChanged' as const });
+
+  test.each([
+    {
+      row: 2,
+      setup: () => seed({ [B]: enabledConsent(LABEL_B, channel('gone'), null) }),
+      refuse: () => api.pushSubscribe.mockImplementationOnce(userChanged),
+    },
+    {
+      row: 5,
+      setup: () => {
+        browser.channel = channel('a');
+      },
+      refuse: () => api.pushRemoveChannel.mockImplementationOnce(userChanged),
+    },
+    {
+      row: 6,
+      setup: () => {
+        browser.channel = channel('a');
+        addSub(B, channel('a').endpoint, null);
+      },
+      refuse: () => api.pushSubscribe.mockImplementationOnce(userChanged),
+    },
+    {
+      row: 9,
+      setup: () => {
+        browser.channel = channel('a');
+        addSub(B, channel('a').endpoint, LABEL_B);
+        seed({ [B]: enabledConsent(LABEL_B, channel('old'), null) });
+      },
+      refuse: () => api.pushSubscribe.mockImplementationOnce(userChanged),
+    },
+  ])('row $row: the consent, the works and the channel are as before', async ({ setup, refuse }) => {
+    setup();
+    await load();
+    const consentBefore = withoutRev(readConsent(B));
+    const channelBefore = browser.channel;
+    refuse();
+
+    await appear(B);
+
+    expect(meReload).toHaveBeenCalledTimes(1);
+    expect(withoutRev(readConsent(B))).toEqual(consentBefore);
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(channelBefore);
+    expect(getPushLifecycleState().foreignChannelWarnings).toEqual([]);
+  });
+});
+
 // ───────────────────────── Row 53 ─────────────────────────
 
 describe('row 53 — the browser changed the channel (US-10)', () => {

@@ -561,6 +561,29 @@ export async function updateConsentChannel(userId: string, args: UpdateChannelAr
   }, guard);
 }
 
+/** Arguments of {@link restoreConsent}. */
+export interface RestoreConsentArgs {
+  /** The snapshot of the write being undone; any later write keeps its result. */
+  expect: ConsentSnapshot;
+  /** The consent as it was before that write. */
+  previous: Consent;
+}
+
+/**
+ * Undoes the caller's own write of the consent: the consent is put back as
+ * it was before that write (generation and revision move on), only if
+ * nothing wrote it since. For a write followed by a request the server
+ * refused because another user is signed in — nothing reached the server, so
+ * nothing of the write may stay.
+ */
+export async function restoreConsent(userId: string, args: RestoreConsentArgs, guard?: WriteGuard): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    return store(record, userId, { ...args.previous, gen: consent.gen, rev: consent.rev });
+  }, guard);
+}
+
 /** Arguments of {@link revokeConsent}. */
 export interface RevokeConsentArgs {
   /** Endpoint of this browser's channel, when known. */

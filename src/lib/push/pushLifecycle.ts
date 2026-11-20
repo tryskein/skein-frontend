@@ -87,6 +87,7 @@ import {
   readPushState,
   recordUnconfirmedChannel,
   removePushWork,
+  restoreConsent,
   revokeConsent,
   type RevokeGuard,
   setConsentOffUnconfirmed,
@@ -196,6 +197,16 @@ function publish(step: Step, patch: Partial<PushLifecycleState>): void {
     consent: readConsent(step.token.userId),
     foreignChannelWarnings: foreignWarnings(),
   });
+}
+
+/**
+ * Shows the warnings of the browser's works again in the state of the step's
+ * appearance after an undo — the step itself has ended, its appearance may
+ * still be current.
+ */
+function republishWarnings(step: Step): void {
+  if (state === null || state.appearance !== step.token || !isCurrentAppearance(step.token)) return;
+  setState({ ...state, foreignChannelWarnings: foreignWarnings() });
 }
 
 function snapshotOf(consent: Consent): ConsentSnapshot {
@@ -368,6 +379,33 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
 }
 
 /**
+ * Passes `outcome` on; when it ends the step as "user changed", `undo` takes
+ * back what the decision prepared for this request first (rule 5: the refused
+ * decision leaves no consequence). A failed undo leaves the record as it is.
+ */
+async function undoingOnUserChanged<T>(outcome: Promise<T>, undo?: () => Promise<void>): Promise<T> {
+  try {
+    return await outcome;
+  } catch (error) {
+    if (undo !== undefined && error instanceof StepEnded && error.reason === 'userChanged') {
+      try {
+        await undo();
+      } catch {
+        // The record moved on meanwhile; its newer state stays.
+      }
+    }
+    throw error;
+  }
+}
+
+/** Puts the consent back as `previous` if `written` is still the last write of it. */
+function undoConsentWrite(userId: string, previous: Consent, written: Consent): () => Promise<void> {
+  return async () => {
+    await restoreConsent(userId, { expect: snapshotOf(written), previous });
+  };
+}
+
+/**
  * Registers U's subscription for the channel with the plan's label and mode,
  * then applies the answer to the consent (rule 7): `ok` confirms the consent
  * with this label at this endpoint, only if it was not written since;
@@ -382,20 +420,24 @@ async function register(
   keys: ChannelKeys,
   fingerprint: string | null,
   plan: RegisterPlan,
+  undo?: () => Promise<void>,
 ): Promise<void> {
   const { step, userId } = ctx;
-  const outcome = await request(step, (signal) =>
-    pushSubscribe(
-      {
-        expectedUserId: userId,
-        endpoint,
-        keys,
-        ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
-        deviceLabel: plan.label,
-        mode: plan.mode,
-      },
-      signal,
+  const outcome = await undoingOnUserChanged(
+    request(step, (signal) =>
+      pushSubscribe(
+        {
+          expectedUserId: userId,
+          endpoint,
+          keys,
+          ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+          deviceLabel: plan.label,
+          mode: plan.mode,
+        },
+        signal,
+      ),
     ),
+    undo,
   );
   switch (outcome.kind) {
     case 'ok':
@@ -476,7 +518,10 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         await removeChannelQuietly(channel.endpoint, null);
         throw error;
       }
-      await register(ctx, recorded, channel.endpoint, channel.keys, fingerprint, action.register);
+      await register(ctx, recorded, channel.endpoint, channel.keys, fingerprint, action.register, async () => {
+        await undoConsentWrite(userId, consent, recorded)();
+        await removeChannelQuietly(channel.endpoint, null);
+      });
       return;
     }
 
@@ -484,17 +529,25 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       const endpoint = action.endpoint;
       // Both steps are written first, so a closed tab finishes them later.
       const works = readPushState().works;
+      const added: string[] = [];
       live(step);
       if (!works.some((w) => w.type === 'foreignRemoval' && w.endpoint === endpoint)) {
-        await addPushWork({ type: 'foreignRemoval', endpoint }, guardOf(step));
+        added.push((await addPushWork({ type: 'foreignRemoval', endpoint }, guardOf(step))).id);
       }
       if (!works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) {
-        await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+        added.push((await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step))).id);
       }
       publish(step, {});
       // The removal by endpoint, without a condition: only its `ok` proves the
-      // previous user's subscription at this endpoint is gone.
-      const outcome = await request(step, (signal) => pushRemoveChannel({ expectedUserId: userId, endpoint }, signal));
+      // previous user's subscription at this endpoint is gone. "User changed"
+      // takes the works of this decision back.
+      const outcome = await undoingOnUserChanged(
+        request(step, (signal) => pushRemoveChannel({ expectedUserId: userId, endpoint }, signal)),
+        async () => {
+          for (const id of added) await removePushWork(id);
+          republishWarnings(step);
+        },
+      );
       if (outcome.kind === 'ok') {
         await removeWorks(step, (w) => w.type === 'foreignRemoval' && w.endpoint === endpoint);
       }
@@ -524,10 +577,15 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         return;
       }
       if (ctx.channel === null || accepted.label === null) return;
-      await register(ctx, accepted, action.endpoint, ctx.channel.keys, ctx.channelKeysFingerprint, {
-        mode: action.mode,
-        label: accepted.label,
-      });
+      await register(
+        ctx,
+        accepted,
+        action.endpoint,
+        ctx.channel.keys,
+        ctx.channelKeysFingerprint,
+        { mode: action.mode, label: accepted.label },
+        undoConsentWrite(userId, consent, accepted),
+      );
       return;
     }
 
@@ -545,7 +603,15 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         },
         guardOf(step),
       );
-      await register(ctx, adopted, action.endpoint, ctx.channel.keys, ctx.channelKeysFingerprint, action.register);
+      await register(
+        ctx,
+        adopted,
+        action.endpoint,
+        ctx.channel.keys,
+        ctx.channelKeysFingerprint,
+        action.register,
+        undoConsentWrite(userId, consent, adopted),
+      );
       return;
     }
 
