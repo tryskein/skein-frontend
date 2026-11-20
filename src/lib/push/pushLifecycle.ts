@@ -69,7 +69,7 @@ import {
 import { decide, type DecisionAction, type DecisionChannel, type DecisionRow, type RegisterPlan } from './decide';
 import { endpointFingerprint, keysFingerprint } from './fingerprint';
 import { withPushOpLock } from './locks';
-import { guardOf, live, type PushStep, request, StepEnded } from './pushStep';
+import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 import {
   abandonConsentLabel,
   addPushWork,
@@ -197,13 +197,34 @@ function snapshotOf(consent: Consent): ConsentSnapshot {
   return { gen: consent.gen, rev: consent.rev };
 }
 
-/** Removes the channel `endpoint` if it is still current; `failed` when the browser failed. */
-async function removeChannelQuietly(endpoint: string): Promise<'removed' | 'notCurrent' | 'failed'> {
+/**
+ * Removes the channel `endpoint` if it is still current; `failed` when the
+ * browser failed. With a step, the step must still be live right before the
+ * unsubscription (else {@link StepEnded} is thrown); without one — the
+ * repeats on page load and the removal of a channel the step itself just
+ * created — nothing is checked.
+ */
+async function removeChannelQuietly(endpoint: string, step: Step | null): Promise<'removed' | 'notCurrent' | 'failed'> {
   try {
-    return await removeChannel(endpoint);
-  } catch {
+    return await removeChannel(endpoint, step === null ? undefined : () => live(step));
+  } catch (error) {
+    if (error instanceof StepEnded) throw error;
     return 'failed';
   }
+}
+
+/**
+ * Creates a channel for the step; the step must be live right before each
+ * browser effect. A channel that came into being although the step ended
+ * meanwhile is removed again: it is nobody's.
+ */
+async function createChannelFor(step: Step, publicKey: string): Promise<BrowserChannel> {
+  const channel = await createChannel(publicKey, step.signal, () => live(step));
+  if (!isLive(step)) {
+    await removeChannelQuietly(channel.endpoint, null);
+    throw new StepEnded('superseded');
+  }
+  return channel;
 }
 
 async function removeWorks(step: Step, match: (work: PushWork) => boolean): Promise<void> {
@@ -221,7 +242,7 @@ async function removeWorks(step: Step, match: (work: PushWork) => boolean): Prom
  */
 async function repeatLocalUnsubscribe(work: Extract<PushWork, { type: 'localUnsubscribe' }>, step: Step | null): Promise<void> {
   if (step !== null) live(step);
-  const result = await removeChannelQuietly(work.endpoint);
+  const result = await removeChannelQuietly(work.endpoint, step);
   if (result === 'failed') return;
   if (step !== null) live(step);
   await removePushWork(work.id, step === null ? undefined : guardOf(step));
@@ -327,7 +348,7 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
     }
   }
   live(step);
-  await removeChannelQuietly(endpoint);
+  await removeChannelQuietly(endpoint, step);
 }
 
 /**
@@ -413,8 +434,9 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       live(step);
       let channel: BrowserChannel;
       try {
-        channel = await createChannel(ctx.publicKey, step.signal);
-      } catch {
+        channel = await createChannelFor(step, ctx.publicKey);
+      } catch (error) {
+        if (error instanceof StepEnded) throw error;
         return;
       }
       const fingerprint = await keysFingerprint(channel.keys);
@@ -435,7 +457,7 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       } catch (error) {
         // The consent moved on or could not be written: the new channel is
         // nobody's, so it does not stay.
-        await removeChannelQuietly(channel.endpoint);
+        await removeChannelQuietly(channel.endpoint, null);
         throw error;
       }
       await register(ctx, recorded, channel.endpoint, channel.keys, fingerprint, action.register);
@@ -462,7 +484,7 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       }
       // The channel is removed whatever the server answered.
       live(step);
-      const local = await removeChannelQuietly(endpoint);
+      const local = await removeChannelQuietly(endpoint, step);
       if (local === 'failed') return;
       live(step);
       await removeWorks(step, (w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint);
@@ -525,13 +547,13 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       }
       ctx.deviceRemoved = true;
       live(step);
-      await removeChannelQuietly(action.endpoint);
+      await removeChannelQuietly(action.endpoint, step);
       return;
     }
 
     case 'removeChannel':
       live(step);
-      await removeChannelQuietly(action.endpoint);
+      await removeChannelQuietly(action.endpoint, step);
       return;
   }
 }
@@ -789,7 +811,7 @@ async function undoRegistration(step: Step, label: string, endpoint: string): Pr
   const userId = step.token.userId;
   await request(step, (signal) => pushRevokeDevices({ expectedUserId: userId, deviceLabels: [label], endpoint }, signal));
   live(step);
-  await removeChannelQuietly(endpoint);
+  await removeChannelQuietly(endpoint, step);
 }
 
 /**
@@ -833,7 +855,7 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
     const own = consent.endpoint === current.endpoint;
     if (consent.state === 'off' && (own || listed)) {
       live(step);
-      if ((await removeChannelQuietly(current.endpoint)) === 'failed') return { kind: 'failed', reason: 'channel' };
+      if ((await removeChannelQuietly(current.endpoint, step)) === 'failed') return { kind: 'failed', reason: 'channel' };
       current = null;
     } else if (!own && !listed) {
       const ctx: DecisionContext = {
@@ -858,8 +880,9 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
   if (current === null) {
     live(step);
     try {
-      current = await createChannel(server.publicKey, step.signal);
-    } catch {
+      current = await createChannelFor(step, server.publicKey);
+    } catch (error) {
+      if (error instanceof StepEnded) throw error;
       live(step);
       return { kind: 'failed', reason: 'channel' };
     }
@@ -885,7 +908,7 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
             guardOf(step),
           );
   } catch (error) {
-    if (created) await removeChannelQuietly(channel.endpoint);
+    if (created) await removeChannelQuietly(channel.endpoint, null);
     return failure(error);
   }
   const label = pending.label;
@@ -1052,7 +1075,7 @@ export async function revokeConfirmedDevice(step: PushStep, devices: PushDevice[
  */
 export async function removeLocalChannel(step: PushStep, endpoint: string): Promise<boolean> {
   live(step);
-  const result = await removeChannelQuietly(endpoint);
+  const result = await removeChannelQuietly(endpoint, step);
   if (result === 'failed') return false;
   live(step);
   for (const work of readPushState().works) {

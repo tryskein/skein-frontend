@@ -90,9 +90,10 @@ export async function readChannel(): Promise<ChannelRead> {
   }
 }
 
-async function ensureRegistration(): Promise<ServiceWorkerRegistration> {
+async function ensureRegistration(precondition?: () => void): Promise<ServiceWorkerRegistration> {
   const existing = await navigator.serviceWorker.getRegistration(SW_SCOPE);
   if (existing) return existing;
+  precondition?.();
   return navigator.serviceWorker.register(SW_URL, { scope: SW_SCOPE });
 }
 
@@ -124,10 +125,20 @@ function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
  * Rejects when the browser refuses. `navigator.serviceWorker.ready` never
  * settles while no worker is active, so the wait for it ends when `signal`
  * aborts — the caller may hold the `skein.push.op` lock.
+ *
+ * `precondition` runs right before each effect — the registration of the
+ * service worker and the subscription — after the waits that precede it,
+ * and throws to stop the creation without that effect.
  */
-export async function createChannel(publicKey: string, signal?: AbortSignal): Promise<BrowserChannel> {
-  await untilAborted(ensureRegistration(), signal);
+export async function createChannel(
+  publicKey: string,
+  signal?: AbortSignal,
+  precondition?: () => void,
+): Promise<BrowserChannel> {
+  await untilAborted(ensureRegistration(precondition), signal);
   const registration = await untilAborted(navigator.serviceWorker.ready, signal);
+  if (signal?.aborted) throw signal.reason;
+  precondition?.();
   const subscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(publicKey),
@@ -140,11 +151,14 @@ export async function createChannel(publicKey: string, signal?: AbortSignal): Pr
 /**
  * Removes the current channel only if its endpoint is `endpoint`: `removed`
  * when it was unsubscribed, `notCurrent` when the current channel is another
- * one or there is none. Rejects when the browser fails.
+ * one or there is none. Rejects when the browser fails. `precondition` runs
+ * right before the unsubscription, after the subscription was read, and
+ * throws to stop without it.
  */
-export async function removeChannel(endpoint: string): Promise<'removed' | 'notCurrent'> {
+export async function removeChannel(endpoint: string, precondition?: () => void): Promise<'removed' | 'notCurrent'> {
   const subscription = await currentSubscription();
   if (subscription === null || subscription.endpoint !== endpoint) return 'notCurrent';
+  precondition?.();
   const ok = await subscription.unsubscribe();
   if (!ok) throw new Error('the browser did not remove the push subscription');
   return 'removed';

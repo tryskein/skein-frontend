@@ -208,6 +208,30 @@ describe('row 49 — a write queued on skein.push.store after the appearance was
   });
 });
 
+describe('row 49 — a channel created while the appearance was replaced', () => {
+  test('is removed again; the consent is not written', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('gone'), null) });
+    await load();
+    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    browserApi.createChannel.mockImplementationOnce(async () => {
+      // The browser finished the subscription after another login.
+      noteLogin(A);
+      browser.channel = channel('late');
+      return browser.channel;
+    });
+    api.pushListDevices.mockImplementation(async (userId: string) =>
+      api.pushListDevices.mock.calls.length > 1 ? { kind: 'lost' } : model.list(userId),
+    );
+
+    await appear(A);
+
+    expect(browserApi.createChannel).toHaveBeenCalledTimes(1);
+    expect(browser.channel).toBeNull();
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expect(api.pushSubscribe).not.toHaveBeenCalled();
+  });
+});
+
 // ───────────────────────── Row 50 ─────────────────────────
 
 describe('row 50 — repeats of unfinished work (rule 6)', () => {

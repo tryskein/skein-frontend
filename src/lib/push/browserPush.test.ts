@@ -11,7 +11,7 @@
  * The browser APIs are stand-ins: this checks our mapping, not the browser.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { browserPushSupported, createChannel, readChannel } from './browserPush';
+import { browserPushSupported, createChannel, readChannel, removeChannel } from './browserPush';
 
 type Capability = 'serviceWorker' | 'PushManager' | 'Notification' | 'locks';
 const CAPABILITIES: Capability[] = ['serviceWorker', 'PushManager', 'Notification', 'locks'];
@@ -116,5 +116,65 @@ describe('row 47b — creating the channel', () => {
     controller.abort(new DOMException('deadline', 'AbortError'));
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(subscribe).not.toHaveBeenCalled();
+  });
+});
+
+describe('row 47b — no browser effect once the caller ended, after the adapter\'s own waits', () => {
+  test('createChannel: the caller ends while the worker becomes active — no subscription', async () => {
+    const subscribe = vi.fn();
+    let activate: (r: unknown) => void = () => undefined;
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {
+        getRegistration: vi.fn(async () => ({ pushManager: { subscribe } })),
+        register: vi.fn(),
+        ready: new Promise((resolve) => (activate = resolve)),
+      },
+      configurable: true,
+    });
+    let callerLive = true;
+    const pending = createChannel('AQID', undefined, () => {
+      if (!callerLive) throw new Error('ended');
+    });
+    callerLive = false;
+    activate({ pushManager: { subscribe } });
+    await expect(pending).rejects.toThrow('ended');
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  test('createChannel: the caller ends while the registration is read — no service worker is registered', async () => {
+    const register = vi.fn();
+    let found: (r: unknown) => void = () => undefined;
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {
+        getRegistration: vi.fn(() => new Promise((resolve) => (found = resolve))),
+        register,
+        ready: new Promise(() => undefined),
+      },
+      configurable: true,
+    });
+    let callerLive = true;
+    const pending = createChannel('AQID', undefined, () => {
+      if (!callerLive) throw new Error('ended');
+    });
+    callerLive = false;
+    found(undefined);
+    await expect(pending).rejects.toThrow('ended');
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  test('removeChannel: the caller ends while the subscription is read — no unsubscription', async () => {
+    const unsubscribe = vi.fn(async () => true);
+    let read: (s: unknown) => void = () => undefined;
+    install(CAPABILITIES, registrationWith(() => new Promise((resolve) => (read = resolve))));
+    let callerLive = true;
+    const pending = removeChannel('https://push.example.test/send/one', () => {
+      if (!callerLive) throw new Error('ended');
+    });
+    callerLive = false;
+    // The read reaches getSubscription after the registration is found.
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    read({ endpoint: 'https://push.example.test/send/one', unsubscribe });
+    await expect(pending).rejects.toThrow('ended');
+    expect(unsubscribe).not.toHaveBeenCalled();
   });
 });

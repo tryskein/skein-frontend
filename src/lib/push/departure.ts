@@ -178,7 +178,7 @@ export async function departAfterAccountDeletion(): Promise<void> {
     await deleteConsent(userId, guardOf(step));
     if (ownEndpoint === null) return;
     live(step);
-    await removeChannel(ownEndpoint);
+    await removeChannel(ownEndpoint, () => live(step));
   })();
   try {
     await withinBudget(work, step.signal, undefined);
