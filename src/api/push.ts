@@ -1,20 +1,18 @@
 /**
- * Web Push REST client — sk push phase 1.
+ * Web Push REST client.
  *
- * Wraps the device endpoints skein-api exposes (the skein-web BFF proxies
- * `/api/v1` with the session cookie):
+ * The push endpoints of skein-api (the skein-web BFF proxies `/api/v1` with
+ * the session cookie), contract v2 (see the "Contract v2" section below):
  *
- *   GET    /api/v1/push/config             → { publicKey }
- *   POST   /api/v1/push/subscriptions      → upsert caller's subscription
- *   DELETE /api/v1/push/subscriptions      → remove one by endpoint (body)
- *   DELETE /api/v1/push/subscriptions/{id} → remove one by row id (owner-scoped)
- *   GET    /api/v1/push/subscriptions      → caller's devices (NO secrets)
+ *   GET    /api/v1/push/config                           → { publicKey }
+ *   POST   /api/v1/push/subscriptions                    → register the caller's subscription
+ *   DELETE /api/v1/push/subscriptions                    → remove a channel by its endpoint
+ *   GET    /api/v1/push/subscriptions?expectedUserId=    → the caller's devices (no secrets)
+ *   POST   /api/v1/push/device-revocations               → revoke the caller's device labels
+ *   POST   /api/v1/push/device-removals                  → remove a caller's device by id
  *
- * Contract v2 (see the "Contract v2" section below) adds the expected user to
- * every operation, the device label and the record version, and two routes:
- *
- *   POST   /api/v1/push/device-revocations → revoke the caller's device labels
- *   POST   /api/v1/push/device-removals    → remove a caller's device by id
+ * Every operation but `/config` carries the user the page expects to be the
+ * caller.
  *
  * The VAPID public key from `/config` is base64url. When the server has
  * push DISABLED the key is the empty string — callers MUST treat an empty
@@ -23,13 +21,13 @@
  *
  * The device-list rows deliberately carry NO raw `endpoint` / `keys` — those
  * never leave the server. Each row DOES carry `endpointHash` (SHA-256 hex of
- * the endpoint) so the settings page can identify "this device" by hashing
- * its own live endpoint and matching.
+ * the endpoint) so the page can identify "this device" by hashing its own
+ * channel's endpoint and matching.
  *
  * All camelCase JSON, mirroring the contract.
  */
 
-import { apiFetch, apiJson } from './client';
+import { apiJson } from './client';
 
 // ───────────────────────── Wire DTOs ─────────────────────────
 
@@ -49,14 +47,6 @@ export interface PushConfig {
 export interface PushSubscriptionKeys {
   p256dh: string;
   auth: string;
-}
-
-/** Body for `POST /api/v1/push/subscriptions`. */
-export interface RegisterSubscriptionArgs {
-  endpoint: string;
-  keys: PushSubscriptionKeys;
-  /** Caller's user-agent string, for the device list. Optional. */
-  ua?: string;
 }
 
 /**
@@ -102,53 +92,6 @@ export async function getPushConfig(): Promise<PushConfig> {
     method: 'GET',
   });
   return { publicKey: typeof raw.publicKey === 'string' ? raw.publicKey : '' };
-}
-
-/**
- * Register (upsert) the caller's push subscription. Idempotent on the
- * backend — re-POSTing the same endpoint refreshes the row rather than
- * duplicating it, which is what the login re-sync relies on.
- */
-export async function registerSubscription(
-  args: RegisterSubscriptionArgs,
-): Promise<void> {
-  const body: RegisterSubscriptionArgs = {
-    endpoint: args.endpoint,
-    keys: { p256dh: args.keys.p256dh, auth: args.keys.auth },
-  };
-  if (args.ua && args.ua.trim() !== '') body.ua = args.ua;
-  await apiFetch('/api/v1/push/subscriptions', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-/** Remove the caller's subscription identified by its endpoint. */
-export async function deleteSubscription(endpoint: string): Promise<void> {
-  await apiFetch('/api/v1/push/subscriptions', {
-    method: 'DELETE',
-    body: JSON.stringify({ endpoint }),
-  });
-}
-
-/**
- * Remove one of the caller's devices by its subscription row id. Owner-scoped
- * server-side — deleting a row that isn't yours (or doesn't exist) is a 404.
- * Used by the settings device list to unsubscribe ANY device (not just the
- * current browser, which only knows its own endpoint).
- */
-export async function deleteSubscriptionById(id: string): Promise<void> {
-  await apiFetch(`/api/v1/push/subscriptions/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
-}
-
-/** List the caller's registered devices (metadata only — no secrets). */
-export async function listPushDevices(): Promise<PushDevice[]> {
-  const raw = await apiJson<PushDevice[] | null>('/api/v1/push/subscriptions', {
-    method: 'GET',
-  });
-  return Array.isArray(raw) ? raw : [];
 }
 
 // ───────────────────────── Contract v2 ─────────────────────────

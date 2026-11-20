@@ -278,6 +278,10 @@ export const en = {
       body: 'Turn on desktop notifications? Skein will push new tasks, mentions and reminders to you.',
       yes: 'Yes',
       later: 'Not now',
+      foreignAria: 'Notifications of the previous user',
+      foreignBody:
+        'Notifications of the previous user of this browser may still arrive here until the server confirms their removal.',
+      foreignRetry: 'Try again',
     },
     theme: {
       loading: 'Loading themes…',
@@ -2038,6 +2042,20 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
         '<b>Brave</b> disables Google push by default. Open <code>brave://settings/privacy</code>, turn on “Use Google services for push messaging” and <b>restart Brave completely</b>. If that does not help, create a fresh Brave profile or use Chrome / Edge / Firefox.',
       braveMaybe:
         'If this is <b>Brave</b> — open <code>brave://settings/privacy</code>, turn on “Use Google services for push messaging” and restart the browser. Otherwise try Chrome, Edge or Firefox on the desktop and check that your network / VPN is not blocking Google services.',
+      serverDisabledTitle: 'Push is turned off on the server',
+      serverDisabledBody: 'This Skein server does not send push notifications, so push cannot be turned on here.',
+      offUnconfirmedTitle: 'Turning push off is not confirmed',
+      offUnconfirmedBody:
+        'Push is off on this device, but the server has not confirmed it yet: this device may still receive notifications. Skein will try again on the next visit.',
+      offUnconfirmedRetry: 'Try again now',
+      failed: {
+        unconfirmed: 'The server did not answer. Try again.',
+        refused: 'The server refused to turn push on for this device.',
+        revoked: 'This device was unsubscribed. Turn push on again to resume.',
+        labelLimit: 'This device cannot be turned on again until push is turned off on it.',
+        storage: 'The browser could not save the push setting.',
+        channel: 'The browser could not create its push subscription.',
+      },
     },
     devices: {
       title: 'Devices',

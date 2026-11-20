@@ -1,264 +1,115 @@
 /**
- * usePush — Web Push registration + subscription state machine.
- * sk push phase 1.
+ * usePush — the push state of the current appearance and the explicit push
+ * actions, for the push UI (banner, previous-user warning, settings).
  *
- * Owns the browser side of Web Push:
- *   - feature-detection (SW + PushManager + Notification),
- *   - registering `/sw.js` at scope `/`,
- *   - subscribe() / unsubscribe() against the backend,
- *   - exposing `permission` / `supported` / `subscribed`,
- *   - a login re-sync that re-POSTs the live subscription so the server
- *     record can't drift from the browser's (e.g. after the server DB was
- *     reset, or the subscription was created on another login).
+ * The state comes from the push controller (`lib/push/pushLifecycle.ts`),
+ * which `PushProvider` runs; this hook only reads it and never registers
+ * anything itself — mounting it sends no push request (spec INV-2).
  *
- * The soft-ask banner (PushSoftAsk) calls `Notification.requestPermission`
- * inside a user gesture and then `subscribe()` — this hook NEVER prompts
- * on its own. A load-time prompt that gets dismissed permanently blocks
- * future asks, so permission requests are strictly gesture-driven.
+ * The state is keyed by the appearance (`auth/appearance.ts`): a state that
+ * belongs to an earlier appearance is never returned, so right after another
+ * user (or a new session) appears the UI shows nothing of the previous one.
  *
- * Data layer: the canonical `pushManager.getSubscription()` lives in
- * browser/SW state, not the server, so subscribe/unsubscribe are plain
- * imperative async actions wrapped as TanStack mutations only for the
- * shared error toast + cache invalidation. The DEVICE LIST (settings,
- * separate ticket) is a normal query keyed `['push','devices']`; we bust
- * it here so it stays fresh after subscribe/unsubscribe.
+ * `enable` must be called directly in the click handler: it takes the
+ * consent generation and asks for the notification permission inside the
+ * user's gesture.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useSyncExternalStore } from 'react';
+import { type Appearance, currentAppearance, subscribeAppearance } from '../auth/appearance';
 import {
-  deleteSubscription,
-  getPushConfig,
-  registerSubscription,
-} from '../api/push';
-import { urlBase64ToUint8Array } from './urlBase64';
-import { useToaster } from '../components/Toaster';
-
-/** Query key for the device list (consumed by the settings page ticket). */
-export const pushDevicesKey = ['push', 'devices'] as const;
-
-export type NotificationPermissionState = 'default' | 'granted' | 'denied';
+  disablePush,
+  enablePush,
+  getPushLifecycleState,
+  type PushActionResult,
+  type PushLifecycleState,
+  removeOtherDevice,
+  repeatPushDecision,
+  subscribePushLifecycle,
+} from './push/pushLifecycle';
 
 export interface UsePushResult {
-  /**
-   * Whether the browser exposes the full Web Push surface
-   * (serviceWorker + PushManager + Notification). When false every other
-   * field is inert and the soft-ask must not render.
-   */
-  supported: boolean;
-  /** Live `Notification.permission`, normalized. `'default'` when unsupported. */
-  permission: NotificationPermissionState;
-  /** True when a `PushSubscription` currently exists in this browser. */
-  subscribed: boolean;
-  /** True while a subscribe/unsubscribe round-trip is in flight. */
-  busy: boolean;
-  /**
-   * Request permission (if needed) and create + register a subscription.
-   * Safe to call only from a user gesture. Resolves true on success.
-   * No-op returning false when unsupported, denied, or push is disabled
-   * server-side (empty VAPID key).
-   */
-  subscribe: () => Promise<boolean>;
-  /** Tear down the subscription locally and remove it from the backend. */
-  unsubscribe: () => Promise<boolean>;
+  /** The push state of the current appearance; blank before its decision. */
+  state: PushLifecycleState;
+  /** Enables push on this device. Call it directly in the click handler. */
+  enable: () => Promise<PushActionResult>;
+  /** Disables push on this device (also: removes the current device). */
+  disable: () => Promise<PushActionResult>;
+  /** Removes another device by its subscription id. */
+  removeDevice: (id: string) => Promise<PushActionResult>;
+  /** Runs the decision of this appearance again (retry of unfinished work). */
+  retry: () => Promise<void>;
 }
 
-function detectSupport(): boolean {
-  return (
-    typeof navigator !== 'undefined' &&
-    'serviceWorker' in navigator &&
-    typeof window !== 'undefined' &&
-    'PushManager' in window &&
-    'Notification' in window
-  );
+function sameAppearance(a: Appearance | null, b: Appearance | null): boolean {
+  return a === b || (a !== null && b !== null && a.seq === b.seq && a.userId === b.userId);
 }
 
-function currentPermission(supported: boolean): NotificationPermissionState {
-  if (!supported) return 'default';
-  return Notification.permission as NotificationPermissionState;
+/** A state that shows nothing: the decision of `appearance` has not published yet. */
+function blankState(appearance: Appearance | null, from: PushLifecycleState): PushLifecycleState {
+  return {
+    appearance,
+    supported: from.supported,
+    decided: false,
+    row: null,
+    serverPushEnabled: false,
+    permission: from.permission,
+    consent: null,
+    devices: null,
+    thisDeviceHash: null,
+    foreignChannelWarnings: [],
+  };
 }
 
-/**
- * Register (or reuse) the `/sw.js` service worker at scope `/`.
- * `navigator.serviceWorker.register` is idempotent — calling it for an
- * already-registered SW returns the existing registration.
- */
-async function ensureRegistration(): Promise<ServiceWorkerRegistration> {
-  const existing = await navigator.serviceWorker.getRegistration('/');
-  if (existing) return existing;
-  return navigator.serviceWorker.register('/sw.js', { scope: '/' });
-}
+const blanks = new WeakMap<PushLifecycleState, PushLifecycleState>();
 
-/**
- * Create a fresh subscription (or reuse the existing one) and POST it to
- * the backend. Returns true on success, false when push is unavailable
- * (no VAPID key). Throws on unexpected failures so the mutation surfaces
- * a toast.
- */
-async function doSubscribe(): Promise<boolean> {
-  const { publicKey } = await getPushConfig();
-  if (!publicKey) return false; // push disabled server-side
-
-  const registration = await ensureRegistration();
-  // Wait for the worker to be active before subscribing — a brand-new
-  // registration may still be installing.
-  await navigator.serviceWorker.ready;
-
-  let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
+/** The controller's state, if it belongs to the current appearance. */
+function stateOfCurrentAppearance(): PushLifecycleState {
+  const state = getPushLifecycleState();
+  const appearance = currentAppearance();
+  if (sameAppearance(state.appearance, appearance)) return state;
+  // A stable object per controller state, as useSyncExternalStore requires.
+  let blank = blanks.get(state);
+  if (blank === undefined || !sameAppearance(blank.appearance, appearance)) {
+    blank = blankState(appearance, state);
+    blanks.set(state, blank);
   }
-
-  const json = subscription.toJSON();
-  if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
-    throw new Error('subscription is missing endpoint/keys');
-  }
-  await registerSubscription({
-    endpoint: json.endpoint,
-    keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-    ua: navigator.userAgent,
-  });
-  return true;
+  return blank;
 }
 
-async function doUnsubscribe(): Promise<boolean> {
-  const registration = await navigator.serviceWorker.getRegistration('/');
-  if (!registration) return false;
-  const subscription = await registration.pushManager.getSubscription();
-  if (!subscription) return false;
-
-  const { endpoint } = subscription.toJSON();
-  // Remove the server row FIRST. If the DELETE fails we deliberately keep the
-  // local subscription (and let the error propagate) so the user can retry —
-  // unsubscribing locally first would orphan the server device row, which this
-  // browser could no longer delete once its endpoint is gone.
-  if (endpoint) {
-    await deleteSubscription(endpoint);
-  }
-  await subscription.unsubscribe();
-  return true;
+function subscribe(listener: () => void): () => void {
+  const offState = subscribePushLifecycle(listener);
+  const offAppearance = subscribeAppearance(listener);
+  return () => {
+    offState();
+    offAppearance();
+  };
 }
 
 export function usePush(): UsePushResult {
-  const supported = useMemo(detectSupport, []);
-  const qc = useQueryClient();
-  const toast = useToaster();
+  const state = useSyncExternalStore(subscribe, stateOfCurrentAppearance, stateOfCurrentAppearance);
 
-  const [permission, setPermission] = useState<NotificationPermissionState>(() =>
-    currentPermission(supported),
-  );
-  const [subscribed, setSubscribed] = useState(false);
+  // Not async: `enablePush` must start in the caller's click (the
+  // permission prompt), so it is called before anything is awaited.
+  const enable = useCallback(() => {
+    const action = enablePush();
+    return action.then(async (result) => {
+      await repeatPushDecision();
+      return result;
+    });
+  }, []);
 
-  const refreshSubscribed = useCallback(async () => {
-    if (!supported) return;
-    try {
-      const registration = await navigator.serviceWorker.getRegistration('/');
-      const sub = registration
-        ? await registration.pushManager.getSubscription()
-        : null;
-      setSubscribed(!!sub);
-    } catch {
-      setSubscribed(false);
-    }
-  }, [supported]);
+  const disable = useCallback(async () => {
+    const result = await disablePush();
+    await repeatPushDecision();
+    return result;
+  }, []);
 
-  // On mount: register the SW, read the current subscription, and (when
-  // permission is already granted) re-POST the live subscription so the
-  // server record can't drift from the browser. This is the login
-  // re-sync — cheap, idempotent, and covers the "server DB reset" /
-  // "subscribed on another tab" cases without a banner round-trip.
-  useEffect(() => {
-    if (!supported) return;
-    let cancelled = false;
+  const removeDevice = useCallback(async (id: string) => {
+    const result = await removeOtherDevice(id);
+    await repeatPushDecision();
+    return result;
+  }, []);
 
-    void (async () => {
-      try {
-        await ensureRegistration();
-      } catch {
-        // SW registration blocked (e.g. insecure context) — nothing else
-        // works; bail quietly. `supported` stays true but actions no-op.
-        return;
-      }
-      if (cancelled) return;
-      await refreshSubscribed();
-      if (cancelled) return;
-
-      if (currentPermission(supported) === 'granted') {
-        try {
-          // Re-sync only if we already have (or can get) a subscription;
-          // doSubscribe reuses the existing one and re-POSTs it.
-          await doSubscribe();
-          if (!cancelled) {
-            await refreshSubscribed();
-          }
-        } catch {
-          // Re-sync is best-effort — a failure here must not surface a
-          // toast on every page load. The explicit subscribe() path
-          // (from the banner) does surface errors.
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [supported, refreshSubscribed]);
-
-  const subscribeMutation = useMutation<boolean, Error, void>({
-    mutationFn: () => doSubscribe(),
-    onSuccess: async (ok) => {
-      if (ok) {
-        await refreshSubscribed();
-        void qc.invalidateQueries({ queryKey: pushDevicesKey });
-        toast.success('Desktop notifications on');
-      } else {
-        toast.info('Push notifications disabled on the server');
-      }
-    },
-    onError: (err) =>
-      toast.error(`Couldn't enable notifications: ${err.message || 'error'}`),
-  });
-
-  const unsubscribeMutation = useMutation<boolean, Error, void>({
-    mutationFn: () => doUnsubscribe(),
-    onSuccess: async () => {
-      await refreshSubscribed();
-      void qc.invalidateQueries({ queryKey: pushDevicesKey });
-      toast.success('Desktop notifications off');
-    },
-    onError: (err) =>
-      toast.error(`Couldn't disable notifications: ${err.message || 'error'}`),
-  });
-
-  const subscribe = useCallback(async (): Promise<boolean> => {
-    if (!supported) return false;
-    if (Notification.permission === 'default') {
-      const result = await Notification.requestPermission();
-      setPermission(result as NotificationPermissionState);
-      if (result !== 'granted') return false;
-    } else if (Notification.permission === 'denied') {
-      setPermission('denied');
-      return false;
-    } else {
-      setPermission('granted');
-    }
-    return subscribeMutation.mutateAsync();
-  }, [supported, subscribeMutation]);
-
-  const unsubscribe = useCallback(async (): Promise<boolean> => {
-    if (!supported) return false;
-    return unsubscribeMutation.mutateAsync();
-  }, [supported, unsubscribeMutation]);
-
-  return {
-    supported,
-    permission,
-    subscribed,
-    busy: subscribeMutation.isPending || unsubscribeMutation.isPending,
-    subscribe,
-    unsubscribe,
-  };
+  return { state, enable, disable, removeDevice, retry: repeatPushDecision };
 }

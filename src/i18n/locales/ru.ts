@@ -251,6 +251,10 @@ export const ru = {
       body: 'Включить уведомления на рабочий стол? Skein будет присылать пуш о новых задачах, упоминаниях и будильниках.',
       yes: 'Да',
       later: 'Не сейчас',
+      foreignAria: 'Уведомления прежнего пользователя',
+      foreignBody:
+        'Уведомления прежнего пользователя в этом браузере могут ещё приходить, пока сервер не подтвердит их удаление.',
+      foreignRetry: 'Повторить',
     },
     theme: {
       loading: 'Загружаем темы…',
@@ -1901,6 +1905,20 @@ collapsedChip: '{{total}} · {{collapsed}} свёрнуто',
         '<b>Brave</b> по умолчанию отключает Google-пуши. Откройте <code>brave://settings/privacy</code>, включите «Use Google services for push messaging» и <b>полностью перезапустите Brave</b>. Если не помогло — создайте новый профиль Brave или используйте Chrome / Edge / Firefox.',
       braveMaybe:
         'Если это <b>Brave</b> — откройте <code>brave://settings/privacy</code>, включите «Use Google services for push messaging» и перезапустите браузер. Иначе попробуйте Chrome, Edge или Firefox на десктопе и проверьте, что сеть / VPN не блокирует сервисы Google.',
+      serverDisabledTitle: 'Push выключен на сервере',
+      serverDisabledBody: 'Этот сервер Skein не отправляет push-уведомления, поэтому включить push здесь нельзя.',
+      offUnconfirmedTitle: 'Отключение не подтверждено',
+      offUnconfirmedBody:
+        'Push на этом устройстве выключен, но сервер ещё не подтвердил это: уведомления сюда могут приходить. Skein повторит попытку при следующем входе.',
+      offUnconfirmedRetry: 'Повторить сейчас',
+      failed: {
+        unconfirmed: 'Сервер не ответил. Попробуйте ещё раз.',
+        refused: 'Сервер отказался включить push на этом устройстве.',
+        revoked: 'Это устройство отписано. Включите push заново, чтобы возобновить.',
+        labelLimit: 'Включить это устройство снова можно только после отключения push на нём.',
+        storage: 'Браузер не смог сохранить настройку push.',
+        channel: 'Браузер не смог создать push-подписку.',
+      },
     },
     devices: {
       title: 'Устройства',

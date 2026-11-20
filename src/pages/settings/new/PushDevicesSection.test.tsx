@@ -25,11 +25,12 @@ import {
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
+import i18n from '../../../i18n/config';
+import type { PushDevice } from '../../../api/push';
+import { emptyConsent, type Consent } from '../../../lib/push/pushState';
+import type { PushLifecycleState } from '../../../lib/push/pushLifecycle';
 
 // ── Mocks ────────────────────────────────────────────────────────
-vi.mock('../../../auth/AuthContext', () => ({
-  useAuth: () => ({ user: { username: 'u', role: 'user' } }),
-}));
 
 // Thin SettingsLayout pass-through — avoids mounting HeaderBar + the
 // LayoutProvider/TasksUiState stack. Keeps SettingsPanel real so the
@@ -44,36 +45,23 @@ vi.mock('./SettingsLayout', async (importActual) => {
   };
 });
 
-const subscribeSpy = vi.fn();
-const unsubscribeSpy = vi.fn();
+// The push state of the current appearance and the explicit actions of the
+// push controller, as `usePush` hands them to the page.
+const push = vi.hoisted(() => ({
+  state: null as unknown as PushLifecycleState,
+  enable: vi.fn(),
+  disable: vi.fn(),
+  removeDevice: vi.fn(),
+}));
 
 vi.mock('../../../lib/usePush', () => ({
-  pushDevicesKey: ['push', 'devices'],
   usePush: () => ({
-    supported: true,
-    permission: 'granted',
-    subscribed: false,
-    busy: false,
-    subscribe: subscribeSpy,
-    unsubscribe: unsubscribeSpy,
+    state: push.state,
+    enable: push.enable,
+    disable: push.disable,
+    removeDevice: push.removeDevice,
+    retry: vi.fn(),
   }),
-}));
-
-const listPushDevicesSpy = vi.fn();
-const deleteSubscriptionByIdSpy = vi.fn();
-
-vi.mock('../../../api/push', () => ({
-  listPushDevices: () => listPushDevicesSpy(),
-  deleteSubscriptionById: (id: string) => deleteSubscriptionByIdSpy(id),
-}));
-
-// sha256Hex is stubbed so the test controls which row is "this device":
-// the effect hashes the live endpoint and matches it against row.endpointHash.
-// We make sha256Hex deterministic and point the live endpoint's hash at a
-// specific row below.
-const sha256HexSpy = vi.fn();
-vi.mock('../../../lib/sha256', () => ({
-  sha256Hex: (s: string) => sha256HexSpy(s),
 }));
 
 import { PushDevicesSection } from './PushDevicesSection';
@@ -117,101 +105,122 @@ function deviceUnsubscribeButton(deviceLabel: string): HTMLButtonElement {
   }) as HTMLButtonElement;
 }
 
-// Live push endpoint this browser reports. Its sha256Hex below resolves to
-// CURRENT_HASH, which the "current device" row also carries.
-const CURRENT_ENDPOINT = 'https://fcm.googleapis.com/fcm/send/CURRENT';
+// `endpointHash` of this browser's channel, as the decision reported it.
 const CURRENT_HASH = 'currenthash';
+const A = '11111111-1111-4111-8111-111111111111';
 
-/**
- * Stub navigator.serviceWorker so the current-device-detection effect finds a
- * registration → subscription → endpoint. Pass null to simulate "no SW / no
- * subscription" (nothing highlighted).
- */
-function stubServiceWorker(endpoint: string | null) {
-  const subscription = endpoint ? { endpoint } : null;
-  const registration = {
-    pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) },
+/** The push state of a decided appearance of A, with `change` applied. */
+function decided(change: Partial<PushLifecycleState> = {}, consent: Partial<Consent> = {}): PushLifecycleState {
+  return {
+    appearance: { userId: A, seq: 1 },
+    supported: true,
+    decided: true,
+    row: 8,
+    serverPushEnabled: true,
+    permission: 'granted',
+    consent: { ...emptyConsent(), ...consent },
+    devices: [],
+    thisDeviceHash: CURRENT_HASH,
+    foreignChannelWarnings: [],
+    ...change,
   };
-  Object.defineProperty(navigator, 'serviceWorker', {
-    configurable: true,
-    value: { getRegistration: vi.fn().mockResolvedValue(registration) },
-  });
 }
 
 beforeEach(() => {
-  listPushDevicesSpy.mockReset().mockResolvedValue([]);
-  deleteSubscriptionByIdSpy.mockReset().mockResolvedValue(undefined);
-  subscribeSpy.mockReset().mockResolvedValue(undefined);
-  unsubscribeSpy.mockReset().mockResolvedValue(undefined);
-  // Default: the live endpoint hashes to CURRENT_HASH.
-  sha256HexSpy
-    .mockReset()
-    .mockImplementation((s: string) =>
-      Promise.resolve(s === CURRENT_ENDPOINT ? CURRENT_HASH : `other:${s}`),
-    );
-  stubServiceWorker(CURRENT_ENDPOINT);
+  push.state = decided();
+  push.enable.mockReset().mockResolvedValue({ kind: 'done' });
+  push.disable.mockReset().mockResolvedValue({ kind: 'done' });
+  push.removeDevice.mockReset().mockResolvedValue({ kind: 'done' });
 });
 
 afterEach(() => cleanup());
 
-describe('PushDevicesSection — enabling push on this device (row 37)', () => {
-  test('the switch subscribes this browser; the block is not a reason row', async () => {
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-    await waitFor(() =>
-      expect(screen.getByText('Turn on push on this device')).toBeTruthy(),
-    );
+const t = (key: string) => i18n.t(`push:${key}`);
+
+function renderSection() {
+  render(
+    <Wrap>
+      <PushDevicesSection />
+    </Wrap>,
+  );
+}
+
+describe('PushDevicesSection — push on this device (row 37; row 79)', () => {
+  test('the switch calls the enable action in the click; the block is not a reason row', () => {
+    renderSection();
     // The block carries no reason table of its own: what it configures is
     // WHICH BROWSERS are subscribed, not which reasons reach which channel.
     expect(screen.queryByRole('table')).toBeNull();
     expect(screen.queryByText('Push notification categories')).toBeNull();
 
     fireEvent.click(categorySwitch('Turn on push on this device'));
-    await waitFor(() => expect(subscribeSpy).toHaveBeenCalledTimes(1));
+    // Synchronously, inside the click: the permission prompt needs the gesture.
+    expect(push.enable).toHaveBeenCalledTimes(1);
+    expect(push.disable).not.toHaveBeenCalled();
+  });
+
+  test('with push on, the switch calls the disable action (both parts of the revocation)', () => {
+    push.state = decided({}, { state: 'enabled', label: 'l', labels: ['l'] });
+    renderSection();
+
+    fireEvent.click(categorySwitch('Push on this device is on'));
+    expect(push.disable).toHaveBeenCalledTimes(1);
+    expect(push.enable).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { case: 'push unsupported', change: { supported: false }, reason: 'device.unsupportedTitle' },
+    { case: 'permission denied', change: { permission: 'denied' as const }, reason: 'device.deniedTitle' },
+    { case: 'push disabled on the server', change: { serverPushEnabled: false }, reason: 'device.serverDisabledTitle' },
+  ])('$case: the reason instead of the switch', ({ change, reason }) => {
+    push.state = decided(change);
+    renderSection();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.getByText(t(reason))).toBeTruthy();
+  });
+});
+
+describe('PushDevicesSection — "disable not confirmed" (row 79, US-3)', () => {
+  const THIS = { id: 'dev-this', endpointHash: CURRENT_HASH, ua: '', createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: null, version: 1 };
+
+  test('shown while the disable is unconfirmed and this device is still listed (also as read after a reload); its retry disables again', () => {
+    push.state = decided({ devices: [THIS] }, { state: 'off', offUnconfirmed: true });
+    renderSection();
+
+    const retry = screen.getByRole('button', { name: t('device.offUnconfirmedRetry') });
+    fireEvent.click(retry);
+    expect(push.disable).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    { case: 'this device is no longer listed', devices: [] as PushDevice[], consent: { state: 'off' as const, offUnconfirmed: true } },
+    { case: 'the disable is confirmed', devices: [THIS], consent: { state: 'off' as const, offUnconfirmed: false } },
+  ])('hidden when $case', ({ devices, consent }) => {
+    push.state = decided({ devices }, consent);
+    renderSection();
+    expect(screen.queryByRole('button', { name: t('device.offUnconfirmedRetry') })).toBeNull();
   });
 });
 
 describe('PushDevicesSection — push-service-error help callout (sk-62.3.7)', () => {
-  test('a failed subscribe (push service error) shows the help callout', async () => {
-    subscribeSpy.mockRejectedValue(
-      new Error('Registration failed - push service error'),
-    );
+  test('an enable the browser could not complete shows the help callout', async () => {
+    push.enable.mockResolvedValue({ kind: 'failed', reason: 'channel' });
+    renderSection();
 
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText('Turn on push on this device')).toBeTruthy(),
-    );
     fireEvent.click(categorySwitch('Turn on push on this device'));
 
     await waitFor(() =>
       expect(screen.getByText(/couldn't reach its push service/i)).toBeTruthy(),
     );
-    expect(subscribeSpy).toHaveBeenCalledTimes(1);
+    expect(push.enable).toHaveBeenCalledTimes(1);
   });
 
-  test('no callout on a successful subscribe', async () => {
-    subscribeSpy.mockResolvedValue(undefined);
+  test('no callout on a successful enable', async () => {
+    renderSection();
 
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText('Turn on push on this device')).toBeTruthy(),
-    );
     fireEvent.click(categorySwitch('Turn on push on this device'));
 
-    await waitFor(() => expect(subscribeSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(push.enable).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/couldn't reach its push service/i)).toBeNull();
   });
 });
@@ -225,13 +234,15 @@ describe('PushDevicesSection — device list (sk-62.3.8)', () => {
   // Two devices: the FIRST in server order is NOT current; the SECOND is the
   // current browser (its endpointHash === CURRENT_HASH). The page must badge
   // and float the current one to the top.
-  const DEVICES = [
+  const DEVICES: PushDevice[] = [
     {
       id: 'dev-other',
-      endpointHash: 'other:https://fcm.googleapis.com/fcm/send/OTHER',
+      endpointHash: 'other-hash',
       ua: FIREFOX_UA,
       createdAt: '2026-06-01T10:00:00Z',
       lastSeenAt: '2026-06-02T10:00:00Z',
+      deviceLabel: 'dddddddd-0000-4000-8000-000000000004',
+      version: 1,
     },
     {
       id: 'dev-current',
@@ -239,23 +250,19 @@ describe('PushDevicesSection — device list (sk-62.3.8)', () => {
       ua: CHROME_UA,
       createdAt: '2026-06-03T10:00:00Z',
       lastSeenAt: '2026-06-04T10:00:00Z',
+      deviceLabel: 'aaaaaaaa-0000-4000-8000-000000000001',
+      version: 1,
     },
   ];
 
   beforeEach(() => {
+    push.state = decided({ devices: DEVICES }, { state: 'enabled', label: 'l', labels: ['l'] });
   });
 
-  test('current device shows the badge, renders a readable UA, and sorts to the top', async () => {
-    listPushDevicesSpy.mockResolvedValue(DEVICES);
+  test('current device shows the badge, renders a readable UA, and sorts to the top', () => {
+    renderSection();
 
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-
-    // Badge appears once the live endpoint is hashed and matched.
-    await waitFor(() => expect(screen.getByText('this device')).toBeTruthy());
+    expect(screen.getByText('this device')).toBeTruthy();
 
     // Readable labels (not raw UA).
     expect(screen.getByText('Chrome 149 · Windows')).toBeTruthy();
@@ -269,11 +276,8 @@ describe('PushDevicesSection — device list (sk-62.3.8)', () => {
     expect(chromeIdx).toBeLessThan(firefoxIdx);
 
     // a11y (audit sk-194, wave A): each row's unsubscribe button must carry
-    // the device in its accessible name. Sighted users tell the buttons apart
-    // by the row they sit in; a screen-reader user tabbing through heard only
-    // "Unsubscribe", "Unsubscribe" and could not tell which device they were about
-    // to remove. Asserting the DISTINCT names — not just that a button exists
-    // — is what makes that fix a checked fact rather than a claim.
+    // the device in its accessible name, so a screen-reader user can tell
+    // which device they are about to remove.
     const unsubscribeNames = screen
       .getAllByRole('button', { name: /Unsubscribe/ })
       .map((b) => b.getAttribute('aria-label'));
@@ -286,62 +290,29 @@ describe('PushDevicesSection — device list (sk-62.3.8)', () => {
     expect(new Set(unsubscribeNames).size).toBe(unsubscribeNames.length);
   });
 
-  test('the devices are a list, one listitem per device', async () => {
-    listPushDevicesSpy.mockResolvedValue(DEVICES);
-
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText('Firefox 151 · Windows')).toBeTruthy(),
-    );
+  test('the devices are a list, one listitem per device', () => {
+    renderSection();
     // A homogeneous set of revocable rows is a list: AT announces "list,
-    // N items" and can walk it. A bare stack of <div>s announces nothing
-    // and gives no count.
+    // N items" and can walk it.
     const list = screen.getByRole('list');
     expect(within(list).getAllByRole('listitem')).toHaveLength(DEVICES.length);
   });
 
-  test("clicking a non-current row's Unsubscribe calls deleteSubscriptionById(id)", async () => {
-    listPushDevicesSpy.mockResolvedValue(DEVICES);
+  test("a non-current row's Unsubscribe removes that device by id (POST /push/device-removals)", async () => {
+    renderSection();
 
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText('Firefox 151 · Windows')).toBeTruthy(),
-    );
-
-    // Locate the Firefox (non-current) row and click its Unsubscribe button.
     fireEvent.click(deviceUnsubscribeButton('Firefox 151 · Windows'));
 
-    await waitFor(() =>
-      expect(deleteSubscriptionByIdSpy).toHaveBeenCalledWith('dev-other'),
-    );
-    // The current-device unsubscribe path is NOT taken for a non-current row.
-    expect(unsubscribeSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(push.removeDevice).toHaveBeenCalledWith('dev-other'));
+    expect(push.disable).not.toHaveBeenCalled();
   });
 
-  test("clicking the current row's Unsubscribe calls usePush.unsubscribe (not the id delete)", async () => {
-    listPushDevicesSpy.mockResolvedValue(DEVICES);
-
-    render(
-      <Wrap>
-        <PushDevicesSection />
-      </Wrap>,
-    );
-
-    await waitFor(() => expect(screen.getByText('this device')).toBeTruthy());
+  test("the current row's Unsubscribe is the disable of this device (not the removal by id)", async () => {
+    renderSection();
 
     fireEvent.click(deviceUnsubscribeButton('Chrome 149 · Windows'));
 
-    await waitFor(() => expect(unsubscribeSpy).toHaveBeenCalledTimes(1));
-    expect(deleteSubscriptionByIdSpy).not.toHaveBeenCalled();
+    await waitFor(() => expect(push.disable).toHaveBeenCalledTimes(1));
+    expect(push.removeDevice).not.toHaveBeenCalled();
   });
 });

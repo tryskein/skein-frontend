@@ -1,6 +1,7 @@
 import { Center, Loader, Stack, Text } from '@mantine/core';
 import { Navigate, Outlet, useLocation } from 'react-router';
 import { useAuth } from './AuthContext';
+import { PushForeignChannelNotice } from '../components/PushForeignChannelNotice';
 import { PushSoftAsk } from '../components/PushSoftAsk';
 
 /**
@@ -31,13 +32,12 @@ export function RequireAuth() {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  // Mounted here (inside the authed boundary) so the Web Push soft-ask +
-  // service-worker registration / login re-sync only run for a logged-in
-  // user — never on /login. PushSoftAsk self-suppresses unless push is
-  // supported, permission is still 'default', and it wasn't recently
-  // dismissed (usePush does the SW registration as a mount side-effect).
+  // The push banners belong to a signed-in user, so they are mounted inside
+  // the authed boundary. They only read the push state (`usePush`); the push
+  // controller itself runs in `PushProvider` and registers nothing on mount.
   return (
     <>
+      <PushForeignChannelNotice />
       <PushSoftAsk />
       <Outlet />
     </>

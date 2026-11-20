@@ -13,6 +13,7 @@ import { DensitySync } from './components/DensitySync';
 import { NavLayoutSync } from './components/NavLayoutSync';
 import { ThemeSync } from './components/ThemeSync';
 import { LiveEventsProvider } from './hooks/useLiveEvents';
+import { PushProvider } from './lib/push/PushProvider';
 import { skeinTheme } from './theme';
 // i18n (sk-285.1.17) — importing initialises the shared i18next instance
 // as a side effect. Must run BEFORE the first render so the very first
@@ -167,10 +168,15 @@ function Root() {
             {/* sk-551.8 — this browser's copy of the left-panel layout,
                 read before the profile answers (INV-10). */}
             <NavLayoutSync />
-            <LiveEventsProvider>
-              <ConnectionStatus />
-              <App />
-            </LiveEventsProvider>
+            {/* The push controller of this tab: the repeats of unfinished
+                push work on load (also on /login) and the decision on every
+                appearance of a user. See lib/push/PushProvider.tsx. */}
+            <PushProvider>
+              <LiveEventsProvider>
+                <ConnectionStatus />
+                <App />
+              </LiveEventsProvider>
+            </PushProvider>
           </AuthProvider>
         </BrowserRouter>
       </QueryClientProvider>

@@ -138,10 +138,6 @@ describe('settings modules — no second channel dictionary is left behind', () 
   test('the retired push-category client is gone from api/push', () => {
     expect('getPushPrefs' in pushApi).toBe(false);
     expect('updatePushPrefs' in pushApi).toBe(false);
-    // Device management is NOT retired — it is a different contract.
-    expect('listPushDevices' in pushApi).toBe(true);
-    expect('deleteSubscriptionById' in pushApi).toBe(true);
-    expect('registerSubscription' in pushApi).toBe(true);
   });
 
   test('the local event-type dictionary is gone from api/notifications', () => {

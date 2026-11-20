@@ -115,8 +115,15 @@ export interface PushLifecycleState {
   /** The user's subscriptions as the decision read them; `null` until read. */
   devices: PushDevice[] | null;
   /**
+   * `endpointHash` of this device's subscription: of the channel read by the
+   * decision, or of the consent's endpoint when there was no channel; `null`
+   * when neither is known.
+   */
+  thisDeviceHash: string | null;
+  /**
    * Endpoints of previous users' channels in this browser whose removal on
-   * the server is not confirmed yet (warning B).
+   * the server is not confirmed yet (warning B). For a user, filled by the
+   * decision of this appearance, never carried over from the previous one.
    */
   foreignChannelWarnings: string[];
 }
@@ -133,7 +140,8 @@ function initialState(appearance: Appearance | null): PushLifecycleState {
     permission: notificationPermission(),
     consent: appearance === null ? null : readConsent(appearance.userId),
     devices: null,
-    foreignChannelWarnings: foreignWarnings(),
+    thisDeviceHash: null,
+    foreignChannelWarnings: appearance === null ? foreignWarnings() : [],
   };
 }
 
@@ -594,12 +602,16 @@ async function decideOnAppearance(step: Step): Promise<void> {
   };
   await execute(ctx, decision.action);
   await settleOffUnconfirmed(ctx);
+  const ownEndpoint = readConsent(userId).endpoint;
+  const thisDeviceHash =
+    channel.kind === 'channel' ? channel.endpointHash : ownEndpoint !== null ? await endpointFingerprint(ownEndpoint) : null;
   publish(step, {
     decided: true,
     row: decision.row,
     serverPushEnabled: server.enabled,
     permission,
     devices: list.value,
+    thisDeviceHash,
   });
 }
 
