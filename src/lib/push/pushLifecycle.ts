@@ -1214,15 +1214,23 @@ export async function revokeConfirmedDevice(
   // request while S has room, else by removing that subscription by id,
   // which also revokes its label.
   const serverLabel = listed?.deviceLabel ?? null;
-  const labelsNow = readConsent(userId).labels;
+  const before = readConsent(userId);
+  const labelsNow = before.labels;
   const missing = serverLabel !== null && !labelsNow.includes(serverLabel);
   const removeById = missing && labelsNow.length >= MAX_CONSENT_LABELS ? listed?.id : undefined;
   live(step);
-  const { work } = await revokeConsent(
+  const { consent: revokedConsent, work, localWork } = await revokeConsent(
     userId,
     { endpoint, guard, localUnsubscribe: true, alsoLabels: missing && removeById === undefined ? [serverLabel] : [] },
     guardOf(step),
   );
+  // "User changed" on a request of this revocation: the server confirmed
+  // another user, nothing reached it, and the transition is taken back
+  // (rule 5) — unless something wrote the consent since.
+  const undo = async () => {
+    await restoreConsent(userId, { expect: snapshotOf(revokedConsent), previous: before });
+    for (const w of [work, localWork]) if (w !== null) await removePushWork(w.id);
+  };
   // The transition is written (with the local removal journaled): the
   // channel may go now, whatever the revocation request answers.
   onTransition?.(endpoint);
@@ -1237,12 +1245,18 @@ export async function revokeConfirmedDevice(
     if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
     return { confirmed: true, revoked: true, endpoint };
   }
-  const outcome = await request(step, (signal) =>
-    pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
+  const outcome = await undoingOnUserChanged(
+    request(step, (signal) =>
+      pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
+    ),
+    undo,
   );
   if (outcome.kind !== 'ok') return { confirmed: true, revoked: false, endpoint };
   if (removeById !== undefined) {
-    const removal = await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id: removeById }, signal));
+    const removal = await undoingOnUserChanged(
+      request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id: removeById }, signal)),
+      undo,
+    );
     if (removal.kind !== 'ok' && removal.kind !== 'notFound') return { confirmed: true, revoked: false, endpoint };
   }
   await removePushWork(work.id, guardOf(step));

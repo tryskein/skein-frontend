@@ -422,6 +422,24 @@ describe('row 64 (a) — a channel the browser has besides the confirmed one', (
 
 // ───────────────────────── Row 65 ─────────────────────────
 
+describe('row 64 (b) — "user changed" on the revocation after the list confirmed U', () => {
+  test('no logout, and the revocation transition is taken back', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    const consentBefore = readConsent(A);
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'userChanged' }));
+
+    expect(await clickLogout().verdict).toBe('userChanged');
+    // The generation moves on (an enable started before stays refused, rule 8); the rest is as before.
+    expect({ ...readConsent(A), rev: 0, gen: 0 }).toEqual({ ...consentBefore, rev: 0, gen: 0 });
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(a);
+  });
+});
+
 describe('row 65 — the appearance grows after the click', () => {
   test('a new login before the nearest effect: no state write, no further request, no channel removal', async () => {
     const a = channel('a');
