@@ -98,7 +98,11 @@ export interface PushStateRecord {
   works: PushWork[];
 }
 
-/** Storage is unavailable, or the write did not land. Nothing changed. */
+/**
+ * Storage is unavailable, or the write could not be confirmed. A failed read
+ * or `setItem` changed nothing; a failed read back leaves either the previous
+ * or the new record whole.
+ */
 export class PushStorageError extends Error {
   constructor(message: string) {
     super(message);
@@ -277,8 +281,13 @@ export function isNoMark(consent: Consent): boolean {
 
 /**
  * Applies `change` to the current record under `skein.push.store` and
- * writes the result with one `setItem`, then reads it back. If `change`
- * throws, nothing is written.
+ * writes the result with one `setItem`, then reads it back.
+ *
+ * Outcomes: `change` throws — nothing is written; `setItem` throws — the
+ * previous record stays whole, {@link PushStorageError}; the read back fails
+ * or differs — {@link PushStorageError}, and the record may hold either the
+ * previous or the new state whole (never a mix), so the caller treats the
+ * transition as not confirmed and reads the record again.
  */
 async function commit<T>(change: (record: PushStateRecord) => T): Promise<T> {
   return withPushStoreLock(() => {
