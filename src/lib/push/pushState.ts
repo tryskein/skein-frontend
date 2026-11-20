@@ -314,6 +314,12 @@ export interface ConsentExpectation {
   rev?: number;
 }
 
+/** What the caller saw, revision included: the write is refused after any other write. */
+export interface ConsentSnapshot {
+  gen: number;
+  rev: number;
+}
+
 function consentFor(record: PushStateRecord, userId: string): Consent {
   return record.consents[userId] ?? emptyConsent();
 }
@@ -424,6 +430,44 @@ export async function confirmConsent(userId: string, args: ConfirmConsentArgs): 
     return store(record, userId, {
       ...consent,
       pending: null,
+      endpoint: args.endpoint,
+      keysFingerprint: args.keysFingerprint,
+    });
+  });
+}
+
+/** Arguments of {@link recordUnconfirmedChannel}. */
+export interface RecordChannelArgs {
+  expect: ConsentSnapshot;
+  /** The consent's current label; the write is refused when it changed. */
+  label: string;
+  /** Endpoint of the new channel. */
+  endpoint: string;
+  keysFingerprint: string | null;
+  /**
+   * Kind recorded when the consent was confirmed: `enable` for row 2 (a
+   * confirmed consent may create its subscription again, US-8), `accept` for
+   * row 9 (only an update). An already unconfirmed consent keeps its kind.
+   */
+  kind: PendingKind;
+}
+
+/**
+ * Writes the endpoint of a new channel for the consent's existing label as
+ * unconfirmed — before the registration that carries it is sent (rows 2 and
+ * 9). Until {@link confirmConsent} the consent is "enabled, not confirmed",
+ * so a lost answer is finished by row 4 on the next appearance.
+ */
+export async function recordUnconfirmedChannel(userId: string, args: RecordChannelArgs): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    if (consent.state !== 'enabled' || consent.label !== args.label) {
+      throw new PushStateConflictError('the consent no longer carries this label');
+    }
+    return store(record, userId, {
+      ...consent,
+      pending: consent.pending ?? { label: args.label, kind: args.kind },
       endpoint: args.endpoint,
       keysFingerprint: args.keysFingerprint,
     });

@@ -14,6 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { pushRevokeDevices } from '../../api/push';
+import { decide } from './decide';
 import {
   InvalidPushWorkError,
   PUSH_STATE_KEY,
@@ -29,6 +30,7 @@ import {
   readConsent,
   readConsentGen,
   readPushState,
+  recordUnconfirmedChannel,
   revokeConsent,
   updateConsentChannel,
   type NewPushWork,
@@ -268,6 +270,50 @@ describe('row 38 — the label set S', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).deviceLabels).toEqual(labels);
+  });
+});
+
+describe('row 36 — a new channel of a confirmed consent is written unconfirmed (row 2)', () => {
+  test('the endpoint of the new channel is unconfirmed until the answer, and a lost answer is finished by row 4', async () => {
+    const label = await enabledConsent(A);
+    const begun = readConsent(A);
+    const confirmed = await confirmConsent(A, { expect: { gen: begun.gen, rev: begun.rev }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' });
+    expect(confirmed.pending).toBeNull();
+
+    await recordUnconfirmedChannel(A, {
+      expect: { gen: confirmed.gen, rev: confirmed.rev },
+      label,
+      endpoint: ENDPOINT_2,
+      keysFingerprint: 'fp2',
+      kind: 'enable',
+    });
+    // The registration answer is lost: the record holds the new endpoint, unconfirmed.
+    const reopened = readConsent(A);
+    expect(reopened).toMatchObject({ state: 'enabled', label, endpoint: ENDPOINT_2, keysFingerprint: 'fp2', pending: { label, kind: 'enable' } });
+
+    const next = decide({
+      consent: reopened,
+      channel: { kind: 'channel', endpoint: ENDPOINT_2, endpointHash: 'h2', keysFingerprint: 'fp2' },
+      list: { kind: 'ok', value: [] },
+      permission: 'granted',
+      serverPushEnabled: true,
+      blocks: { ownRevokePending: false, foreignRemovalPending: false },
+    });
+    expect(next).toEqual({ row: 4, action: { type: 'register', endpoint: ENDPOINT_2, register: { mode: 'upsert', label } } });
+  });
+
+  test('a stale revision or another label is refused and the record is unchanged', async () => {
+    const label = await enabledConsent(A);
+    const seen = readConsent(A);
+    await updateConsentChannel(A, { expect: { gen: seen.gen, rev: seen.rev }, endpoint: ENDPOINT, keysFingerprint: 'fp3' });
+    const before = raw();
+
+    await expect(recordUnconfirmedChannel(A, { expect: { gen: seen.gen, rev: seen.rev }, label, endpoint: ENDPOINT_2, keysFingerprint: null, kind: 'enable' }))
+      .rejects.toBeInstanceOf(PushStateConflictError);
+    const now = readConsent(A);
+    await expect(recordUnconfirmedChannel(A, { expect: { gen: now.gen, rev: now.rev }, label: 'other', endpoint: ENDPOINT_2, keysFingerprint: null, kind: 'enable' }))
+      .rejects.toBeInstanceOf(PushStateConflictError);
+    expect(raw()).toBe(before);
   });
 });
 

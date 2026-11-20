@@ -90,7 +90,11 @@ export interface RegisterPlan {
 
 export type DecisionAction =
   | { type: 'nothing' }
-  /** Row 2: create a channel, write its endpoint into the consent, register. */
+  /**
+   * Row 2: create a channel, write its endpoint into the consent as
+   * unconfirmed (`recordUnconfirmedChannel`, kind `enable`) before the
+   * registration, register, then confirm.
+   */
   | { type: 'createChannelAndRegister'; register: RegisterPlan }
   /** Rows 3 and 4: register the current own channel. */
   | { type: 'register'; endpoint: string; register: RegisterPlan }
