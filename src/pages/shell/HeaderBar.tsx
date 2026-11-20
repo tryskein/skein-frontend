@@ -926,7 +926,7 @@ export function HeaderBar() {
   // so users know to retry.
   const handleLogout = async () => {
     try {
-      await logout();
+      await logout('explicit');
     } catch (err) {
       const message =
         err instanceof Error ? err.message : t('logoutFailed');

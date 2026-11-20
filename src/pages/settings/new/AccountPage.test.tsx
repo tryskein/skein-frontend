@@ -61,7 +61,7 @@ const api = vi.hoisted(() => ({
     ],
   })),
   putUserSpaces: vi.fn(async (_id: string, _ids: string[]) => ({ items: [] })),
-  logout: vi.fn(async () => undefined),
+  logout: vi.fn(async (_kind?: string) => undefined),
 }));
 
 vi.mock('../../../auth/AuthContext', () => ({
@@ -282,6 +282,8 @@ describe('row 251 — "Account": deletion only with registration open', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('account:deletion.confirm') }));
     await waitFor(() => expect(api.deleteMyAccount).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
+    // The logout after the deletion of one's own account is its own way of ending the session.
+    expect(api.logout).toHaveBeenCalledWith('accountDeleted');
     expect(await screen.findByRole('heading', { name: i18n.t('account:deletedPage.title') })).toBeTruthy();
     expect(screen.getByRole('link', { name: i18n.t('account:deletedPage.signIn') }).getAttribute('href')).toBe('/login');
   });

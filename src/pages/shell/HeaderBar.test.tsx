@@ -24,7 +24,7 @@ import { MantineProvider } from '@mantine/core';
 // (the factory only closes over them; it never reads them at hoist
 // time) so a test can make the logout reject and see what the header
 // does about it.
-const logoutSpy = vi.fn(async () => {});
+const logoutSpy = vi.fn(async (_kind?: string) => {});
 vi.mock('../../auth/AuthContext', () => ({
   useAuth: () => ({
     // sk-285.7.11 (AM2) — the menu's identity block shows WHICH
@@ -1072,6 +1072,8 @@ describe('HeaderBar — sk-285.6.16 Logout in the row of menu items', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Log out/i }));
     await waitFor(() => expect(logoutSpy).toHaveBeenCalledTimes(1));
+    // "Log out" in the header is an explicit logout ("Ways a session ends").
+    expect(logoutSpy).toHaveBeenCalledWith('explicit');
     // The failure reaches the user as a toast carrying the reason. The
     // silent `void logout()` this replaced left the UI claiming "logged
     // in" with tokens possibly half-cleared.

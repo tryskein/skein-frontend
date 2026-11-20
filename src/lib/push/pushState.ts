@@ -288,9 +288,14 @@ export function isNoMark(consent: Consent): boolean {
  * or differs — {@link PushStorageError}, and the record may hold either the
  * previous or the new state whole (never a mix), so the caller treats the
  * transition as not confirmed and reads the record again.
+ *
+ * `signal` bounds the wait for the lock: once it is aborted the lock request
+ * is given up, and a lock granted after that writes nothing — both reject
+ * with the abort reason.
  */
-async function commit<T>(change: (record: PushStateRecord) => T): Promise<T> {
+async function commit<T>(change: (record: PushStateRecord) => T, signal?: AbortSignal): Promise<T> {
   return withPushStoreLock(() => {
+    if (signal?.aborted) throw signal.reason;
     const s = storage();
     let before: string | null;
     try {
@@ -314,7 +319,7 @@ async function commit<T>(change: (record: PushStateRecord) => T): Promise<T> {
     }
     if (after !== next) throw new PushStorageError('the push state did not persist');
     return result;
-  });
+  }, signal);
 }
 
 /** What the caller saw: the generation and, optionally, the revision. */
@@ -575,7 +580,11 @@ export interface RevokeConsentResult {
  * {@link setConsentOffUnconfirmed} once the server confirmed the result. Not
  * a compare-and-set: a revocation always applies.
  */
-export async function revokeConsent(userId: string, args: RevokeConsentArgs): Promise<RevokeConsentResult> {
+export async function revokeConsent(
+  userId: string,
+  args: RevokeConsentArgs,
+  signal?: AbortSignal,
+): Promise<RevokeConsentResult> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     const endpoint = args.endpoint !== null && args.endpoint !== '' ? args.endpoint : null;
@@ -607,7 +616,7 @@ export async function revokeConsent(userId: string, args: RevokeConsentArgs): Pr
       offUnconfirmed: true,
     });
     return { consent: next, work, localWork };
-  });
+  }, signal);
 }
 
 /**
@@ -618,20 +627,21 @@ export async function setConsentOffUnconfirmed(
   userId: string,
   expect: ConsentSnapshot,
   offUnconfirmed: boolean,
+  signal?: AbortSignal,
 ): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, expect);
     if (consent.state !== 'off') throw new PushStateConflictError('the consent is not off');
     return store(record, userId, { ...consent, offUnconfirmed });
-  });
+  }, signal);
 }
 
 /** Deletes the consent of `userId` (the account was deleted). */
-export async function deleteConsent(userId: string): Promise<void> {
+export async function deleteConsent(userId: string, signal?: AbortSignal): Promise<void> {
   await commit((record) => {
     delete record.consents[userId];
-  });
+  }, signal);
 }
 
 /** Writes a new unfinished work and returns it with its id. */
@@ -640,8 +650,8 @@ export async function addPushWork(work: NewPushWork): Promise<PushWork> {
 }
 
 /** Removes a finished work; a missing id is not an error. */
-export async function removePushWork(id: string): Promise<void> {
+export async function removePushWork(id: string, signal?: AbortSignal): Promise<void> {
   await commit((record) => {
     record.works = record.works.filter((w) => w.id !== id);
-  });
+  }, signal);
 }

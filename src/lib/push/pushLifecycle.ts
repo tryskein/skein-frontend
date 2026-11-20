@@ -47,7 +47,6 @@ import {
   pushRevokeDevices,
   pushSubscribe,
   type PushDevice,
-  type PushOutcome,
 } from '../../api/push';
 import {
   type Appearance,
@@ -70,6 +69,7 @@ import {
 import { decide, type DecisionAction, type DecisionChannel, type DecisionRow, type RegisterPlan } from './decide';
 import { endpointFingerprint, keysFingerprint } from './fingerprint';
 import { withPushOpLock } from './locks';
+import { live, type PushStep, request, StepEnded } from './pushStep';
 import {
   abandonConsentLabel,
   addPushWork,
@@ -167,40 +167,10 @@ export function subscribePushLifecycle(listener: Listener): () => void {
   };
 }
 
-// ───────────────────────── Steps and tokens ─────────────────────────
+// ───────────────────────── Steps ─────────────────────────
 
-/** Ends a step: its appearance was replaced, or the server said the user changed. */
-class StepEnded extends Error {
-  constructor(readonly reason: 'superseded' | 'userChanged') {
-    super(reason);
-    this.name = 'StepEnded';
-  }
-}
-
-/** One asynchronous push step of an appearance. */
-interface Step {
-  token: Appearance;
-  /** Aborted when the appearance is replaced. */
-  signal: AbortSignal;
-}
-
-/** Throws unless the step's appearance is still current. */
-function live(step: Step): void {
-  if (!isCurrentAppearance(step.token)) throw new StepEnded('superseded');
-}
-
-/**
- * Sends one push operation of the step. The answer of a step whose
- * appearance was replaced is not a basis for anything; "user changed" ends
- * the decision.
- */
-async function request<T>(step: Step, send: (signal: AbortSignal) => Promise<PushOutcome<T>>): Promise<PushOutcome<T>> {
-  live(step);
-  const outcome = await send(step.signal);
-  live(step);
-  if (outcome.kind === 'userChanged') throw new StepEnded('userChanged');
-  return outcome;
-}
+/** A push step of this controller (`pushStep.ts`). */
+type Step = PushStep;
 
 /** Publishes the UI state of the step's appearance. */
 function publish(step: Step, patch: Partial<PushLifecycleState>): void {
@@ -994,7 +964,7 @@ export function enablePush(): Promise<PushActionResult> {
 }
 
 /** Result of the server part of a revocation of this device. */
-interface ServerRevocation {
+export interface ServerRevocation {
   /** The list confirmed the user; without it nothing was written or sent. */
   confirmed: boolean;
   /** The server confirmed the revocation (or there was nothing to send it for). */
@@ -1014,15 +984,25 @@ interface ServerRevocation {
  * subscription by its endpoint once the channel is read.
  */
 async function revokeDeviceOnServer(step: Step): Promise<ServerRevocation> {
-  const userId = step.token.userId;
   const devices = await confirmUser(step);
   if (devices === null) return { confirmed: false, revoked: false, endpoint: null };
+  return revokeConfirmedDevice(step, devices);
+}
+
+/**
+ * The server part of the revocation of this device once `devices`, the
+ * user's list read in this step, confirmed the user (see
+ * {@link revokeDeviceOnServer}). Every wait for the store lock and every
+ * request is bounded by the step's signal.
+ */
+export async function revokeConfirmedDevice(step: PushStep, devices: PushDevice[]): Promise<ServerRevocation> {
+  const userId = step.token.userId;
   const read = await readChannel();
   live(step);
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
   const guard: RevokeGuard = endpoint === null ? 'absent' : await guardFromList(devices, endpoint);
   live(step);
-  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true });
+  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true }, step.signal);
   if (work === null || work.type !== 'deviceRevoke') {
     // No label and no channel: nothing of this device is on the server,
     // unless the channel could not be read (row 7 removes it once it is) or
@@ -1030,16 +1010,18 @@ async function revokeDeviceOnServer(step: Step): Promise<ServerRevocation> {
     const pendingRevocation = readPushState().works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId);
     if (read.kind !== 'none' || pendingRevocation) return { confirmed: true, revoked: false, endpoint };
     const off = readConsent(userId);
-    if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false);
+    live(step);
+    if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, step.signal);
     return { confirmed: true, revoked: true, endpoint };
   }
   const outcome = await request(step, (signal) =>
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return { confirmed: true, revoked: false, endpoint };
-  await removePushWork(work.id);
+  await removePushWork(work.id, step.signal);
   const off = readConsent(userId);
-  if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false);
+  live(step);
+  if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, step.signal);
   return { confirmed: true, revoked: true, endpoint };
 }
 
@@ -1048,12 +1030,14 @@ async function revokeDeviceOnServer(step: Step): Promise<ServerRevocation> {
  * endpoint known at the confirmation is removed, if it is still current;
  * success finishes its `localUnsubscribe` work.
  */
-async function removeLocalChannel(step: Step, endpoint: string): Promise<boolean> {
+export async function removeLocalChannel(step: PushStep, endpoint: string): Promise<boolean> {
   live(step);
   const result = await removeChannelQuietly(endpoint);
   if (result === 'failed') return false;
   live(step);
-  await removeWorks((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint);
+  for (const work of readPushState().works) {
+    if (work.type === 'localUnsubscribe' && work.endpoint === endpoint) await removePushWork(work.id, step.signal);
+  }
   return true;
 }
 

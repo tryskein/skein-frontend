@@ -16,7 +16,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { loginApi, LoginPayload, logoutApi, meApi, User } from '../api/auth';
+import { loginApi, LoginPayload, logoutApi, type LogoutResponse, meApi, User } from '../api/auth';
 import { clearDensityBootCache } from '../lib/densityBootCache';
 import { clearNavLayoutBootCache } from '../lib/navLayoutBootCache';
 import { clearThemeBootCache } from '../lib/themeBootCache';
@@ -32,8 +32,10 @@ import {
   noteMeAnswer,
   noteSignedOut,
   registerMeReload,
+  reloadMeAfterUserChanged,
   subscribeAppearance,
 } from './appearance';
+import { beginExplicitDeparture, departAfterAccountDeletion, type ExplicitDeparture } from '../lib/push/departure';
 
 /**
  * Cache key for "who is logged in?". Exported because the global
@@ -91,9 +93,36 @@ interface AuthContextValue {
   appearance: Appearance | null;
   /** Log in. Throws on failure (BusinessError / RateLimitError / network). */
   login: (payload: LoginPayload) => Promise<User>;
-  /** Log out. Resolves once the cookie is cleared and the session's cache dropped. */
-  logout: () => Promise<void>;
+  /**
+   * Log out; `kind` says which way the session ends. Resolves once the
+   * cookie is cleared and the session's cache dropped — or, when the server
+   * confirmed another user than the one this explicit logout was for, once
+   * `/me` was read again (nobody is logged out then).
+   */
+  logout: (kind: LogoutKind) => Promise<void>;
 }
+
+/**
+ * How a session ends on this page (spec "Ways a session ends"):
+ *   - `explicit` — "Log out", "switch account" on someone else's invitation:
+ *     this device is revoked and its push channel removed first, within 2 s;
+ *   - `accountDeleted` — after the deletion of one's own account: the push
+ *     consent of the user is deleted and the channel removed;
+ *   - `consequence` — a consequence of an event (the user's deactivation):
+ *     push is not touched.
+ */
+export type LogoutKind = 'explicit' | 'accountDeleted' | 'consequence';
+
+interface LogoutVariables {
+  kind: LogoutKind;
+  /** The push part of an explicit logout, started in the click. */
+  departure: ExplicitDeparture | null;
+}
+
+type LogoutOutcome =
+  | { kind: 'loggedOut'; response: LogoutResponse }
+  /** The server confirmed another user: nobody was logged out. */
+  | { kind: 'userChanged' };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
@@ -190,9 +219,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // options object through on every render, so the callback that actually runs
   // is the one from the latest render — not the one captured before the config
   // query resolved.
-  const logoutMutation = useMutation({
-    mutationFn: logoutApi,
-    onSettled: async (result) => {
+  // The order of an explicit logout: the revocation of this device
+  // (`prepare`), `POST /api/auth/logout`, the removal of the push channel
+  // (`finish`), then `onSettled` writes `null` and follows the SSO/OIDC
+  // redirect — the channel is gone before the page is left.
+  const logoutMutation = useMutation<LogoutOutcome, Error, LogoutVariables>({
+    mutationFn: async ({ kind, departure }) => {
+      if (departure !== null && (await departure.prepare()) === 'userChanged') {
+        // The page appears again with the user the server confirmed; their
+        // session is not ended.
+        await reloadMeAfterUserChanged();
+        return { kind: 'userChanged' };
+      }
+      if (kind === 'accountDeleted') await departAfterAccountDeletion();
+      try {
+        return { kind: 'loggedOut', response: await logoutApi() };
+      } finally {
+        if (departure !== null) await departure.finish();
+      }
+    },
+    onSettled: async (outcome) => {
+      if (outcome?.kind === 'userChanged') return;
+      const result = outcome?.response;
       // Even on failure (e.g. the cookie was already invalid), clear local
       // state. The protected routes will redirect to /login on next render.
       clearSessionQueries(queryClient);
@@ -286,9 +334,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [loginMutation],
   );
 
-  const logout = useCallback(async () => {
-    await logoutMutation.mutateAsync();
-  }, [logoutMutation]);
+  const logout = useCallback(
+    async (kind: LogoutKind) => {
+      // Started here, in the caller's click: the appearance is taken and the
+      // budget of the push part starts now.
+      const departure = kind === 'explicit' ? beginExplicitDeparture() : null;
+      await logoutMutation.mutateAsync({ kind, departure });
+    },
+    [logoutMutation],
+  );
 
   const value = useMemo<AuthContextValue>(
     () => ({

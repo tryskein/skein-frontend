@@ -85,7 +85,7 @@ afterEach(() => {
 
 test.each<[string, () => Promise<void>]>([
   ['logout, then login as V', async () => {
-    await act(async () => { await auth.logout(); });
+    await act(async () => { await auth.logout('explicit'); });
     await act(async () => { await auth.login({ email: 'v-2@test.com', password: 'x' } as never); });
   }],
   ['a 401 ends the session, then login as V', async () => {

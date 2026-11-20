@@ -43,7 +43,7 @@ const api = vi.hoisted(() => ({
   confirmEmail: vi.fn(async (_token: string): Promise<void> => undefined),
   acceptTokenInvitation: vi.fn(async (_token: string): Promise<unknown> => ({})),
   declineTokenInvitation: vi.fn(async (_token: string): Promise<void> => undefined),
-  logout: vi.fn(async () => {
+  logout: vi.fn(async (_kind?: string) => {
     world.user = null;
   }),
 }));
@@ -389,6 +389,8 @@ describe('row 254a — the link opened under another account', () => {
 
     fireEvent.click(screen.getByRole('button', { name: t('auth:invite.switchAccount') }));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
+    // "Switch account" on someone else's invitation is an explicit logout ("Ways a session ends").
+    expect(api.logout).toHaveBeenCalledWith('explicit');
     expect(await screen.findByRole('heading', { name: t('auth:title') })).toBeTruthy();
     expect(lastLocation?.pathname).toBe('/login');
     expect((lastLocation?.state as { from?: { pathname?: string } } | null)?.from?.pathname).toBe('/invite/tok-1');

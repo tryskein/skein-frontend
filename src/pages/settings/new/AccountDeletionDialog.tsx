@@ -38,7 +38,7 @@ export function AccountDeletionDialog({ onClose }: { onClose: () => void }) {
       try {
         // The server has revoked the session already; the logout clears
         // what the tab still holds.
-        await logout();
+        await logout('accountDeleted');
       } catch {
         // A failed logout call changes nothing here: the local state is
         // cleared in its `onSettled` either way.

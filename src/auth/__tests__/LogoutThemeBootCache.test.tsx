@@ -98,7 +98,7 @@ describe('logout and the first frame of the NEXT load', () => {
     expect(readThemeBootCache()).not.toBeNull();
 
     await act(async () => {
-      await result.current.logout();
+      await result.current.logout('explicit');
     });
 
     expect(window.localStorage.getItem(THEME_BOOT_CACHE_KEY)).toBeNull();
@@ -117,7 +117,7 @@ describe('logout and the first frame of the NEXT load', () => {
     expect(readDensityBootCache()).not.toBeNull();
 
     await act(async () => {
-      await result.current.logout();
+      await result.current.logout('explicit');
     });
 
     expect(readDensityBootCache()).toBeNull();
@@ -129,7 +129,7 @@ describe('logout and the first frame of the NEXT load', () => {
     await waitFor(() => expect(result.current.user).not.toBeNull());
 
     await act(async () => {
-      await result.current.logout();
+      await result.current.logout('explicit');
     });
 
     // `skein.theme` is what the login screen paints from. Clearing it
@@ -167,7 +167,7 @@ describe('logout and the first frame of the NEXT load', () => {
     await waitFor(() => expect(result.current.user).not.toBeNull());
 
     await act(async () => {
-      await result.current.logout().catch(() => {
+      await result.current.logout('explicit').catch(() => {
         /* the mutation rejects; the teardown still has to have happened */
       });
     });

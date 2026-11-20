@@ -54,7 +54,7 @@ afterEach(() => {
 
 test.each<[string, () => Promise<void>]>([
   ['logout', async () => {
-    await act(async () => { await auth.logout(); });
+    await act(async () => { await auth.logout('explicit'); });
   }],
   ['a 401 from any request', async () => {
     await act(async () => {

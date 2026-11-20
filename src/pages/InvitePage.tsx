@@ -245,7 +245,7 @@ function OtherEmail({ token, authMode }: { token: string; authMode: RuntimeAuthC
   const switchAccount = async () => {
     setBusy(true);
     try {
-      await logout();
+      await logout('explicit');
     } finally {
       navigate('/login', { replace: true, state: { from: { pathname: `/invite/${token}` } } });
     }

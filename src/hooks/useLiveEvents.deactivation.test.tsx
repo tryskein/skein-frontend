@@ -15,6 +15,10 @@
  * keeps answering the user while the cookie lives (a deactivation does not
  * remove it), so a mechanism that re-read `/me` instead of logging out would
  * leave the shell on screen and fail here.
+ *
+ * The logout on one's own deactivation is a consequence of the event (spec
+ * "Ways a session ends", INV-3): the push part of a logout
+ * (`lib/push/departure.ts`, a spy here) is not run at all.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
@@ -27,6 +31,12 @@ import { RequireAuth } from '../auth/RequireAuth';
 import { LiveEventsProvider } from './useLiveEvents';
 
 vi.mock('../components/PushSoftAsk', () => ({ PushSoftAsk: () => null }));
+
+const departure = vi.hoisted(() => ({
+  beginExplicitDeparture: vi.fn(),
+  departAfterAccountDeletion: vi.fn(),
+}));
+vi.mock('../lib/push/departure', () => departure);
 
 vi.mock('@microsoft/signalr', () => {
   const HubConnectionState = {
@@ -159,6 +169,8 @@ describe('No. 76 — user.deactivated about me ends the session in a visible tab
     expect(screen.queryByText('shell')).toBeNull();
     expect(bff.logoutCalls).toBe(1);
     expect(qc.getQueryData(['auth', 'me'])).toBeNull();
+    expect(departure.beginExplicitDeparture).not.toHaveBeenCalled();
+    expect(departure.departAfterAccountDeletion).not.toHaveBeenCalled();
   });
 
   test('the deactivation of another user signs nobody out', async () => {

@@ -24,7 +24,7 @@ vi.mock('../../components/Toaster', () => ({
   useToaster: () => ({ error: toasterError, success: vi.fn(), info: vi.fn() }),
 }));
 
-import { AuthProvider, useAuth } from '../AuthContext';
+import { AuthProvider, type LogoutKind, useAuth } from '../AuthContext';
 
 /**
  * sk-303.42 — end-to-end wiring of the logout redirect gate: the allow-list
@@ -61,7 +61,7 @@ describe('AuthProvider logout redirect', () => {
     });
   });
 
-  function Harness({ onReady }: { onReady: (logout: () => Promise<void>) => void }) {
+  function Harness({ onReady }: { onReady: (logout: (kind: LogoutKind) => Promise<void>) => void }) {
     const { logout } = useAuth();
     onReady(logout);
     return <div>ready</div>;
@@ -71,7 +71,7 @@ describe('AuthProvider logout redirect', () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    let logout: (() => Promise<void>) | null = null;
+    let logout: ((kind: LogoutKind) => Promise<void>) | null = null;
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
@@ -89,7 +89,7 @@ describe('AuthProvider logout redirect', () => {
       expect(client.getQueryData(['auth', 'config'])).toBeDefined(),
     );
     await act(async () => {
-      await logout!();
+      await logout!('explicit');
     });
   }
 
@@ -102,7 +102,7 @@ describe('AuthProvider logout redirect', () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    let logout: (() => Promise<void>) | undefined;
+    let logout: ((kind: LogoutKind) => Promise<void>) | undefined;
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
@@ -114,7 +114,7 @@ describe('AuthProvider logout redirect', () => {
     );
     await screen.findByText('ready');
     await act(async () => {
-      await logout!();
+      await logout!('explicit');
     });
   }
 

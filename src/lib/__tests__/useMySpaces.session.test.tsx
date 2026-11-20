@@ -103,7 +103,7 @@ test('after a logout and another person\'s login the previous person\'s spaces a
   );
   await waitFor(() => expect(shown()).toEqual(['Acme']));
 
-  await act(async () => { await auth.logout(); });
+  await act(async () => { await auth.logout('explicit'); });
   await waitFor(() => expect(auth.user).toBeNull());
   expect(shown()).toEqual([]);
 

@@ -316,7 +316,7 @@ export function LiveEventsProvider({ children }: LiveEventsProviderProps) {
     // registry class 3 and walks the obligations (`liveVisibility.ts`).
     const visibility = createLiveVisibility({
       batcher,
-      logout: () => logoutRef.current(),
+      logout: () => logoutRef.current('consequence'),
     });
     visibilityRef.current = visibility;
 
