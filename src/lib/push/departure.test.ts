@@ -346,6 +346,30 @@ describe('row 64 — the three branches of prepare', () => {
   });
 });
 
+describe('row 64 (c) — after ok the removal of the channel is journaled', () => {
+  test('a failed removal leaves a localUnsubscribe work; the next page load without a user repeats it', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    browser.removeFails = true;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    expect(await clickLogout().verdict).toBe('proceed');
+    expect(browser.channel).toEqual(a);
+    expect(readPushState().works).toEqual([expect.objectContaining({ type: 'localUnsubscribe', endpoint: a.endpoint })]);
+
+    noteSignedOut();
+    browser.removeFails = false;
+    startPushLifecycle();
+    await settle(locks);
+
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works).toEqual([]);
+  });
+});
+
 // ───────────────────────── Row 65 ─────────────────────────
 
 describe('row 65 — the appearance grows after the click', () => {

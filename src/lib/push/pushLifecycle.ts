@@ -215,6 +215,18 @@ async function removeChannelQuietly(endpoint: string, step: Step | null): Promis
 }
 
 /**
+ * Removes the channel `endpoint` with a `localUnsubscribe` work written
+ * first and finished only by the browser's success, so a failed or cut-off
+ * removal is repeated on the next page load.
+ */
+async function removeChannelJournaled(step: Step, endpoint: string): Promise<void> {
+  if (!readPushState().works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) {
+    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+  }
+  await removeLocalChannel(step, endpoint);
+}
+
+/**
  * Creates a channel for the step; the step must be live right before each
  * browser effect. A channel that came into being although the step ended
  * meanwhile is removed again: it is nobody's.
@@ -337,7 +349,7 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
   const { step, userId } = ctx;
   const guard = await guardFromList(ctx.devices, endpoint);
   live(step);
-  const { work } = await revokeConsent(userId, { endpoint, guard }, guardOf(step));
+  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true }, guardOf(step));
   if (work !== null && work.type === 'deviceRevoke') {
     const outcome = await request(step, (signal) =>
       pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
@@ -348,8 +360,7 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
       if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
     }
   }
-  live(step);
-  await removeChannelQuietly(endpoint, step);
+  await removeLocalChannel(step, endpoint);
 }
 
 /**
@@ -547,14 +558,12 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         if (removal.kind !== 'ok' && removal.kind !== 'notFound') return;
       }
       ctx.deviceRemoved = true;
-      live(step);
-      await removeChannelQuietly(action.endpoint, step);
+      await removeChannelJournaled(step, action.endpoint);
       return;
     }
 
     case 'removeChannel':
-      live(step);
-      await removeChannelQuietly(action.endpoint, step);
+      await removeChannelJournaled(step, action.endpoint);
       return;
   }
 }

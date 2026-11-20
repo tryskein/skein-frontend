@@ -635,6 +635,34 @@ describe('row 54 — rule 7 in execution', () => {
   });
 });
 
+describe('rows 7 and 10 — the removal of the channel is journaled (US-2 "Repeats")', () => {
+  test.each([
+    { row: 7, listed: true },
+    { row: 10, listed: false },
+  ])('row $row: a failed removal leaves a localUnsubscribe work; the next page load without a user repeats it', async ({ listed }) => {
+    const a = channel('a');
+    browser.channel = a;
+    browser.removeFails = true;
+    if (listed) addSub(A, a.endpoint, null);
+    seed({ [A]: { state: 'off', endpoint: a.endpoint } });
+    await load();
+
+    await appear(A);
+
+    expect(browser.channel).toEqual(a);
+    expect(readPushState().works).toEqual([expect.objectContaining({ type: 'localUnsubscribe', endpoint: a.endpoint })]);
+
+    // A page load without a user.
+    stopPushLifecycle();
+    noteSignedOut();
+    browser.removeFails = false;
+    await load();
+
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works).toEqual([]);
+  });
+});
+
 // ───────────────────────── Row 54a ─────────────────────────
 
 describe('row 54a — the key fingerprint and a channel that changed before the confirmation', () => {

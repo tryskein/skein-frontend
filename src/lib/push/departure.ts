@@ -33,7 +33,7 @@ import { type PushDevice, type PushOutcome, pushListDevices, pushRevokeDevices }
 import { currentAppearance } from '../../auth/appearance';
 import { browserPushSupported, type ChannelRead, readChannel, removeChannel } from './browserPush';
 import { removeLocalChannel, revokeConfirmedDevice } from './pushLifecycle';
-import { deleteConsent, readConsent, removePushWork, revokeConsent, setConsentOffUnconfirmed } from './pushState';
+import { deleteConsent, readConsent, removePushWork, replacePushWork, revokeConsent, setConsentOffUnconfirmed } from './pushState';
 import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 
 /** How long the push parts may hold up an explicit logout. */
@@ -173,8 +173,14 @@ async function revokeOnLogout(step: PushStep): Promise<string | null> {
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return null;
-  // `ok` confirms U: the work is finished and the channel may go.
-  await removePushWork(work.id, guardOf(step));
+  // `ok` confirms U: the work is finished and the channel may go. The
+  // removal of the channel takes its place in the same write, so a failed
+  // or cut-off removal is repeated on the next page load.
+  if (endpoint !== null) {
+    await replacePushWork(work.id, { type: 'localUnsubscribe', endpoint }, guardOf(step));
+  } else {
+    await removePushWork(work.id, guardOf(step));
+  }
   const off = readConsent(userId);
   live(step);
   if (off.state === 'off') {
