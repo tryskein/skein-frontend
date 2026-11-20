@@ -314,6 +314,19 @@ describe('row 46 — off without labels, a full S', () => {
       .toEqual({ row: null, action: NOTHING });
   });
 
+  test('off with a full S: row 7 keeps one request of 1000 labels and removes the listed subscription by id', () => {
+    const labels = Array.from({ length: 1000 }, (_, i) => `l-${i}`);
+    const d = decide(input(consentOf('off', { labels }), channel(OWN), listed(device(OWN, OLD_LABEL))));
+    expect(d.row).toBe(7);
+    expect(d.action).toEqual({ type: 'revokeDevice', labels, endpoint: OWN, removeSubscriptionId: `sub:${OWN}` });
+  });
+
+  test('off with 999 labels: the listed label joins the one request', () => {
+    const labels = Array.from({ length: 999 }, (_, i) => `l-${i}`);
+    expect(decide(input(consentOf('off', { labels }), channel(OWN), listed(device(OWN, OLD_LABEL)))).action)
+      .toEqual({ type: 'revokeDevice', labels: [...labels, OLD_LABEL], endpoint: OWN });
+  });
+
   test('with 999 labels in S row 6 is selected', () => {
     const labels = Array.from({ length: 999 }, (_, i) => `l-${i}`);
     expect(decide(input(consentOf('none', { labels }), channel(OWN), listed(device(OWN, null)))).row).toBe(6);

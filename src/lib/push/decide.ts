@@ -106,8 +106,12 @@ export type DecisionAction =
   | { type: 'acceptExisting'; endpoint: string }
   /** Row 9: take the listed channel as the user's own, update only. */
   | { type: 'adoptChannel'; endpoint: string; register: RegisterPlan }
-  /** Row 7: revoke the device by these labels and endpoint, then remove the channel. */
-  | { type: 'revokeDevice'; labels: string[]; endpoint: string }
+  /**
+   * Row 7: revoke the device by these labels (at most MAX_CONSENT_LABELS) and
+   * endpoint, remove the subscription `removeSubscriptionId` by id when set,
+   * then remove the channel.
+   */
+  | { type: 'revokeDevice'; labels: string[]; endpoint: string; removeSubscriptionId?: string }
   /** Row 10: remove the channel. */
   | { type: 'removeChannel'; endpoint: string };
 
@@ -158,9 +162,16 @@ export function decide(input: DecisionInput): Decision {
 
   if (consent.state === 'off') {
     if (listed !== undefined) {
+      // One revocation request carries at most MAX_CONSENT_LABELS labels. The
+      // listed subscription's label joins S when it fits; otherwise that
+      // subscription is removed by id, which also revokes its label.
       const labels = [...consent.labels];
-      if (listed.deviceLabel !== null && !labels.includes(listed.deviceLabel)) labels.push(listed.deviceLabel);
-      return decision(7, { type: 'revokeDevice', labels, endpoint: channel.endpoint });
+      const action: DecisionAction = { type: 'revokeDevice', labels, endpoint: channel.endpoint };
+      if (listed.deviceLabel !== null && !labels.includes(listed.deviceLabel)) {
+        if (labels.length < MAX_CONSENT_LABELS) labels.push(listed.deviceLabel);
+        else action.removeSubscriptionId = listed.id;
+      }
+      return decision(7, action);
     }
     if (own) return decision(10, { type: 'removeChannel', endpoint: channel.endpoint });
     return decision(5, { type: 'removeForeignChannel', endpoint: channel.endpoint, then: NOTHING });
