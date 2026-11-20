@@ -12,6 +12,7 @@
 
 import type { PushOutcome } from '../../api/push';
 import { type Appearance, isCurrentAppearance } from '../../auth/appearance';
+import type { WriteGuard } from './pushState';
 
 /** Ends a step: it is no longer live, or the server said the user changed. */
 export class StepEnded extends Error {
@@ -51,4 +52,13 @@ export async function request<T>(
   live(step);
   if (outcome.kind === 'userChanged') throw new StepEnded('userChanged');
   return outcome;
+}
+
+/**
+ * The bound of a push state write made by the step: the wait for the store
+ * lock ends with the step's signal, and the step must still be live once the
+ * lock is held, right before the write.
+ */
+export function guardOf(step: PushStep): WriteGuard {
+  return { signal: step.signal, check: () => live(step) };
 }

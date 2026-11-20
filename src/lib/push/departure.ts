@@ -34,7 +34,7 @@ import { currentAppearance } from '../../auth/appearance';
 import { browserPushSupported, readChannel, removeChannel } from './browserPush';
 import { removeLocalChannel, revokeConfirmedDevice } from './pushLifecycle';
 import { deleteConsent, readConsent, removePushWork, revokeConsent, setConsentOffUnconfirmed } from './pushState';
-import { isLive, live, type PushStep, request, StepEnded } from './pushStep';
+import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 
 /** How long the push parts may hold up an explicit logout. */
 export const DEPARTURE_BUDGET_MS = 2000;
@@ -105,18 +105,18 @@ async function revokeOnLogout(step: PushStep): Promise<string | null> {
   const read = await readChannel();
   live(step);
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
-  const { work } = await revokeConsent(userId, { endpoint, guard: 'unconfirmed' }, step.signal);
+  const { work } = await revokeConsent(userId, { endpoint, guard: 'unconfirmed' }, guardOf(step));
   if (work === null || work.type !== 'deviceRevoke') return null;
   const outcome = await request(step, (signal) =>
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return null;
   // `ok` confirms U: the work is finished and the channel may go.
-  await removePushWork(work.id, step.signal);
+  await removePushWork(work.id, guardOf(step));
   const off = readConsent(userId);
   live(step);
   if (off.state === 'off') {
-    await setConsentOffUnconfirmed(userId, { gen: off.gen, rev: off.rev }, false, step.signal);
+    await setConsentOffUnconfirmed(userId, { gen: off.gen, rev: off.rev }, false, guardOf(step));
   }
   return endpoint;
 }
@@ -175,7 +175,7 @@ export async function departAfterAccountDeletion(): Promise<void> {
     const userId = step.token.userId;
     const ownEndpoint = readConsent(userId).endpoint;
     live(step);
-    await deleteConsent(userId, step.signal);
+    await deleteConsent(userId, guardOf(step));
     if (ownEndpoint === null) return;
     live(step);
     await removeChannel(ownEndpoint);

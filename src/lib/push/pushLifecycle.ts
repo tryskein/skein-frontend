@@ -69,7 +69,7 @@ import {
 import { decide, type DecisionAction, type DecisionChannel, type DecisionRow, type RegisterPlan } from './decide';
 import { endpointFingerprint, keysFingerprint } from './fingerprint';
 import { withPushOpLock } from './locks';
-import { live, type PushStep, request, StepEnded } from './pushStep';
+import { guardOf, live, type PushStep, request, StepEnded } from './pushStep';
 import {
   abandonConsentLabel,
   addPushWork,
@@ -206,9 +206,9 @@ async function removeChannelQuietly(endpoint: string): Promise<'removed' | 'notC
   }
 }
 
-async function removeWorks(match: (work: PushWork) => boolean): Promise<void> {
+async function removeWorks(step: Step, match: (work: PushWork) => boolean): Promise<void> {
   for (const work of readPushState().works) {
-    if (match(work)) await removePushWork(work.id);
+    if (match(work)) await removePushWork(work.id, guardOf(step));
   }
 }
 
@@ -224,7 +224,7 @@ async function repeatLocalUnsubscribe(work: Extract<PushWork, { type: 'localUnsu
   const result = await removeChannelQuietly(work.endpoint);
   if (result === 'failed') return;
   if (step !== null) live(step);
-  await removePushWork(work.id);
+  await removePushWork(work.id, step === null ? undefined : guardOf(step));
 }
 
 /** Rule 6: the unfinished work of the browser, as user `step.token.userId`. */
@@ -239,7 +239,7 @@ async function repeatWork(step: Step): Promise<void> {
         const outcome = await request(step, (signal) =>
           pushRemoveChannel({ expectedUserId: userId, endpoint: work.endpoint }, signal),
         );
-        if (outcome.kind === 'ok') await removeWorks((w) => w.type === 'foreignRemoval' && w.endpoint === work.endpoint);
+        if (outcome.kind === 'ok') await removeWorks(step, (w) => w.type === 'foreignRemoval' && w.endpoint === work.endpoint);
         break;
       }
       case 'deviceRevoke':
@@ -247,7 +247,7 @@ async function repeatWork(step: Step): Promise<void> {
           const outcome = await request(step, (signal) =>
             pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
           );
-          if (outcome.kind === 'ok') await removePushWork(work.id);
+          if (outcome.kind === 'ok') await removePushWork(work.id, guardOf(step));
         } else if (typeof work.guard === 'object' && work.endpoint !== undefined) {
           // Another user's revocation: only the subscription the owner's
           // confirmed list showed, and only if it is still that record. The
@@ -303,7 +303,7 @@ async function settleOffUnconfirmed(ctx: DecisionContext): Promise<void> {
     }
   }
   live(ctx.step);
-  await setConsentOffUnconfirmed(ctx.userId, snapshotOf(consent), false);
+  await setConsentOffUnconfirmed(ctx.userId, snapshotOf(consent), false, guardOf(ctx.step));
 }
 
 /**
@@ -315,15 +315,15 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
   const { step, userId } = ctx;
   const guard = await guardFromList(ctx.devices, endpoint);
   live(step);
-  const { work } = await revokeConsent(userId, { endpoint, guard });
+  const { work } = await revokeConsent(userId, { endpoint, guard }, guardOf(step));
   if (work !== null && work.type === 'deviceRevoke') {
     const outcome = await request(step, (signal) =>
       pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
     );
     if (outcome.kind === 'ok') {
-      await removePushWork(work.id);
+      await removePushWork(work.id, guardOf(step));
       const off = readConsent(userId);
-      if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false);
+      if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
     }
   }
   live(step);
@@ -362,7 +362,7 @@ async function register(
   );
   switch (outcome.kind) {
     case 'ok':
-      await confirmConsent(userId, { expect: snapshotOf(consent), label: plan.label, endpoint, keysFingerprint: fingerprint });
+      await confirmConsent(userId, { expect: snapshotOf(consent), label: plan.label, endpoint, keysFingerprint: fingerprint }, guardOf(step));
       return;
     case 'revoked':
       await goOffAfterRevoked(ctx, endpoint);
@@ -371,7 +371,7 @@ async function register(
     case 'refused':
     case 'taken':
       if (consent.pending !== null) {
-        await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label });
+        await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label }, guardOf(step));
       }
       return;
     case 'sessionEnded':
@@ -390,16 +390,16 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
 
     case 'recordKeysFingerprint':
       live(step);
-      await updateConsentChannel(userId, {
-        expect: snapshotOf(consent),
-        endpoint: action.endpoint,
-        keysFingerprint: action.keysFingerprint,
-      });
+      await updateConsentChannel(
+        userId,
+        { expect: snapshotOf(consent), endpoint: action.endpoint, keysFingerprint: action.keysFingerprint },
+        guardOf(step),
+      );
       return;
 
     case 'abandonPending':
       live(step);
-      await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: action.label });
+      await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: action.label }, guardOf(step));
       return;
 
     case 'register': {
@@ -421,13 +421,17 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       live(step);
       let recorded: Consent;
       try {
-        recorded = await recordUnconfirmedChannel(userId, {
-          expect: snapshotOf(consent),
-          label: action.register.label,
-          endpoint: channel.endpoint,
-          keysFingerprint: fingerprint,
-          kind: 'enable',
-        });
+        recorded = await recordUnconfirmedChannel(
+          userId,
+          {
+            expect: snapshotOf(consent),
+            label: action.register.label,
+            endpoint: channel.endpoint,
+            keysFingerprint: fingerprint,
+            kind: 'enable',
+          },
+          guardOf(step),
+        );
       } catch (error) {
         // The consent moved on or could not be written: the new channel is
         // nobody's, so it does not stay.
@@ -444,24 +448,24 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       const works = readPushState().works;
       live(step);
       if (!works.some((w) => w.type === 'foreignRemoval' && w.endpoint === endpoint)) {
-        await addPushWork({ type: 'foreignRemoval', endpoint });
+        await addPushWork({ type: 'foreignRemoval', endpoint }, guardOf(step));
       }
       if (!works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) {
-        await addPushWork({ type: 'localUnsubscribe', endpoint });
+        await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
       }
       publish(step, {});
       // The removal by endpoint, without a condition: only its `ok` proves the
       // previous user's subscription at this endpoint is gone.
       const outcome = await request(step, (signal) => pushRemoveChannel({ expectedUserId: userId, endpoint }, signal));
       if (outcome.kind === 'ok') {
-        await removeWorks((w) => w.type === 'foreignRemoval' && w.endpoint === endpoint);
+        await removeWorks(step, (w) => w.type === 'foreignRemoval' && w.endpoint === endpoint);
       }
       // The channel is removed whatever the server answered.
       live(step);
       const local = await removeChannelQuietly(endpoint);
       if (local === 'failed') return;
       live(step);
-      await removeWorks((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint);
+      await removeWorks(step, (w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint);
       // Rows 2 and 4 of U wait for the removal of the previous user's channel.
       ctx.channel = null;
       ctx.channelKeysFingerprint = null;
@@ -473,12 +477,11 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       live(step);
       let accepted: Consent;
       try {
-        accepted = await beginConsentLabel(userId, {
-          expect: snapshotOf(consent),
-          kind: 'accept',
-          endpoint: action.endpoint,
-          keysFingerprint: ctx.channelKeysFingerprint,
-        });
+        accepted = await beginConsentLabel(
+          userId,
+          { expect: snapshotOf(consent), kind: 'accept', endpoint: action.endpoint, keysFingerprint: ctx.channelKeysFingerprint },
+          guardOf(step),
+        );
       } catch {
         return;
       }
@@ -493,13 +496,17 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
     case 'adoptChannel': {
       if (ctx.channel === null) return;
       live(step);
-      const adopted = await recordUnconfirmedChannel(userId, {
-        expect: snapshotOf(consent),
-        label: action.register.label,
-        endpoint: action.endpoint,
-        keysFingerprint: ctx.channelKeysFingerprint,
-        kind: 'accept',
-      });
+      const adopted = await recordUnconfirmedChannel(
+        userId,
+        {
+          expect: snapshotOf(consent),
+          label: action.register.label,
+          endpoint: action.endpoint,
+          keysFingerprint: ctx.channelKeysFingerprint,
+          kind: 'accept',
+        },
+        guardOf(step),
+      );
       await register(ctx, adopted, action.endpoint, ctx.channel.keys, ctx.channelKeysFingerprint, action.register);
       return;
     }
@@ -809,7 +816,7 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
   // An unconfirmed accept is given up: the explicit enable writes its own label.
   if (consent.state === 'enabled' && consent.pending?.kind === 'accept') {
     live(step);
-    consent = await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label });
+    consent = await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label }, guardOf(step));
   }
   // "Enabled" keeps its label (row 4); "no mark" and "explicitly off" get a new one.
   const keptLabel = consent.state === 'enabled' ? consent.label : null;
@@ -867,19 +874,16 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
   try {
     pending =
       keptLabel === null
-        ? await beginConsentLabel(userId, {
-            expect: { gen },
-            kind: 'enable',
-            endpoint: channel.endpoint,
-            keysFingerprint: fingerprint,
-          })
-        : await recordUnconfirmedChannel(userId, {
-            expect: { gen, rev: consent.rev },
-            label: keptLabel,
-            endpoint: channel.endpoint,
-            keysFingerprint: fingerprint,
-            kind: 'enable',
-          });
+        ? await beginConsentLabel(
+            userId,
+            { expect: { gen }, kind: 'enable', endpoint: channel.endpoint, keysFingerprint: fingerprint },
+            guardOf(step),
+          )
+        : await recordUnconfirmedChannel(
+            userId,
+            { expect: { gen, rev: consent.rev }, label: keptLabel, endpoint: channel.endpoint, keysFingerprint: fingerprint, kind: 'enable' },
+            guardOf(step),
+          );
   } catch (error) {
     if (created) await removeChannelQuietly(channel.endpoint);
     return failure(error);
@@ -915,7 +919,11 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
       try {
         // Confirmed only with the same generation and the same pending label:
         // a revocation since then keeps the consent off.
-        await confirmConsent(userId, { expect: snapshotOf(pending), label, endpoint: channel.endpoint, keysFingerprint: fingerprint });
+        await confirmConsent(
+          userId,
+          { expect: snapshotOf(pending), label, endpoint: channel.endpoint, keysFingerprint: fingerprint },
+          guardOf(step),
+        );
       } catch (error) {
         if (error instanceof PushStateConflictError) return { kind: 'superseded' };
         await undoRegistration(step, label, channel.endpoint);
@@ -931,7 +939,7 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
     case 'refused':
     case 'taken':
       try {
-        await abandonConsentLabel(userId, { expect: snapshotOf(pending), label });
+        await abandonConsentLabel(userId, { expect: snapshotOf(pending), label }, guardOf(step));
       } catch (error) {
         return failure(error);
       }
@@ -1014,7 +1022,7 @@ export async function revokeConfirmedDevice(step: PushStep, devices: PushDevice[
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
   const guard: RevokeGuard = endpoint === null ? 'absent' : await guardFromList(devices, endpoint);
   live(step);
-  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true }, step.signal);
+  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true }, guardOf(step));
   if (work === null || work.type !== 'deviceRevoke') {
     // No label and no channel: nothing of this device is on the server,
     // unless the channel could not be read (row 7 removes it once it is) or
@@ -1023,17 +1031,17 @@ export async function revokeConfirmedDevice(step: PushStep, devices: PushDevice[
     if (read.kind !== 'none' || pendingRevocation) return { confirmed: true, revoked: false, endpoint };
     const off = readConsent(userId);
     live(step);
-    if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, step.signal);
+    if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
     return { confirmed: true, revoked: true, endpoint };
   }
   const outcome = await request(step, (signal) =>
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return { confirmed: true, revoked: false, endpoint };
-  await removePushWork(work.id, step.signal);
+  await removePushWork(work.id, guardOf(step));
   const off = readConsent(userId);
   live(step);
-  if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, step.signal);
+  if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
   return { confirmed: true, revoked: true, endpoint };
 }
 
@@ -1048,7 +1056,7 @@ export async function removeLocalChannel(step: PushStep, endpoint: string): Prom
   if (result === 'failed') return false;
   live(step);
   for (const work of readPushState().works) {
-    if (work.type === 'localUnsubscribe' && work.endpoint === endpoint) await removePushWork(work.id, step.signal);
+    if (work.type === 'localUnsubscribe' && work.endpoint === endpoint) await removePushWork(work.id, guardOf(step));
   }
   return true;
 }

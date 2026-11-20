@@ -34,6 +34,7 @@ import {
 } from '../../test/pushHarness';
 import type { BrowserChannel } from './browserPush';
 import { keysFingerprint } from './fingerprint';
+import { PUSH_STORE_LOCK } from './locks';
 import { type Consent, PUSH_STATE_KEY, readConsent, readPushState } from './pushState';
 
 const api = vi.hoisted(() => ({
@@ -177,6 +178,33 @@ describe('row 49 — a replaced appearance ends the decision without an effect',
     expect(browser.channel).toEqual(channel('a'));
     // The `ok` arrived in a replaced appearance: it finishes nothing.
     expect(readPushState().works.map((w) => w.type).sort()).toEqual(['foreignRemoval', 'localUnsubscribe']);
+  });
+});
+
+describe('row 49 — a write queued on skein.push.store after the appearance was replaced', () => {
+  test('the work of row 5 is not written once the lock is granted', async () => {
+    browser.channel = channel('a');
+    await load();
+    let release: () => void = () => undefined;
+    api.pushListDevices
+      .mockImplementationOnce(async (userId: string) => {
+        const listed = await model.list(userId);
+        // Another tab holds the store lock while this decision reaches its first write.
+        void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => new Promise<void>((r) => (release = r)));
+        return listed;
+      })
+      .mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    server.caller = B;
+    noteLogin(B);
+    for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+    noteLogin(B);
+    release();
+    await settle();
+
+    expect(readPushState().works).toEqual([]);
+    expect(browserApi.removeChannel).not.toHaveBeenCalled();
+    expect(api.pushRemoveChannel).not.toHaveBeenCalled();
   });
 });
 

@@ -351,6 +351,27 @@ describe('row 65 — the appearance grows after the click', () => {
   });
 });
 
+describe('row 65 — the appearance grows while a write waits for skein.push.store', () => {
+  test('a new login of the same user before the lock is granted: nothing is written', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+    const holder = deferred<void>();
+    void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => holder.promise);
+    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+
+    const run = clickLogout();
+    for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+    noteLogin(A);
+    holder.resolve();
+    await run.verdict;
+    for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+  });
+});
+
 // ───────────────────────── Row 66 ─────────────────────────
 
 describe('row 66 — after branch (c) the next appearance of U repeats the revocation (rule 6)', () => {

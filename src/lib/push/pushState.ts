@@ -289,13 +289,13 @@ export function isNoMark(consent: Consent): boolean {
  * previous or the new state whole (never a mix), so the caller treats the
  * transition as not confirmed and reads the record again.
  *
- * `signal` bounds the wait for the lock: once it is aborted the lock request
- * is given up, and a lock granted after that writes nothing — both reject
- * with the abort reason.
+ * `guard` bounds the write (see {@link WriteGuard}).
  */
-async function commit<T>(change: (record: PushStateRecord) => T, signal?: AbortSignal): Promise<T> {
+async function commit<T>(change: (record: PushStateRecord) => T, guard?: WriteGuard): Promise<T> {
+  const signal = guard?.signal;
   return withPushStoreLock(() => {
     if (signal?.aborted) throw signal.reason;
+    guard?.check?.();
     const s = storage();
     let before: string | null;
     try {
@@ -320,6 +320,19 @@ async function commit<T>(change: (record: PushStateRecord) => T, signal?: AbortS
     if (after !== next) throw new PushStorageError('the push state did not persist');
     return result;
   }, signal);
+}
+
+/**
+ * What bounds one write of the push state. `signal` ends the wait for the
+ * `skein.push.store` lock: once it is aborted the lock request is given up,
+ * and a lock granted after that writes nothing. `check` runs once the lock is
+ * held, right before the write, and throws to cancel it — the caller's
+ * condition (its appearance is still current) is checked where the write
+ * happens, not before the wait for the lock.
+ */
+export interface WriteGuard {
+  signal?: AbortSignal;
+  check?: () => void;
 }
 
 /** What the caller saw: the generation and, optionally, the revision. */
@@ -399,7 +412,7 @@ export interface BeginLabelArgs {
  * existing subscription (row 6) only from "no mark". Refused with
  * {@link PushLabelLimitError} when S is full.
  */
-export async function beginConsentLabel(userId: string, args: BeginLabelArgs): Promise<Consent> {
+export async function beginConsentLabel(userId: string, args: BeginLabelArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
@@ -421,7 +434,7 @@ export async function beginConsentLabel(userId: string, args: BeginLabelArgs): P
       keysFingerprint: args.keysFingerprint,
       offUnconfirmed: false,
     });
-  });
+  }, guard);
 }
 
 /** Arguments of {@link confirmConsent}. */
@@ -440,7 +453,7 @@ export interface ConfirmConsentArgs {
  * caller's snapshot, or no longer carries this label at this endpoint — a
  * late answer never brings back an older endpoint or fingerprint.
  */
-export async function confirmConsent(userId: string, args: ConfirmConsentArgs): Promise<Consent> {
+export async function confirmConsent(userId: string, args: ConfirmConsentArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
@@ -452,7 +465,7 @@ export async function confirmConsent(userId: string, args: ConfirmConsentArgs): 
       pending: null,
       keysFingerprint: args.keysFingerprint,
     });
-  });
+  }, guard);
 }
 
 /** Arguments of {@link recordUnconfirmedChannel}. */
@@ -477,7 +490,7 @@ export interface RecordChannelArgs {
  * 9). Until {@link confirmConsent} the consent is "enabled, not confirmed",
  * so a lost answer is finished by row 4 on the next appearance.
  */
-export async function recordUnconfirmedChannel(userId: string, args: RecordChannelArgs): Promise<Consent> {
+export async function recordUnconfirmedChannel(userId: string, args: RecordChannelArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
@@ -490,7 +503,7 @@ export async function recordUnconfirmedChannel(userId: string, args: RecordChann
       endpoint: args.endpoint,
       keysFingerprint: args.keysFingerprint,
     });
-  });
+  }, guard);
 }
 
 /** Arguments of {@link abandonConsentLabel}. */
@@ -504,7 +517,7 @@ export interface AbandonLabelArgs {
  * Returns an unconfirmed consent to "no mark" (an abandoned accept, a
  * definite refusal of an enable). The label stays in S.
  */
-export async function abandonConsentLabel(userId: string, args: AbandonLabelArgs): Promise<Consent> {
+export async function abandonConsentLabel(userId: string, args: AbandonLabelArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
@@ -519,7 +532,7 @@ export async function abandonConsentLabel(userId: string, args: AbandonLabelArgs
       endpoint: null,
       keysFingerprint: null,
     });
-  });
+  }, guard);
 }
 
 /** Arguments of {@link updateConsentChannel}. */
@@ -533,7 +546,7 @@ export interface UpdateChannelArgs {
  * Replaces the endpoint and key fingerprint of an `enabled` consent. Refused
  * when the consent was written since the caller's snapshot.
  */
-export async function updateConsentChannel(userId: string, args: UpdateChannelArgs): Promise<Consent> {
+export async function updateConsentChannel(userId: string, args: UpdateChannelArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
@@ -545,7 +558,7 @@ export async function updateConsentChannel(userId: string, args: UpdateChannelAr
       endpoint: args.endpoint,
       keysFingerprint: args.keysFingerprint,
     });
-  });
+  }, guard);
 }
 
 /** Arguments of {@link revokeConsent}. */
@@ -583,7 +596,7 @@ export interface RevokeConsentResult {
 export async function revokeConsent(
   userId: string,
   args: RevokeConsentArgs,
-  signal?: AbortSignal,
+  guard?: WriteGuard,
 ): Promise<RevokeConsentResult> {
   return commit((record) => {
     const consent = consentFor(record, userId);
@@ -616,7 +629,7 @@ export async function revokeConsent(
       offUnconfirmed: true,
     });
     return { consent: next, work, localWork };
-  }, signal);
+  }, guard);
 }
 
 /**
@@ -627,31 +640,31 @@ export async function setConsentOffUnconfirmed(
   userId: string,
   expect: ConsentSnapshot,
   offUnconfirmed: boolean,
-  signal?: AbortSignal,
+  guard?: WriteGuard,
 ): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, expect);
     if (consent.state !== 'off') throw new PushStateConflictError('the consent is not off');
     return store(record, userId, { ...consent, offUnconfirmed });
-  }, signal);
+  }, guard);
 }
 
 /** Deletes the consent of `userId` (the account was deleted). */
-export async function deleteConsent(userId: string, signal?: AbortSignal): Promise<void> {
+export async function deleteConsent(userId: string, guard?: WriteGuard): Promise<void> {
   await commit((record) => {
     delete record.consents[userId];
-  }, signal);
+  }, guard);
 }
 
 /** Writes a new unfinished work and returns it with its id. */
-export async function addPushWork(work: NewPushWork): Promise<PushWork> {
-  return commit((record) => appendWork(record, work));
+export async function addPushWork(work: NewPushWork, guard?: WriteGuard): Promise<PushWork> {
+  return commit((record) => appendWork(record, work), guard);
 }
 
 /** Removes a finished work; a missing id is not an error. */
-export async function removePushWork(id: string, signal?: AbortSignal): Promise<void> {
+export async function removePushWork(id: string, guard?: WriteGuard): Promise<void> {
   await commit((record) => {
     record.works = record.works.filter((w) => w.id !== id);
-  }, signal);
+  }, guard);
 }
