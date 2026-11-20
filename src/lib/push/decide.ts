@@ -102,8 +102,11 @@ export type DecisionAction =
   | { type: 'abandonPending'; label: string }
   /** Row 5: remove the foreign channel, then `then`. */
   | { type: 'removeForeignChannel'; endpoint: string; then: DecisionAction }
-  /** Row 6: accept the listed channel with a new label, update only. */
-  | { type: 'acceptExisting'; endpoint: string }
+  /**
+   * Row 6: accept the listed channel with a new label. Rule 7: an accept only
+   * updates the existing subscription, never creates one.
+   */
+  | { type: 'acceptExisting'; endpoint: string; mode: 'updateOnly' }
   /** Row 9: take the listed channel as the user's own, update only. */
   | { type: 'adoptChannel'; endpoint: string; register: RegisterPlan }
   /**
@@ -183,7 +186,7 @@ export function decide(input: DecisionInput): Decision {
     }
     if (consent.labels.length >= MAX_CONSENT_LABELS) return decision(null);
     if (!registrationsAllowed) return decision(6);
-    return decision(6, { type: 'acceptExisting', endpoint: channel.endpoint });
+    return decision(6, { type: 'acceptExisting', endpoint: channel.endpoint, mode: 'updateOnly' });
   }
 
   // enabled

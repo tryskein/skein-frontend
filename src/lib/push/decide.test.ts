@@ -70,14 +70,14 @@ const upsert: RegisterPlan = { mode: 'upsert', label: LABEL };
 const updateOnly: RegisterPlan = { mode: 'updateOnly', label: LABEL };
 
 /** Every registration an action would send, row 6 included. */
-function registrations(action: DecisionAction): Array<RegisterPlan | 'accept'> {
+function registrations(action: DecisionAction): Array<Pick<RegisterPlan, 'mode'> & { label: string }> {
   switch (action.type) {
     case 'createChannelAndRegister':
     case 'register':
     case 'adoptChannel':
       return [action.register];
     case 'acceptExisting':
-      return ['accept'];
+      return [{ mode: action.mode, label: 'new' }];
     case 'removeForeignChannel':
       return registrations(action.then);
     default:
@@ -110,10 +110,10 @@ describe('row 41 — rows 2–10 of the decision table', () => {
       { row: 5, action: { type: 'removeForeignChannel', endpoint: FOREIGN, then: NOTHING } }],
     ['row 6 (US-9): no mark, a pre-change subscription listed → accept it',
       input(consentOf('none'), channel(OWN), listed(device(OWN, null))),
-      { row: 6, action: { type: 'acceptExisting', endpoint: OWN } }],
+      { row: 6, action: { type: 'acceptExisting', endpoint: OWN, mode: 'updateOnly' } }],
     ['row 6 (Edge 9): storage cleared, the channel is in the list → accept it',
       input(emptyConsent(), channel(OWN), listed(device(OWN, OLD_LABEL))),
-      { row: 6, action: { type: 'acceptExisting', endpoint: OWN } }],
+      { row: 6, action: { type: 'acceptExisting', endpoint: OWN, mode: 'updateOnly' } }],
     ['row 5 (Edge 9, US-9): storage cleared, the channel is not in the list → remove it',
       input(emptyConsent(), channel(OWN), EMPTY_LIST),
       { row: 5, action: { type: 'removeForeignChannel', endpoint: OWN, then: NOTHING } }],
@@ -295,6 +295,10 @@ describe('row 45 — ИНВ-2: no registration without consent outside rows 6 an
       if (registrations(d.action).length > 0) {
         withRegistration += 1;
         expect(given.consent.state === 'enabled' || d.row === 6, JSON.stringify({ given, d })).toBe(true);
+        // Rule 7: an accept (rows 6 and 9) only updates.
+        if (d.row === 6 || d.row === 9) {
+          expect(registrations(d.action).every((r) => r.mode === 'updateOnly'), JSON.stringify({ given, d })).toBe(true);
+        }
       }
       if (given.consent.state === 'off') expect(d.row).not.toBe(6);
     }
