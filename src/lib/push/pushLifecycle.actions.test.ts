@@ -557,6 +557,27 @@ describe('row 61 — the removal by id of a full S is recorded with the revocati
   });
 });
 
+describe('row 61 — the manual retry of an unconfirmed disable (US-3)', () => {
+  test('after a lost revocation and a removed channel, disabling again sends the recorded revocation', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    const tab = await openTab(A);
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'failed', reason: 'unconfirmed' });
+    expect(browser.channel).toBeNull();
+    expect(server.subs).toHaveLength(1);
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'done' });
+    expect(revocationBodies()[1]).toEqual({ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: x.endpoint });
+    expect(server.subs).toEqual([]);
+    expect(readPushState().works).toEqual([]);
+    expect(readConsent(A)).toMatchObject({ state: 'off', offUnconfirmed: false });
+  });
+});
+
 // ───────────────────────── Row 62 ─────────────────────────
 
 describe('row 62 — removal of another device (US-3)', () => {

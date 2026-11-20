@@ -1271,19 +1271,21 @@ export async function revokeConfirmedDevice(
   // The transition is written (with the local removal journaled): the
   // channel may go now, whatever the revocation request answers.
   onTransition?.(endpoint);
-  if (work === null || work.type !== 'deviceRevoke') {
-    // No label and no channel: nothing of this device is on the server,
-    // unless the channel could not be read (row 7 removes it once it is) or
-    // an earlier revocation is still unfinished.
-    const pendingRevocation = readPushState().works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId);
-    if (read.kind !== 'none' || pendingRevocation) return { confirmed: true, revoked: false, endpoint };
-    const off = readConsent(userId);
-    live(step);
-    if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
-    return { confirmed: true, revoked: true, endpoint };
+  let done: boolean;
+  if (work !== null && work.type === 'deviceRevoke') {
+    // The work records the removal by id too, so a repeat performs all of it.
+    done = await undoingOnUserChanged(repeatOwnRevocation(step, work), undo);
+  } else {
+    // No label and no channel: nothing new of this device is on the server,
+    // unless the channel could not be read (row 7 removes it once it is).
+    done = read.kind === 'none';
   }
-  // The work records the removal by id too, so a repeat performs all of it.
-  const done = await undoingOnUserChanged(repeatOwnRevocation(step, work), undo);
+  // Earlier unfinished revocations of this device by the same owner are
+  // sent now as well: a disable asked again is the manual retry of US-3.
+  for (const earlier of readPushState().works) {
+    if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+    done = (await repeatOwnRevocation(step, earlier)) && done;
+  }
   if (!done) return { confirmed: true, revoked: false, endpoint };
   const off = readConsent(userId);
   live(step);
