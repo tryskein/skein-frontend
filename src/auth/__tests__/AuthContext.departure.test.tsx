@@ -268,6 +268,31 @@ describe('row 68a — the server confirmed another user', () => {
   });
 });
 
+describe('row 68a — another appearance while the logout prepares', () => {
+  test('B signed in meanwhile: no POST /api/auth/logout, /me stays B, no redirect', async () => {
+    pushOnForA();
+    const client = await mount();
+    api.pushListDevices.mockImplementationOnce(async (userId: string) => {
+      const listed = await model.list(userId);
+      // Another tab signed B in, and this page has confirmed B already.
+      server.caller = B;
+      noteLogin(B);
+      client.setQueryData(ME_KEY, user(B));
+      return listed;
+    });
+
+    let result: unknown;
+    await act(async () => {
+      result = await current().logout('explicit');
+    });
+
+    expect(result).toBe('superseded');
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+    expect((client.getQueryData(ME_KEY) as User | null)?.id).toBe(B);
+  });
+});
+
 // ───────────────────────── Row 69 ─────────────────────────
 
 describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-5)', () => {

@@ -43,7 +43,7 @@ const api = vi.hoisted(() => ({
   confirmEmail: vi.fn(async (_token: string): Promise<void> => undefined),
   acceptTokenInvitation: vi.fn(async (_token: string): Promise<unknown> => ({})),
   declineTokenInvitation: vi.fn(async (_token: string): Promise<void> => undefined),
-  logout: vi.fn(async (_kind?: string) => {
+  logout: vi.fn(async (_kind?: string): Promise<string | void> => {
     world.user = null;
   }),
 }));
@@ -380,6 +380,17 @@ describe('row 254a — the link opened under another account', () => {
     expect(screen.queryByRole('button', { name: t('auth:invite.accept') })).toBeNull();
     expect(screen.queryByText(/@/)).toBeNull();
   }
+
+  test('local: "Sign out and sign in with another account" stays here when the server confirmed another user (nobody was logged out)', async () => {
+    api.logout.mockImplementationOnce(async () => 'userChanged');
+    renderAt('/invite/tok-1');
+    expect(await screen.findByRole('heading', { name: t('auth:invite.otherEmail') })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: t('auth:invite.switchAccount') }));
+    await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole('button', { name: t('auth:invite.switchAccount') }) as HTMLButtonElement).disabled).toBe(false));
+    expect(lastLocation?.pathname).toBe('/invite/tok-1');
+  });
 
   test('local: "Sign out and sign in with another account" signs out and opens sign-in with the way back here', async () => {
     renderAt('/invite/tok-1');

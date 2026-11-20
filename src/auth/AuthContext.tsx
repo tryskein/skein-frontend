@@ -97,13 +97,14 @@ interface AuthContextValue {
    * Log out; `kind` says which way the session ends. Resolves once the
    * cookie is cleared and the session's cache dropped — or, when the server
    * confirmed another user than the one this explicit logout was for, once
-   * `/me` was read again (nobody is logged out then).
+   * `/me` was read again, or once another appearance replaced the one the
+   * logout was for (nobody is logged out then; see {@link LogoutResult}).
    *
    * `owner` (for `accountDeleted`) is the appearance in which the deletion
    * was asked for: when another appearance has replaced it, nobody is logged
    * out and push is not touched.
    */
-  logout: (kind: LogoutKind, owner?: Appearance | null) => Promise<void>;
+  logout: (kind: LogoutKind, owner?: Appearance | null) => Promise<LogoutResult>;
 }
 
 /**
@@ -124,6 +125,13 @@ interface LogoutVariables {
   /** The appearance a logout after account deletion belongs to. */
   owner: Appearance | null;
 }
+
+/**
+ * How `logout` ended: `loggedOut` — the session is over; `userChanged` /
+ * `superseded` — another user or another appearance is current, and nobody
+ * was logged out.
+ */
+export type LogoutResult = 'loggedOut' | 'userChanged' | 'superseded';
 
 type LogoutOutcome =
   | { kind: 'loggedOut'; response: LogoutResponse }
@@ -233,12 +241,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // redirect — the channel is gone before the page is left.
   const logoutMutation = useMutation<LogoutOutcome, Error, LogoutVariables>({
     mutationFn: async ({ kind, departure, owner }) => {
-      if (departure !== null && (await departure.prepare()) === 'userChanged') {
+      const verdict = departure === null ? 'proceed' : await departure.prepare();
+      if (verdict === 'userChanged') {
         // The page appears again with the user the server confirmed; their
         // session is not ended.
         await reloadMeAfterUserChanged();
         return { kind: 'userChanged' };
       }
+      if (verdict === 'superseded') return { kind: 'superseded' };
       if (kind === 'accountDeleted' && (await departAfterAccountDeletion(owner)) === 'superseded') {
         return { kind: 'superseded' };
       }
@@ -349,7 +359,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Started here, in the caller's click: the appearance is taken and the
       // budget of the push part starts now.
       const departure = kind === 'explicit' ? beginExplicitDeparture() : null;
-      await logoutMutation.mutateAsync({ kind, departure, owner });
+      const outcome = await logoutMutation.mutateAsync({ kind, departure, owner });
+      return outcome.kind;
     },
     [logoutMutation],
   );

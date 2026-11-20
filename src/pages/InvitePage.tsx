@@ -244,10 +244,19 @@ function OtherEmail({ token, authMode }: { token: string; authMode: RuntimeAuthC
 
   const switchAccount = async () => {
     setBusy(true);
+    let loggedOut = true;
     try {
-      await logout('explicit');
-    } finally {
+      const result = await logout('explicit');
+      // Another user is confirmed by now: the page shows that user, nobody
+      // was logged out, so there is no sign-in to go to.
+      loggedOut = result !== 'userChanged' && result !== 'superseded';
+    } catch {
+      // A failed logout call still clears the local session.
+    }
+    if (loggedOut) {
       navigate('/login', { replace: true, state: { from: { pathname: `/invite/${token}` } } });
+    } else {
+      setBusy(false);
     }
   };
 

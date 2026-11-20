@@ -55,7 +55,13 @@ export const DEPARTURE_BUDGET_MS = 2000;
 export const DEPARTURE_CONFIRM_MS = 1500;
 
 /** What the logout does after `prepare`. */
-export type DepartureVerdict = 'proceed' | 'userChanged';
+/**
+ * What the logout does after `prepare`: `proceed` — log out; `userChanged` —
+ * the server confirmed another user, do not log out; `superseded` — another
+ * appearance replaced the one the logout was for (a login, `/me`), do not
+ * log out either.
+ */
+export type DepartureVerdict = 'proceed' | 'userChanged' | 'superseded';
 
 /** The push part of one explicit logout. */
 export interface ExplicitDeparture {
@@ -225,7 +231,13 @@ export function beginExplicitDeparture(): ExplicitDeparture {
           return 'proceed';
         },
       );
-      return withinBudget(work, step.signal, 'proceed');
+      return withinBudget(work, step.signal, 'proceed').then((verdict) => {
+        if (verdict !== 'proceed' || isCurrentAppearance(step.token)) return verdict;
+        // The page has another appearance by now: the logout was for one
+        // that is gone, and must not end the session that replaced it.
+        stop();
+        return 'superseded';
+      });
     },
     async finish() {
       try {

@@ -386,7 +386,7 @@ describe('row 65 — the appearance grows after the click', () => {
     });
     const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
 
-    expect(await clickLogout().verdict).toBe('proceed');
+    expect(await clickLogout().verdict).toBe('superseded');
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
     expect(allPushCalls()).toBe(1);
     expect(browserApi.removeChannel).not.toHaveBeenCalled();

@@ -61,7 +61,7 @@ describe('AuthProvider logout redirect', () => {
     });
   });
 
-  function Harness({ onReady }: { onReady: (logout: (kind: LogoutKind) => Promise<void>) => void }) {
+  function Harness({ onReady }: { onReady: (logout: (kind: LogoutKind) => Promise<unknown>) => void }) {
     const { logout } = useAuth();
     onReady(logout);
     return <div>ready</div>;
@@ -71,7 +71,7 @@ describe('AuthProvider logout redirect', () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    let logout: ((kind: LogoutKind) => Promise<void>) | null = null;
+    let logout: ((kind: LogoutKind) => Promise<unknown>) | null = null;
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
@@ -102,7 +102,7 @@ describe('AuthProvider logout redirect', () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    let logout: ((kind: LogoutKind) => Promise<void>) | undefined;
+    let logout: ((kind: LogoutKind) => Promise<unknown>) | undefined;
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
