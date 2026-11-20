@@ -26,10 +26,24 @@ interface Worker {
 
 const ORIGIN = 'https://skein.example.test';
 
+const NEW_SUBSCRIPTION = {
+  endpoint: 'https://push.example.test/send/new',
+  toJSON: () => ({ endpoint: 'https://push.example.test/send/new', keys: { p256dh: 'BPk', auth: 'AQID' } }),
+  getKey: () => new Uint8Array([1, 2, 3]).buffer,
+  unsubscribe: async () => true,
+};
+
 function runWorker(): Worker {
   const listeners = new Map<string, Listener[]>();
-  const fetchMock = vi.fn(async () => new Response('{}'));
-  const subscribe = vi.fn(async () => ({}));
+  // A server and a browser that would let a worker re-register: the config
+  // publishes a key, subscribe returns a channel, the subscriptions route
+  // accepts it. A worker that writes on a subscription change gets all the
+  // way to the POST with this fixture.
+  const fetchMock = vi.fn(async (url: string) =>
+    url.endsWith('/push/config')
+      ? new Response(JSON.stringify({ publicKey: 'BPkAAQID' }), { headers: { 'Content-Type': 'application/json' } })
+      : new Response(null, { status: 204 }));
+  const subscribe = vi.fn(async () => NEW_SUBSCRIPTION);
   const showNotification = vi.fn(async () => undefined);
   const openWindow = vi.fn(async () => null);
   const clients = {
@@ -67,7 +81,7 @@ function runWorker(): Worker {
 describe('row 81 — the worker does not write to the server on a subscription change', () => {
   test('pushsubscriptionchange calls neither fetch nor pushManager.subscribe', async () => {
     const worker = runWorker();
-    await worker.dispatch('pushsubscriptionchange', { oldSubscription: null, newSubscription: null });
+    await worker.dispatch('pushsubscriptionchange', { oldSubscription: null, newSubscription: NEW_SUBSCRIPTION });
     // Let any work the worker started outside waitUntil settle.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(worker.fetch).not.toHaveBeenCalled();
