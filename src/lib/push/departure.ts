@@ -295,26 +295,34 @@ export function beginExplicitDeparture(): ExplicitDeparture {
 
 /**
  * The push part of the logout after the deletion of one's own account: the
- * consent of the user is deleted from the push state and the channel this
- * browser has now is removed (also a subscription the user never accepted,
+ * consent of the user is deleted from the push state first, then the channel
+ * this browser has is removed (also a subscription the user never accepted,
  * or a channel the consent no longer names), without a server call, within
  * {@link DEPARTURE_BUDGET_MS}. The removal is journaled, so a failed one is
  * repeated on the next page load.
  *
- * `owner` is the appearance in which the deletion was asked for. When another
- * appearance has replaced it meanwhile, nothing is done and the result is
- * `superseded`: the logout must not touch the session that appeared since.
+ * `owner` is the appearance in which the deletion was asked for. The clean-up
+ * is the owner's also when the page has no user any more (a 401 of the
+ * deleted session came first); only another appearance replacing the owner's
+ * stops it, with the result `superseded` — the logout must not touch the
+ * session that appeared since.
  */
 export async function departAfterAccountDeletion(owner: Appearance | null): Promise<'proceed' | 'superseded'> {
-  if (owner !== null && !isCurrentAppearance(owner)) return 'superseded';
-  const budgeted = budgetedStep(owner ?? currentAppearance());
+  const token = owner ?? currentAppearance();
+  const replaced = () => {
+    const now = currentAppearance();
+    return token !== null && now !== null && (now.seq !== token.seq || now.userId !== token.userId);
+  };
+  if (replaced()) return 'superseded';
+  const budgeted = budgetedStep(token);
   if (budgeted === null) return 'proceed';
-  const { step, stop } = budgeted;
+  const { stop } = budgeted;
+  const step: PushStep = { ...budgeted.step, holds: () => !replaced() };
   const work = (async () => {
     const userId = step.token.userId;
-    const read = await readChannel();
     live(step);
     await deleteConsent(userId, guardOf(step));
+    const read = await readChannel();
     if (read.kind !== 'channel') return;
     const endpoint = read.channel.endpoint;
     await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
@@ -325,5 +333,5 @@ export async function departAfterAccountDeletion(owner: Appearance | null): Prom
   } finally {
     stop();
   }
-  return isCurrentAppearance(step.token) ? 'proceed' : 'superseded';
+  return replaced() ? 'superseded' : 'proceed';
 }

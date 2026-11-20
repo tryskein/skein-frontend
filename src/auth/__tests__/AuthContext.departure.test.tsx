@@ -409,6 +409,33 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(browser.channel).toEqual(channel('b'));
   });
 
+  test('accountDeleted after a 401 of the deleted session signed the page out: the owner\'s consent and channel are still cleared', async () => {
+    pushOnForA();
+    await mount();
+    const owner = current().appearance;
+    // The 401 handler: no user is confirmed any more, nobody else appeared.
+    act(() => noteSignedOut());
+
+    await act(async () => {
+      await current().logout('accountDeleted', owner);
+    });
+
+    expect(readPushState().consents[A]).toBeUndefined();
+    expect(browser.channel).toBeNull();
+  });
+
+  test('accountDeleted with a hung channel read still deletes the consent', async () => {
+    pushOnForA();
+    await mount();
+    browserApi.readChannel.mockImplementation(() => new Promise(() => undefined));
+
+    await act(async () => {
+      await current().logout('accountDeleted', current().appearance);
+    });
+
+    expect(readPushState().consents[A]).toBeUndefined();
+  });
+
   test('consequence changes neither the consent nor the channel', async () => {
     pushOnForA();
     const client = await mount();

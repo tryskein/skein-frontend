@@ -27,11 +27,16 @@ export interface PushStep {
   token: Appearance;
   /** Aborted when the appearance is replaced or the step's deadline passed. */
   signal: AbortSignal;
+  /**
+   * Whether the step's appearance still holds; by default, that it is the
+   * current appearance.
+   */
+  holds?: () => boolean;
 }
 
 /** Whether the step may still have effects. */
 export function isLive(step: PushStep): boolean {
-  return !step.signal.aborted && isCurrentAppearance(step.token);
+  return !step.signal.aborted && (step.holds !== undefined ? step.holds() : isCurrentAppearance(step.token));
 }
 
 /** Throws {@link StepEnded} unless the step is live. */
