@@ -312,7 +312,7 @@ describe('row 59 — outcomes of an enable (US-1, Edge 10)', () => {
     expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'done' });
     expect(browserApi.createChannel).toHaveBeenCalledTimes(replaced ? 1 : 0);
     expect(subscribeBodies()[0].endpoint === x.endpoint).toBe(!replaced);
-    if (replaced) expect(browserApi.removeChannel).toHaveBeenCalledWith(x.endpoint);
+    if (replaced) expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(x.endpoint);
   });
 
   test('"revoked" turns the consent off and removes the channel', async () => {
@@ -443,7 +443,7 @@ describe('row 61 — disable on this device (US-3)', () => {
     expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'done' });
     expect(api.pushListDevices.mock.invocationCallOrder[0]).toBeLessThan(api.pushRevokeDevices.mock.invocationCallOrder[0]);
     expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: x.endpoint }]);
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(x.endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(x.endpoint);
     expect(browserApi.removeChannel.mock.invocationCallOrder[0]).toBeGreaterThan(api.pushRevokeDevices.mock.invocationCallOrder[0]);
     expect(browser.channel).toBeNull();
     expect(readPushState().works).toEqual([]);

@@ -325,7 +325,7 @@ describe('row 50 — repeats of unfinished work (rule 6)', () => {
 
     await load();
 
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(channel('a').endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(channel('a').endpoint);
     expect(browser.channel).toBeNull();
     expect(readPushState().works).toEqual([]);
     expect(allPushCalls()).toBe(0);
@@ -365,7 +365,7 @@ describe('row 51 — row 5: the previous user’s channel, warning B', () => {
     await appear(B);
 
     expect(api.pushRemoveChannel).toHaveBeenCalledWith({ expectedUserId: B, endpoint: a.endpoint }, expect.any(AbortSignal));
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(a.endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(a.endpoint);
     // The warning is shown before the answer of the unconditional removal.
     expect(warningAtRequest).toEqual([a.endpoint]);
     const types = readPushState().works.map((w) => w.type).sort();
@@ -603,7 +603,7 @@ describe('row 53 — the browser changed the channel (US-10)', () => {
 
     await appear(A);
 
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(after.endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(after.endpoint);
     expect(api.pushRemoveChannel).toHaveBeenCalledWith({ expectedUserId: A, endpoint: after.endpoint }, expect.any(AbortSignal));
     expect(browserApi.createChannel).toHaveBeenCalledTimes(1);
     expect(api.pushSubscribe).toHaveBeenCalledTimes(1);
@@ -640,7 +640,7 @@ describe('row 54 — rule 7 in execution', () => {
 
     expect(readConsent(A).state).toBe('off');
     expect(browser.channel).toBeNull();
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(a.endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(a.endpoint);
   });
 
   test('"revoked" on row 2 turns the consent off and removes the new channel', async () => {

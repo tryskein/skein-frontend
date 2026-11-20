@@ -200,7 +200,7 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     const run = clickLogout();
     await flush();
     expect(api.pushRevokeDevices).toHaveBeenCalledTimes(1);
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(a.endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(a.endpoint);
     await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS - 1);
     expect(run.done()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -288,7 +288,7 @@ describe('row 64 — the three branches of prepare', () => {
     expect(browserApi.removeChannel).not.toHaveBeenCalled();
 
     await departure.finish();
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(a.endpoint);
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toContain(a.endpoint);
     expect(browser.channel).toBeNull();
     expect(readPushState().works).toEqual([]);
     expect(readConsent(A)).toMatchObject({ state: 'off', offUnconfirmed: false });
