@@ -1907,6 +1907,8 @@ collapsedChip: '{{total}} · {{collapsed}} свёрнуто',
         'Если это <b>Brave</b> — откройте <code>brave://settings/privacy</code>, включите «Use Google services for push messaging» и перезапустите браузер. Иначе попробуйте Chrome, Edge или Firefox на десктопе и проверьте, что сеть / VPN не блокирует сервисы Google.',
       serverDisabledTitle: 'Push выключен на сервере',
       serverDisabledBody: 'Этот сервер Skein не отправляет push-уведомления, поэтому включить push здесь нельзя.',
+      serverUnknownTitle: 'Настройки push сервера недоступны',
+      serverUnknownBody: 'Skein не смог узнать, отправляет ли этот сервер push-уведомления. Включить push может не получиться, пока это не прояснится.',
       offUnconfirmedTitle: 'Отключение не подтверждено',
       offUnconfirmedBody:
         'Push на этом устройстве выключен, но сервер ещё не подтвердил это: уведомления сюда могут приходить. Skein повторит попытку при следующем входе.',

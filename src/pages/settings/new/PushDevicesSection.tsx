@@ -123,7 +123,7 @@ export function PushDevicesSection() {
             <Alert variant="light" style={ERR_ALERT_VARS} title={t('device.deniedTitle')}>
               {t('device.deniedBody')}
             </Alert>
-          ) : state.decided && !state.serverPushEnabled ? (
+          ) : state.serverPush === 'disabled' ? (
             <Alert variant="light" style={WARN_ALERT_VARS} title={t('device.serverDisabledTitle')}>
               {t('device.serverDisabledBody')}
             </Alert>
@@ -146,6 +146,12 @@ export function PushDevicesSection() {
               </Text>
             </Stack>
           )}
+
+          {supported && permission !== 'denied' && state.decided && state.serverPush === 'unknown' ? (
+            <Alert variant="light" style={WARN_ALERT_VARS} title={t('device.serverUnknownTitle')} mt="sm">
+              {t('device.serverUnknownBody')}
+            </Alert>
+          ) : null}
 
           {supported && offUnconfirmed ? (
             <Alert variant="light" style={WARN_ALERT_VARS} title={t('device.offUnconfirmedTitle')} mt="sm">

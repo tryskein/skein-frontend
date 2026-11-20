@@ -52,7 +52,7 @@ function blankState(appearance: Appearance | null, from: PushLifecycleState): Pu
     supported: from.supported,
     decided: false,
     row: null,
-    serverPushEnabled: false,
+    serverPush: 'unknown',
     permission: from.permission,
     consent: null,
     devices: null,

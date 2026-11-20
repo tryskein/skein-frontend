@@ -2044,6 +2044,8 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
         'If this is <b>Brave</b> — open <code>brave://settings/privacy</code>, turn on “Use Google services for push messaging” and restart the browser. Otherwise try Chrome, Edge or Firefox on the desktop and check that your network / VPN is not blocking Google services.',
       serverDisabledTitle: 'Push is turned off on the server',
       serverDisabledBody: 'This Skein server does not send push notifications, so push cannot be turned on here.',
+      serverUnknownTitle: 'Push settings of the server are unavailable',
+      serverUnknownBody: 'Skein could not read whether this server sends push notifications. Turning push on may fail until it can.',
       offUnconfirmedTitle: 'Turning push off is not confirmed',
       offUnconfirmedBody:
         'Push is off on this device, but the server has not confirmed it yet: this device may still receive notifications. Skein will try again on the next visit.',

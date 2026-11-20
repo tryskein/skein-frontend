@@ -108,8 +108,12 @@ export interface PushLifecycleState {
   decided: boolean;
   /** Row of that decision; `null` before it, or when row 6 was excluded by a full S. */
   row: DecisionRow | null;
-  /** Push is enabled on the server (it publishes a VAPID key); `false` until known. */
-  serverPushEnabled: boolean;
+  /**
+   * Push on the server: `enabled` (it publishes a VAPID key), `disabled`
+   * (the key is empty), `unknown` (the configuration could not be read, or
+   * not yet).
+   */
+  serverPush: ServerPush;
   permission: NotificationPermissionState;
   /** The consent of the appearing user; `null` without a user. */
   consent: Consent | null;
@@ -137,7 +141,7 @@ function initialState(appearance: Appearance | null): PushLifecycleState {
     supported: browserPushSupported(),
     decided: false,
     row: null,
-    serverPushEnabled: false,
+    serverPush: 'unknown',
     permission: notificationPermission(),
     consent: appearance === null ? null : readConsent(appearance.userId),
     devices: null,
@@ -568,12 +572,20 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
   }
 }
 
-async function readServerPush(): Promise<{ enabled: boolean; publicKey: string }> {
+/** Push on the server as the page knows it. */
+export type ServerPush = 'enabled' | 'disabled' | 'unknown';
+
+/**
+ * Reads the push configuration of the server for the step. A configuration
+ * that could not be read (network, an error status, the step ended) is
+ * `unknown`, not `disabled`: only an empty key says push is off there.
+ */
+async function readServerPush(step: Step): Promise<{ state: ServerPush; publicKey: string }> {
   try {
-    const { publicKey } = await getPushConfig();
-    return { enabled: publicKey !== '', publicKey };
+    const { publicKey } = await getPushConfig(step.signal);
+    return { state: publicKey !== '' ? 'enabled' : 'disabled', publicKey };
   } catch {
-    return { enabled: false, publicKey: '' };
+    return { state: 'unknown', publicKey: '' };
   }
 }
 
@@ -612,7 +624,7 @@ async function decideOnAppearance(step: Step): Promise<void> {
     return;
   }
 
-  const server = await readServerPush();
+  const server = await readServerPush(step);
   live(step);
   const permission = notificationPermission();
   const consent = readConsent(userId);
@@ -622,7 +634,9 @@ async function decideOnAppearance(step: Step): Promise<void> {
     channel,
     list,
     permission,
-    serverPushEnabled: server.enabled,
+    // Only a server known to have push off holds the registrations back;
+    // row 2 still needs the key to create a channel.
+    serverPushEnabled: server.state !== 'disabled',
     blocks: {
       ownRevokePending: works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId),
       foreignRemovalPending: works.some((w) => w.type === 'localUnsubscribe'),
@@ -647,7 +661,7 @@ async function decideOnAppearance(step: Step): Promise<void> {
   publish(step, {
     decided: true,
     row: decision.row,
-    serverPushEnabled: server.enabled,
+    serverPush: server.state,
     permission,
     devices: list.value,
     thisDeviceHash,
@@ -833,9 +847,10 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
   const userId = step.token.userId;
   const devices = await confirmUser(step);
   if (devices === null) return { kind: 'failed', reason: 'unconfirmed' };
-  const server = await readServerPush();
+  const server = await readServerPush(step);
   live(step);
-  if (!server.enabled) return { kind: 'unavailable' };
+  if (server.state === 'disabled') return { kind: 'unavailable' };
+  if (server.state === 'unknown') return { kind: 'failed', reason: 'unconfirmed' };
 
   let consent = readConsent(userId);
   if (consent.gen !== gen) return { kind: 'superseded' };

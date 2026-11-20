@@ -21,6 +21,7 @@ import { Button } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { ConsentState } from '../lib/push/pushState';
 import type { NotificationPermissionState } from '../lib/push/browserPush';
+import type { ServerPush } from '../lib/push/pushLifecycle';
 import { dismissBanner, isBannerDismissed } from '../lib/push/bannerDismissal';
 import { usePush } from '../lib/usePush';
 
@@ -29,7 +30,8 @@ export function shouldShowSoftAsk(args: {
   supported: boolean;
   /** The decision of this appearance ran with a read list. */
   decided: boolean;
-  serverPushEnabled: boolean;
+  /** Push on the server; only `disabled` hides the banner. */
+  serverPush: ServerPush;
   permission: NotificationPermissionState;
   /** The consent of the current user. */
   consentState: ConsentState | null;
@@ -37,7 +39,7 @@ export function shouldShowSoftAsk(args: {
   userId: string;
   now: number;
 }): boolean {
-  if (!args.supported || !args.decided || !args.serverPushEnabled) return false;
+  if (!args.supported || !args.decided || args.serverPush === 'disabled') return false;
   if (args.permission === 'denied') return false;
   if (args.consentState !== 'none') return false;
   return !isBannerDismissed(args.userId, args.now);
@@ -55,7 +57,7 @@ export function PushSoftAsk() {
     !shouldShowSoftAsk({
       supported: state.supported,
       decided: state.decided,
-      serverPushEnabled: state.serverPushEnabled,
+      serverPush: state.serverPush,
       permission: state.permission,
       consentState: state.consent?.state ?? null,
       userId: appearance.userId,

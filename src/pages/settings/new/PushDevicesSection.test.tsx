@@ -116,7 +116,7 @@ function decided(change: Partial<PushLifecycleState> = {}, consent: Partial<Cons
     supported: true,
     decided: true,
     row: 8,
-    serverPushEnabled: true,
+    serverPush: 'enabled',
     permission: 'granted',
     consent: { ...emptyConsent(), ...consent },
     devices: [],
@@ -171,13 +171,21 @@ describe('PushDevicesSection — push on this device (row 37; row 79)', () => {
   test.each([
     { case: 'push unsupported', change: { supported: false }, reason: 'device.unsupportedTitle' },
     { case: 'permission denied', change: { permission: 'denied' as const }, reason: 'device.deniedTitle' },
-    { case: 'push disabled on the server', change: { serverPushEnabled: false }, reason: 'device.serverDisabledTitle' },
+    { case: 'push disabled on the server', change: { serverPush: 'disabled' as const }, reason: 'device.serverDisabledTitle' },
   ])('$case: the reason instead of the switch', ({ change, reason }) => {
     push.state = decided(change);
     renderSection();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.getByText(t(reason))).toBeTruthy();
   });
+});
+
+test('the server configuration could not be read: the switch stays, with that reason, not "push is off on the server"', () => {
+  push.state = decided({ serverPush: 'unknown' });
+  renderSection();
+  expect(screen.getByRole('switch')).toBeTruthy();
+  expect(screen.getByText(t('device.serverUnknownTitle'))).toBeTruthy();
+  expect(screen.queryByText(t('device.serverDisabledTitle'))).toBeNull();
 });
 
 describe('PushDevicesSection — "disable not confirmed" (row 79, US-3)', () => {

@@ -87,9 +87,10 @@ export interface PushDevice {
  * disabled server-side; the per-field default guards against a malformed
  * wire response so callers always get a string.
  */
-export async function getPushConfig(): Promise<PushConfig> {
+export async function getPushConfig(signal?: AbortSignal): Promise<PushConfig> {
   const raw = await apiJson<Partial<PushConfig>>('/api/v1/push/config', {
     method: 'GET',
+    signal,
   });
   return { publicKey: typeof raw.publicKey === 'string' ? raw.publicKey : '' };
 }
