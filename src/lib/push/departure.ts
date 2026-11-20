@@ -30,10 +30,18 @@
  */
 
 import { type PushDevice, type PushOutcome, pushListDevices, pushRevokeDevices } from '../../api/push';
-import { currentAppearance } from '../../auth/appearance';
-import { browserPushSupported, type ChannelRead, readChannel, removeChannel } from './browserPush';
+import { type Appearance, currentAppearance, isCurrentAppearance } from '../../auth/appearance';
+import { browserPushSupported, type ChannelRead, readChannel } from './browserPush';
 import { removeLocalChannel, revokeConfirmedDevice } from './pushLifecycle';
-import { deleteConsent, readConsent, removePushWork, replacePushWork, revokeConsent, setConsentOffUnconfirmed } from './pushState';
+import {
+  addPushWork,
+  deleteConsent,
+  readConsent,
+  removePushWork,
+  replacePushWork,
+  revokeConsent,
+  setConsentOffUnconfirmed,
+} from './pushState';
 import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 
 /** How long the push parts may hold up an explicit logout. */
@@ -81,9 +89,11 @@ function withinBudget<T>(work: Promise<T>, signal: AbortSignal, fallback: T): Pr
   });
 }
 
-/** A step of the current appearance with a deadline of {@link DEPARTURE_BUDGET_MS}. */
-function budgetedStep(): { step: PushStep; stop: () => void } | null {
-  const token = currentAppearance();
+/**
+ * A step of `token` (by default the current appearance) with a deadline of
+ * {@link DEPARTURE_BUDGET_MS}.
+ */
+function budgetedStep(token: Appearance | null = currentAppearance()): { step: PushStep; stop: () => void } | null {
   if (token === null || !browserPushSupported()) return null;
   const controller = new AbortController();
   const timer = setTimeout(
@@ -232,25 +242,35 @@ export function beginExplicitDeparture(): ExplicitDeparture {
 
 /**
  * The push part of the logout after the deletion of one's own account: the
- * consent of the user is deleted from the push state and the user's channel
- * removed, without a server call, within {@link DEPARTURE_BUDGET_MS}.
+ * consent of the user is deleted from the push state and the channel this
+ * browser has now is removed (also a subscription the user never accepted,
+ * or a channel the consent no longer names), without a server call, within
+ * {@link DEPARTURE_BUDGET_MS}. The removal is journaled, so a failed one is
+ * repeated on the next page load.
+ *
+ * `owner` is the appearance in which the deletion was asked for. When another
+ * appearance has replaced it meanwhile, nothing is done and the result is
+ * `superseded`: the logout must not touch the session that appeared since.
  */
-export async function departAfterAccountDeletion(): Promise<void> {
-  const budgeted = budgetedStep();
-  if (budgeted === null) return;
+export async function departAfterAccountDeletion(owner: Appearance | null): Promise<'proceed' | 'superseded'> {
+  if (owner !== null && !isCurrentAppearance(owner)) return 'superseded';
+  const budgeted = budgetedStep(owner ?? currentAppearance());
+  if (budgeted === null) return 'proceed';
   const { step, stop } = budgeted;
   const work = (async () => {
     const userId = step.token.userId;
-    const ownEndpoint = readConsent(userId).endpoint;
+    const read = await readChannel();
     live(step);
     await deleteConsent(userId, guardOf(step));
-    if (ownEndpoint === null) return;
-    live(step);
-    await removeChannel(ownEndpoint, () => live(step));
+    if (read.kind !== 'channel') return;
+    const endpoint = read.channel.endpoint;
+    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+    await removeLocalChannel(step, endpoint);
   })();
   try {
     await withinBudget(work, step.signal, undefined);
   } finally {
     stop();
   }
+  return isCurrentAppearance(step.token) ? 'proceed' : 'superseded';
 }

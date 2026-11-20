@@ -283,7 +283,7 @@ describe('row 251 — "Account": deletion only with registration open', () => {
     await waitFor(() => expect(api.deleteMyAccount).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
     // The logout after the deletion of one's own account is its own way of ending the session.
-    expect(api.logout).toHaveBeenCalledWith('accountDeleted');
+    expect(api.logout.mock.calls[0][0]).toBe('accountDeleted');
     expect(await screen.findByRole('heading', { name: i18n.t('account:deletedPage.title') })).toBeTruthy();
     expect(screen.getByRole('link', { name: i18n.t('account:deletedPage.signIn') }).getAttribute('href')).toBe('/login');
   });

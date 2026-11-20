@@ -22,7 +22,7 @@ import { spaceHandle } from '../../../lib/shellUrlState';
  */
 export function AccountDeletionDialog({ onClose }: { onClose: () => void }) {
   const { t, i18n } = useTranslation('account');
-  const { logout } = useAuth();
+  const { logout, appearance } = useAuth();
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
 
@@ -33,12 +33,18 @@ export function AccountDeletionDialog({ onClose }: { onClose: () => void }) {
     staleTime: 0,
   });
   const run = useMutation({
-    mutationFn: () => deleteMyAccount(password),
-    onSuccess: async () => {
+    // The deletion belongs to the appearance it was asked in; the logout
+    // after it must not touch a session that appeared meanwhile.
+    mutationFn: async () => {
+      const owner = appearance;
+      await deleteMyAccount(password);
+      return owner;
+    },
+    onSuccess: async (owner) => {
       try {
         // The server has revoked the session already; the logout clears
         // what the tab still holds.
-        await logout('accountDeleted');
+        await logout('accountDeleted', owner);
       } catch {
         // A failed logout call changes nothing here: the local state is
         // cleared in its `onSettled` either way.

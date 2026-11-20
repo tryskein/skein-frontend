@@ -98,8 +98,12 @@ interface AuthContextValue {
    * cookie is cleared and the session's cache dropped — or, when the server
    * confirmed another user than the one this explicit logout was for, once
    * `/me` was read again (nobody is logged out then).
+   *
+   * `owner` (for `accountDeleted`) is the appearance in which the deletion
+   * was asked for: when another appearance has replaced it, nobody is logged
+   * out and push is not touched.
    */
-  logout: (kind: LogoutKind) => Promise<void>;
+  logout: (kind: LogoutKind, owner?: Appearance | null) => Promise<void>;
 }
 
 /**
@@ -117,12 +121,16 @@ interface LogoutVariables {
   kind: LogoutKind;
   /** The push part of an explicit logout, started in the click. */
   departure: ExplicitDeparture | null;
+  /** The appearance a logout after account deletion belongs to. */
+  owner: Appearance | null;
 }
 
 type LogoutOutcome =
   | { kind: 'loggedOut'; response: LogoutResponse }
   /** The server confirmed another user: nobody was logged out. */
-  | { kind: 'userChanged' };
+  | { kind: 'userChanged' }
+  /** Another appearance replaced the one the logout was for: nobody was logged out. */
+  | { kind: 'superseded' };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
@@ -224,14 +232,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (`finish`), then `onSettled` writes `null` and follows the SSO/OIDC
   // redirect — the channel is gone before the page is left.
   const logoutMutation = useMutation<LogoutOutcome, Error, LogoutVariables>({
-    mutationFn: async ({ kind, departure }) => {
+    mutationFn: async ({ kind, departure, owner }) => {
       if (departure !== null && (await departure.prepare()) === 'userChanged') {
         // The page appears again with the user the server confirmed; their
         // session is not ended.
         await reloadMeAfterUserChanged();
         return { kind: 'userChanged' };
       }
-      if (kind === 'accountDeleted') await departAfterAccountDeletion();
+      if (kind === 'accountDeleted' && (await departAfterAccountDeletion(owner)) === 'superseded') {
+        return { kind: 'superseded' };
+      }
       try {
         return { kind: 'loggedOut', response: await logoutApi() };
       } finally {
@@ -239,7 +249,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     },
     onSettled: async (outcome) => {
-      if (outcome?.kind === 'userChanged') return;
+      if (outcome?.kind === 'userChanged' || outcome?.kind === 'superseded') return;
       const result = outcome?.response;
       // Even on failure (e.g. the cookie was already invalid), clear local
       // state. The protected routes will redirect to /login on next render.
@@ -335,11 +345,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(
-    async (kind: LogoutKind) => {
+    async (kind: LogoutKind, owner: Appearance | null = null) => {
       // Started here, in the caller's click: the appearance is taken and the
       // budget of the push part starts now.
       const departure = kind === 'explicit' ? beginExplicitDeparture() : null;
-      await logoutMutation.mutateAsync({ kind, departure });
+      await logoutMutation.mutateAsync({ kind, departure, owner });
     },
     [logoutMutation],
   );

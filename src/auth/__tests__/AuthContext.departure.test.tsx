@@ -81,7 +81,7 @@ vi.mock('../../lib/push/browserPush', async (importOriginal) => ({
 
 import { AuthProvider, ME_KEY, useAuth } from '../AuthContext';
 import { createAppQueryClient } from '../../lib/appQueryClient';
-import { noteSignedOut } from '../appearance';
+import { noteLogin, noteSignedOut } from '../appearance';
 
 const SIGN_OUT_URL = 'https://sso.example.net/oauth2/sign_out';
 const realSetTimeout = globalThis.setTimeout;
@@ -286,6 +286,41 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(pushCallsBesidesList()).toBe(0);
     expect(api.pushListDevices).not.toHaveBeenCalled();
     expect(auth.logoutApi).toHaveBeenCalledTimes(1);
+  });
+
+  test('accountDeleted removes the channel this browser has, also one without a consent (US-9)', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, null);
+    await mount();
+
+    await act(async () => {
+      await current().logout('accountDeleted', current().appearance);
+    });
+
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works).toEqual([]);
+    expect(pushCallsBesidesList()).toBe(0);
+  });
+
+  test('accountDeleted of an appearance another one replaced meanwhile touches neither B nor the session', async () => {
+    seed({ [B]: enabledConsent(LABEL_B, channel('b'), null) });
+    browser.channel = channel('b');
+    const client = await mount();
+    const owner = current().appearance;
+    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    // B appeared while the deletion request of A was on its way.
+    server.caller = B;
+    act(() => noteLogin(B));
+
+    await act(async () => {
+      await current().logout('accountDeleted', owner);
+    });
+
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(client.getQueryData(ME_KEY)).not.toBeNull();
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expect(browser.channel).toEqual(channel('b'));
   });
 
   test('consequence changes neither the consent nor the channel', async () => {
