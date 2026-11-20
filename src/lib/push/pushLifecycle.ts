@@ -1139,9 +1139,23 @@ export async function revokeConfirmedDevice(
   const read = channelRead ?? (await readChannel());
   live(step);
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
-  const guard: RevokeGuard = endpoint === null ? 'absent' : await guardFromList(devices, endpoint);
+  const hash = endpoint === null ? null : await endpointFingerprint(endpoint);
+  const listed = hash === null ? undefined : devices.find((d) => d.endpointHash === hash);
+  const guard: RevokeGuard = listed === undefined ? 'absent' : { id: listed.id, version: listed.version };
+  // The current channel's subscription may carry a label S does not have
+  // (an accept whose state was lost): it is revoked too — in the same
+  // request while S has room, else by removing that subscription by id,
+  // which also revokes its label.
+  const serverLabel = listed?.deviceLabel ?? null;
+  const labelsNow = readConsent(userId).labels;
+  const missing = serverLabel !== null && !labelsNow.includes(serverLabel);
+  const removeById = missing && labelsNow.length >= MAX_CONSENT_LABELS ? listed?.id : undefined;
   live(step);
-  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true }, guardOf(step));
+  const { work } = await revokeConsent(
+    userId,
+    { endpoint, guard, localUnsubscribe: true, alsoLabels: missing && removeById === undefined ? [serverLabel] : [] },
+    guardOf(step),
+  );
   if (work === null || work.type !== 'deviceRevoke') {
     // No label and no channel: nothing of this device is on the server,
     // unless the channel could not be read (row 7 removes it once it is) or
@@ -1157,6 +1171,10 @@ export async function revokeConfirmedDevice(
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return { confirmed: true, revoked: false, endpoint };
+  if (removeById !== undefined) {
+    const removal = await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id: removeById }, signal));
+    if (removal.kind !== 'ok' && removal.kind !== 'notFound') return { confirmed: true, revoked: false, endpoint };
+  }
   await removePushWork(work.id, guardOf(step));
   const off = readConsent(userId);
   live(step);

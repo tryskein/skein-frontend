@@ -502,6 +502,36 @@ describe('row 61 — disable on this device (US-3)', () => {
   });
 });
 
+describe('row 61 — the current channel carries a label S does not have', () => {
+  test('the revocation carries that label too; the labelled subscription is gone', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, LABEL_A);
+    // The consent that held LABEL_A was lost: no mark, empty S.
+    const tab = await openTab(A);
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'done' });
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: x.endpoint }]);
+    expect(server.subs).toEqual([]);
+    expect(readConsent(A)).toMatchObject({ state: 'off', offUnconfirmed: false });
+  });
+
+  test('with a full S that subscription is removed by id, which revokes its label', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    const sub = addSub(A, x.endpoint, LABEL_A);
+    const labels = Array.from({ length: 1000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    seed({ [A]: { state: 'none', labels } });
+    const tab = await openTab(A);
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'done' });
+    expect(revocationBodies()).toHaveLength(1);
+    expect(revocationBodies()[0].deviceLabels).toHaveLength(1000);
+    expect(api.pushRemoveDevice).toHaveBeenCalledWith({ expectedUserId: A, id: sub.id }, expect.any(AbortSignal));
+    expect(server.subs).toEqual([]);
+  });
+});
+
 // ───────────────────────── Row 62 ─────────────────────────
 
 describe('row 62 — removal of another device (US-3)', () => {

@@ -595,6 +595,12 @@ export interface RevokeConsentArgs {
    * that follows the revocation.
    */
   localUnsubscribe?: boolean;
+  /**
+   * Labels the server holds for this device that S does not (the label of
+   * the current channel's subscription); they join the revocation work as
+   * far as it has room, so a repeat revokes them too.
+   */
+  alsoLabels?: string[];
 }
 
 /** Result of {@link revokeConsent}. */
@@ -625,11 +631,15 @@ export async function revokeConsent(
     const consent = consentFor(record, userId);
     const endpoint = args.endpoint !== null && args.endpoint !== '' ? args.endpoint : null;
     let work: PushWork | null = null;
-    if (consent.labels.length > 0 || endpoint !== null) {
+    const labels = [...consent.labels];
+    for (const label of args.alsoLabels ?? []) {
+      if (labels.length < MAX_CONSENT_LABELS && !labels.includes(label)) labels.push(label);
+    }
+    if (labels.length > 0 || endpoint !== null) {
       const newWork: NewPushWork = {
         type: 'deviceRevoke',
         ownerUserId: userId,
-        labels: [...consent.labels],
+        labels,
         guard: args.guard,
       };
       if (endpoint !== null) newWork.endpoint = endpoint;
