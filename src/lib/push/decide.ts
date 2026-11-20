@@ -119,12 +119,15 @@ function decision(row: DecisionRow | null, action: DecisionAction = NOTHING): De
 
 /**
  * Row 2 for an enabled consent (directly or after row 5): create a channel and
- * register — unless registrations are held back or blocked, or the consent is
- * an unconfirmed accept, which must not create anything.
+ * register. Rule 9 and the blocks come first — while registrations are held
+ * back or blocked the row does nothing at all, the consent included. Only then
+ * an unconfirmed accept, which must not create anything, goes back to "no
+ * mark".
  */
 function row2Action(consent: Consent, registrationsAllowed: boolean, blocked: boolean): DecisionAction {
+  if (!registrationsAllowed || blocked) return NOTHING;
   if (consent.pending?.kind === 'accept') return { type: 'abandonPending', label: consent.pending.label };
-  if (!registrationsAllowed || blocked || consent.label === null) return NOTHING;
+  if (consent.label === null) return NOTHING;
   return { type: 'createChannelAndRegister', register: { mode: 'upsert', label: consent.label } };
 }
 
@@ -175,10 +178,11 @@ export function decide(input: DecisionInput): Decision {
         then: row2Action(consent, registrationsAllowed, blocked),
       });
     }
+    if (!registrationsAllowed) return decision(9);
     if (consent.pending?.kind === 'accept') {
       return decision(9, { type: 'abandonPending', label: consent.pending.label });
     }
-    if (!registrationsAllowed || consent.label === null) return decision(9);
+    if (consent.label === null) return decision(9);
     return decision(9, {
       type: 'adoptChannel',
       endpoint: channel.endpoint,

@@ -151,6 +151,15 @@ describe('row 41 — rows 2–10 of the decision table', () => {
     expect(decide(input(consentOf('confirmed'), channel(FOREIGN), EMPTY_LIST, over)))
       .toEqual({ row: 5, action: { type: 'removeForeignChannel', endpoint: FOREIGN, then: NOTHING } });
   });
+
+  test.each<[string, Partial<DecisionInput>]>([
+    ['the own device revocation', { blocks: { ownRevokePending: true, foreignRemovalPending: false } }],
+    ['the removal of the previous user\'s channel', { blocks: { ownRevokePending: false, foreignRemovalPending: true } }],
+  ])('unfinished %s leaves an unconfirmed accept as it is on row 2 and on 5 → 2', (_name, over) => {
+    expect(decide(input(consentOf('acceptPending'), NO_CHANNEL, EMPTY_LIST, over))).toEqual({ row: 2, action: NOTHING });
+    expect(decide(input(consentOf('acceptPending'), channel(FOREIGN), EMPTY_LIST, over)))
+      .toEqual({ row: 5, action: { type: 'removeForeignChannel', endpoint: FOREIGN, then: NOTHING } });
+  });
 });
 
 describe('row 42 — rule 7: unconfirmed consents', () => {
@@ -208,6 +217,13 @@ describe('row 43 — rule 9: permission denied, push disabled on the server', ()
     expect(decide(input(consentOf('enablePending'), channel(OWN), EMPTY_LIST, over))).toEqual({ row: 4, action: NOTHING });
     expect(decide(input(consentOf('none'), channel(OWN), listed(device(OWN)), over))).toEqual({ row: 6, action: NOTHING });
     expect(decide(input(consentOf('confirmed'), channel(FOREIGN), listed(device(FOREIGN)), over))).toEqual({ row: 9, action: NOTHING });
+  });
+
+  test.each(held)('%s: an unconfirmed accept stays as it is on rows 2 and 9, and 5 → 2 stops after the removal', (_name, over) => {
+    expect(decide(input(consentOf('acceptPending'), NO_CHANNEL, EMPTY_LIST, over))).toEqual({ row: 2, action: NOTHING });
+    expect(decide(input(consentOf('acceptPending'), channel(FOREIGN), listed(device(FOREIGN)), over))).toEqual({ row: 9, action: NOTHING });
+    expect(decide(input(consentOf('acceptPending'), channel(FOREIGN), EMPTY_LIST, over)))
+      .toEqual({ row: 5, action: { type: 'removeForeignChannel', endpoint: FOREIGN, then: NOTHING } });
   });
 
   test.each(held)('%s: rows 5, 7, 10 still run, and 5 → 2 stops after the removal', (_name, over) => {
