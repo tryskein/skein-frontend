@@ -809,12 +809,15 @@ async function decideOnAppearance(step: Step): Promise<void> {
   await settleOffUnconfirmed(ctx);
   // What the settings show is read after the row: a row that acted may have
   // replaced the channel (5 → 2) or changed the list.
-  let devices = list.value;
+  // The list and this device are published as one read: when the list
+  // read after the row does not come, the list is shown as not read rather
+  // than as it was before the row.
+  let devices: PushDevice[] | null = list.value;
   let channelNow: ChannelRead = read;
   if (decision.action.type !== 'nothing') {
     channelNow = await readChannel();
     const relisted = await request(step, (signal) => pushListDevices(userId, signal));
-    if (relisted.kind === 'ok') devices = relisted.value;
+    devices = relisted.kind === 'ok' ? relisted.value : null;
   }
   const ownEndpoint = readConsent(userId).endpoint;
   const thisDeviceHash =

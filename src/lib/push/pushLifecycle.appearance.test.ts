@@ -901,6 +901,22 @@ describe('what the settings are shown (US-3)', () => {
     expect(api.pushSubscribe).not.toHaveBeenCalled();
   });
 
+  test('row 7 removed this device but the list after it did not come: no stale list is shown', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, null);
+    seed({ [A]: { state: 'off', endpoint: a.endpoint } });
+    await load();
+    api.pushListDevices.mockImplementation(async (userId: string) =>
+      api.pushListDevices.mock.calls.length > 1 ? { kind: 'lost' } : model.list(userId),
+    );
+
+    await appear(A);
+
+    expect(server.subs).toEqual([]);
+    expect(getPushLifecycleState()).toMatchObject({ decided: true, row: 7, devices: null });
+  });
+
   test('after 5 → 2 the published device and list are the new channel\'s', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('old'), null) });
     browser.channel = channel('renewed');
