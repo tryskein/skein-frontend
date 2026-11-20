@@ -30,6 +30,7 @@ import {
   uninstallPushHarness,
 } from '../../test/pushHarness';
 import type { NotificationPermissionState } from './browserPush';
+import { PUSH_STORE_LOCK } from './locks';
 import { PUSH_STATE_KEY, readConsent, readPushState, revokeConsent } from './pushState';
 
 const api = vi.hoisted(() => ({
@@ -239,6 +240,29 @@ describe('row 57 — the appearance grows after the click: no effect', () => {
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
     expect(allPushCalls()).toBe(1);
     expect(browserApi.removeChannel).not.toHaveBeenCalled();
+  });
+});
+
+describe('row 57 — the appearance grows after the registration was accepted', () => {
+  test('the enable is superseded, not a storage failure; the registration is not taken back', async () => {
+    const tab = await openTab(A);
+    let release: () => void = () => undefined;
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      const answer = await model.subscribe(args);
+      // Another tab holds the store lock as the confirmation is about to be written.
+      void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => new Promise<void>((r) => (release = r)));
+      return answer;
+    });
+
+    const enabling = tab.lifecycle.enablePush();
+    for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 0));
+    tab.appearance.noteLogin(A);
+    release();
+
+    expect(await enabling).toEqual({ kind: 'superseded' });
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    const label = subscribeBodies()[0].deviceLabel;
+    expect(readConsent(A)).toMatchObject({ state: 'enabled', label, pending: { label, kind: 'enable' } });
   });
 });
 

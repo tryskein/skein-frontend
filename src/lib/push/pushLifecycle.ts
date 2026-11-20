@@ -984,7 +984,8 @@ function endedEarly<T>(result: T | EndedEarly): result is EndedEarly {
 
 /** Maps an error that ended an action to its result. */
 function failure(error: unknown): PushActionResult {
-  if (error instanceof PushStateConflictError) return { kind: 'superseded' };
+  // A step that ended (its appearance replaced) is not a failure of storage.
+  if (error instanceof StepEnded || error instanceof PushStateConflictError) return { kind: 'superseded' };
   if (error instanceof PushLabelLimitError) return { kind: 'failed', reason: 'labelLimit' };
   return { kind: 'failed', reason: 'storage' };
 }
@@ -1171,6 +1172,10 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
           guardOf(step),
         );
       } catch (error) {
+        // The appearance was replaced after the registration was accepted:
+        // the consent stays unconfirmed and the next appearance confirms it
+        // (row 4) — the registration is not taken back.
+        if (error instanceof StepEnded) throw error;
         if (error instanceof PushStateConflictError) {
           // A revocation came first (rule 8): a channel this enable created
           // is nobody's.
