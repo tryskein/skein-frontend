@@ -61,7 +61,7 @@ const api = vi.hoisted(() => ({
     ],
   })),
   putUserSpaces: vi.fn(async (_id: string, _ids: string[]) => ({ items: [] })),
-  logout: vi.fn(async (_kind?: string) => undefined),
+  logout: vi.fn(async (_kind?: string, _owner?: unknown): Promise<string | undefined> => undefined),
 }));
 
 vi.mock('../../../auth/AuthContext', () => ({
@@ -286,6 +286,36 @@ describe('row 251 — "Account": deletion only with registration open', () => {
     expect(api.logout.mock.calls[0][0]).toBe('accountDeleted');
     expect(await screen.findByRole('heading', { name: i18n.t('account:deletedPage.title') })).toBeTruthy();
     expect(screen.getByRole('link', { name: i18n.t('account:deletedPage.signIn') }).getAttribute('href')).toBe('/login');
+  });
+
+  test('#6 — deleted, but another user appeared meanwhile: their session stays, no "Account deleted" page', async () => {
+    api.logout.mockImplementationOnce(async () => 'superseded');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const { AccountDeletedPage } = await import('../../AccountDeletedPage');
+    render(
+      <MantineProvider>
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={['/settings/account']}>
+            <Routes>
+              <Route path="/settings/account" element={<AccountPage />} />
+              <Route path="/account-deleted" element={<AccountDeletedPage />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </MantineProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: i18n.t('account:deleteAccount') }));
+    const dialog = await screen.findByRole('dialog', { name: i18n.t('account:deletion.title') });
+    fireEvent.change(await within(dialog).findByLabelText(i18n.t('account:deletion.password')), {
+      target: { value: 's3cret!' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('account:deletion.confirm') }));
+    await waitFor(() => expect(api.deleteMyAccount).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
+    // The logout after the deletion of one's own account is its own way of ending the session.
+    expect(api.logout.mock.calls[0][0]).toBe('accountDeleted');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('heading', { name: i18n.t('account:deletedPage.title') })).toBeNull();
   });
 
   test('not blocked: the consequences, then the password goes to the server', async () => {

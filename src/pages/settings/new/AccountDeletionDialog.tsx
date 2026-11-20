@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { deleteMyAccount, getAccountDeletionPreview } from '../../../api/account';
 import { BusinessError } from '../../../api/client';
+import type { Appearance } from '../../../auth/appearance';
 import { useAuth } from '../../../auth/AuthContext';
 import { spaceHandle } from '../../../lib/shellUrlState';
 
@@ -33,23 +34,26 @@ export function AccountDeletionDialog({ onClose }: { onClose: () => void }) {
     staleTime: 0,
   });
   const run = useMutation({
-    // The deletion belongs to the appearance it was asked in; the logout
-    // after it must not touch a session that appeared meanwhile.
-    mutationFn: async () => {
-      const owner = appearance;
+    // The deletion belongs to the appearance it was asked in (taken in the
+    // click, as the mutation's variable); the logout after it must not touch
+    // a session that appeared meanwhile.
+    mutationFn: async (owner: Appearance | null) => {
       await deleteMyAccount(password);
       return owner;
     },
     onSuccess: async (owner) => {
+      let replaced = false;
       try {
         // The server has revoked the session already; the logout clears
         // what the tab still holds.
-        await logout('accountDeleted', owner);
+        replaced = (await logout('accountDeleted', owner)) === 'superseded';
       } catch {
         // A failed logout call changes nothing here: the local state is
         // cleared in its `onSettled` either way.
       }
-      navigate('/account-deleted', { replace: true });
+      // Another user appeared meanwhile: their session goes on, without
+      // the page of a deleted account.
+      if (!replaced) navigate('/account-deleted', { replace: true });
     },
   });
 
@@ -114,7 +118,7 @@ export function AccountDeletionDialog({ onClose }: { onClose: () => void }) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (password !== '') run.mutate();
+            if (password !== '') run.mutate(appearance);
           }}
         >
           <Stack gap="sm">
