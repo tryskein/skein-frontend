@@ -408,29 +408,30 @@ export async function beginConsentLabel(userId: string, args: BeginLabelArgs): P
 
 /** Arguments of {@link confirmConsent}. */
 export interface ConfirmConsentArgs {
-  expect: ConsentExpectation;
+  expect: ConsentSnapshot;
   /** The label the server confirmed. */
   label: string;
+  /** The endpoint the server confirmed it at. */
   endpoint: string;
   keysFingerprint: string | null;
 }
 
 /**
  * Marks the consent confirmed: the server holds a subscription with this
- * label at this endpoint. Refused when the consent moved on or no longer
- * carries this label.
+ * label at this endpoint. Refused when the consent was written since the
+ * caller's snapshot, or no longer carries this label at this endpoint — a
+ * late answer never brings back an older endpoint or fingerprint.
  */
 export async function confirmConsent(userId: string, args: ConfirmConsentArgs): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
-    if (consent.state !== 'enabled' || consent.label !== args.label) {
-      throw new PushStateConflictError('the consent no longer carries this label');
+    if (consent.state !== 'enabled' || consent.label !== args.label || consent.endpoint !== args.endpoint) {
+      throw new PushStateConflictError('the consent no longer carries this label at this endpoint');
     }
     return store(record, userId, {
       ...consent,
       pending: null,
-      endpoint: args.endpoint,
       keysFingerprint: args.keysFingerprint,
     });
   });
@@ -505,12 +506,15 @@ export async function abandonConsentLabel(userId: string, args: AbandonLabelArgs
 
 /** Arguments of {@link updateConsentChannel}. */
 export interface UpdateChannelArgs {
-  expect: ConsentExpectation;
+  expect: ConsentSnapshot;
   endpoint: string;
   keysFingerprint: string | null;
 }
 
-/** Replaces the endpoint and key fingerprint of an `enabled` consent. */
+/**
+ * Replaces the endpoint and key fingerprint of an `enabled` consent. Refused
+ * when the consent was written since the caller's snapshot.
+ */
 export async function updateConsentChannel(userId: string, args: UpdateChannelArgs): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
@@ -581,10 +585,13 @@ export async function revokeConsent(userId: string, args: RevokeConsentArgs): Pr
   });
 }
 
-/** Sets or clears "disable not confirmed" on an `off` consent. */
+/**
+ * Sets or clears "disable not confirmed" on an `off` consent. Refused when
+ * the consent was written since the caller's snapshot.
+ */
 export async function setConsentOffUnconfirmed(
   userId: string,
-  expect: ConsentExpectation,
+  expect: ConsentSnapshot,
   offUnconfirmed: boolean,
 ): Promise<Consent> {
   return commit((record) => {

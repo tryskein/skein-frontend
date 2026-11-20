@@ -164,11 +164,11 @@ describe('row 36 — consent writes are compare-and-set on gen and rev', () => {
 
   test('a confirmation with a stale gen is refused: a revocation in between wins', async () => {
     const label = await enabledConsent(A);
-    const gen = readConsentGen(A);
+    const seen = readConsent(A);
     await revokeConsent(A, { endpoint: ENDPOINT, guard: 'absent' });
     const before = raw();
 
-    await expect(confirmConsent(A, { expect: { gen }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' }))
+    await expect(confirmConsent(A, { expect: { gen: seen.gen, rev: seen.rev }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' }))
       .rejects.toBeInstanceOf(PushStateConflictError);
 
     expect(raw()).toBe(before);
@@ -178,10 +178,37 @@ describe('row 36 — consent writes are compare-and-set on gen and rev', () => {
   test('a write with a stale rev is refused and the record is unchanged', async () => {
     const label = await enabledConsent(A);
     const seen = readConsent(A);
-    await confirmConsent(A, { expect: { gen: seen.gen }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' });
+    await confirmConsent(A, { expect: { gen: seen.gen, rev: seen.rev }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' });
     const before = raw();
 
     await expect(updateConsentChannel(A, { expect: { gen: seen.gen, rev: seen.rev }, endpoint: ENDPOINT_2, keysFingerprint: 'fp2' }))
+      .rejects.toBeInstanceOf(PushStateConflictError);
+
+    expect(raw()).toBe(before);
+  });
+
+  test('a late confirmation of the same label does not bring back the older endpoint and fingerprint', async () => {
+    const label = await enabledConsent(A);
+    const begun = readConsent(A);
+    await updateConsentChannel(A, { expect: { gen: begun.gen, rev: begun.rev }, endpoint: ENDPOINT_2, keysFingerprint: 'fp2' });
+    const before = raw();
+
+    await expect(confirmConsent(A, { expect: { gen: begun.gen, rev: begun.rev }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' }))
+      .rejects.toBeInstanceOf(PushStateConflictError);
+    const now = readConsent(A);
+    await expect(confirmConsent(A, { expect: { gen: now.gen, rev: now.rev }, label, endpoint: ENDPOINT, keysFingerprint: 'fp1' }))
+      .rejects.toBeInstanceOf(PushStateConflictError);
+
+    expect(raw()).toBe(before);
+    expect(readConsent(A)).toMatchObject({ endpoint: ENDPOINT_2, keysFingerprint: 'fp2' });
+  });
+
+  test('clearing "disable not confirmed" with a stale revision is refused', async () => {
+    const { consent } = await revokeConsent(A, { endpoint: ENDPOINT, guard: 'absent' });
+    await setConsentOffUnconfirmed(A, { gen: consent.gen, rev: consent.rev }, false);
+    const before = raw();
+
+    await expect(setConsentOffUnconfirmed(A, { gen: consent.gen, rev: consent.rev }, true))
       .rejects.toBeInstanceOf(PushStateConflictError);
 
     expect(raw()).toBe(before);
