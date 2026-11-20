@@ -173,6 +173,29 @@ describe('row 76a — the banner through the real controller', () => {
     expect(banner()).toBeNull();
   });
 
+  test.each([
+    { case: 'the server refused it', setup: () => api.pushSubscribe.mockImplementationOnce(async () => ({ kind: 'refused' })), reason: 'push:device.failed.refused' },
+    {
+      case: 'the permission prompt was declined',
+      setup: () => {
+        browser.permission = 'default';
+        browserApi.requestNotificationPermission.mockImplementationOnce(async () => 'denied');
+      },
+      reason: 'push:device.deniedTitle',
+    },
+  ])('"Yes" that does not turn push on ($case) keeps the banner with the reason', async ({ setup, reason }) => {
+    mount();
+    await appear(A);
+    await settled();
+    setup();
+
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chrome:push.yes') }));
+    await settled();
+
+    expect(banner()).not.toBeNull();
+    expect(screen.getByRole('alert').textContent).toBe(i18n.t(reason));
+  });
+
   test('"Not now" hides it from this user; B, appearing next, gets it after the read of B\'s list', async () => {
     mount();
     await appear(A);
