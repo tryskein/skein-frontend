@@ -1,4 +1,13 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
+import {
+  createContext,
+  ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {
   hashKey,
   Query,
@@ -15,6 +24,16 @@ import { releaseAllAccepted } from '../lib/inboxAcceptedRetention';
 import { AUTH_CONFIG_KEY, useAuthConfig, authConfigQueryOptions } from '../lib/useAuthConfig';
 import { checkLogoutRedirect } from './logoutRedirect';
 import { toaster } from '../components/Toaster';
+import {
+  type Appearance,
+  currentAppearance,
+  type MeReadReason,
+  noteLogin,
+  noteMeAnswer,
+  noteSignedOut,
+  registerMeReload,
+  subscribeAppearance,
+} from './appearance';
 
 /**
  * Cache key for "who is logged in?". Exported because the global
@@ -64,6 +83,12 @@ interface AuthContextValue {
    * have kept (the density's boot record).
    */
   sessionResolved: boolean;
+  /**
+   * The current appearance of the signed-in user (`auth/appearance.ts`);
+   * `null` while no user is confirmed. A new `seq` means a new appearance,
+   * the same user included.
+   */
+  appearance: Appearance | null;
   /** Log in. Throws on failure (BusinessError / RateLimitError / network). */
   login: (payload: LoginPayload) => Promise<User>;
   /** Log out. Resolves once the cookie is cleared and the session's cache dropped. */
@@ -87,9 +112,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // "no session" (a clean 401 from /api/auth/me); `undefined` means
   // "not yet loaded". Infinity staleTime + retry:false keeps this from
   // re-fetching on every component mount — login/logout mutate it directly.
+  //
+  // Every answer goes through the appearance store as it arrives, before it
+  // reaches the cache: an asynchronous push step of the previous appearance
+  // is stale from that moment (`auth/appearance.ts`).
+  const meReadReason = useRef<MeReadReason>('load');
   const meQuery = useQuery<User | null>({
     queryKey: ME_KEY,
-    queryFn: meApi,
+    queryFn: async () => {
+      const reason = meReadReason.current;
+      meReadReason.current = 'load';
+      const user = await meApi();
+      const previous = queryClient.getQueryData<User | null>(ME_KEY);
+      noteMeAnswer(user?.id ?? null, previous === undefined ? undefined : (previous?.id ?? null), reason);
+      return user;
+    },
     retry: false,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -128,9 +165,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [identity, queryClient]);
 
+  // A push operation refused as "user changed" re-reads `/me`; that answer
+  // is a new appearance whoever it names.
+  useEffect(
+    () =>
+      registerMeReload(async () => {
+        meReadReason.current = 'afterUserChanged';
+        await queryClient.refetchQueries({ queryKey: ME_KEY, exact: true });
+      }),
+    [queryClient],
+  );
+
+  const appearance = useSyncExternalStore(subscribeAppearance, currentAppearance, currentAppearance);
+
   const loginMutation = useMutation({
     mutationFn: loginApi,
     onSuccess: (user) => {
+      noteLogin(user.id);
       queryClient.setQueryData<User | null>(ME_KEY, user);
     },
   });
@@ -146,6 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // state. The protected routes will redirect to /login on next render.
       clearSessionQueries(queryClient);
       queryClient.setQueryData<User | null>(ME_KEY, null);
+      noteSignedOut();
 
       // sk-285.7.2.48 — drop the boot-readable mirror of the SERVER's
       // theme (`skein.theme.boot`). It is the one piece of this
@@ -243,10 +295,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: meQuery.data ?? null,
       isLoading: meQuery.isLoading,
       sessionResolved: meQuery.isSuccess,
+      appearance,
       login,
       logout,
     }),
-    [meQuery.data, meQuery.isLoading, meQuery.isSuccess, login, logout],
+    [meQuery.data, meQuery.isLoading, meQuery.isSuccess, appearance, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
