@@ -103,6 +103,27 @@ describe('row 33 — outcome of a push answer', () => {
     expect(outcome.kind).toBe(expected);
   });
 
+  test.each([
+    ['without the marker', {}],
+    ['with the marker', V2],
+  ])('a 401 %s whose body is cut off after the headers is sessionEnded', async (_name, headers) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new ReadableStream({ start: (controller) => controller.error(new TypeError('connection reset')) }),
+      { status: 401, headers },
+    )));
+    const outcome = await pushRequest('/api/v1/push/subscriptions', { method: 'GET' });
+    expect(outcome.kind).toBe('sessionEnded');
+  });
+
+  test('a body cut off after the headers of another status is lost', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      new ReadableStream({ start: (controller) => controller.error(new TypeError('connection reset')) }),
+      { status: 200, headers: V2 },
+    )));
+    const outcome = await pushRequest('/api/v1/push/subscriptions', { method: 'GET' });
+    expect(outcome.kind).toBe('lost');
+  });
+
   test('a network failure is lost', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('Failed to fetch');

@@ -212,8 +212,9 @@ const REFUSAL_BY_CODE: Readonly<Record<string, PushRefusal>> = {
 
 /**
  * Transport of the push operations: `fetch` with the session cookie and JSON,
- * returning the status, the headers and the parsed body of any HTTP answer.
- * Rejects only when no answer arrived (network failure, abort).
+ * returning the status, the headers and the parsed body of any HTTP answer
+ * (a 401 without its body). Rejects when no answer arrived (network failure,
+ * abort) or its body could not be read.
  */
 export async function pushFetch(path: string, init: RequestInit = {}): Promise<PushResponse> {
   const hasBody = init.body !== undefined && init.body !== null;
@@ -225,6 +226,11 @@ export async function pushFetch(path: string, init: RequestInit = {}): Promise<P
       Accept: 'application/json',
     },
   });
+  // A 401 is decided by its status alone; its body is not read, so a body cut
+  // off after the headers cannot turn an ended session into a lost request.
+  if (response.status === 401) {
+    return { status: response.status, headers: response.headers, body: null };
+  }
   let body: unknown = null;
   const text = await response.text();
   if (text !== '') {
