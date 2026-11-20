@@ -38,6 +38,8 @@ export class FakeLocks {
   private readonly queues = new Map<string, Array<() => void>>();
   /** Names of the lock requests, in the order they were made. */
   readonly requests: string[] = [];
+  /** Called as a lock is released, before the next waiter gets it. */
+  onRelease: ((name: string) => void) | null = null;
 
   async request(name: string, options: LockOptions, callback: (lock: Lock | null) => unknown): Promise<unknown> {
     this.requests.push(name);
@@ -66,6 +68,7 @@ export class FakeLocks {
     try {
       return await callback({ name, mode: 'exclusive' } as Lock);
     } finally {
+      this.onRelease?.(name);
       const next = this.queues.get(name)?.shift();
       if (next) next();
       else this.held.delete(name);
@@ -236,14 +239,21 @@ export function installPushHarness(api: PushApiMocks, browserApi: BrowserApiMock
     if (browser.readFails) return { kind: 'unreadable' };
     return browser.channel === null ? { kind: 'none' } : { kind: 'channel', channel: browser.channel };
   });
-  browserApi.createChannel.mockReset().mockImplementation(async () => {
+  // The browser effects run the caller's precondition after the adapter's
+  // own wait, as `browserPush.ts` does, so a caller that stops passing its
+  // liveness check is seen by the controller tests too.
+  browserApi.createChannel.mockReset().mockImplementation(async (_key: string, _signal?: AbortSignal, precondition?: () => void) => {
+    await Promise.resolve();
+    precondition?.();
     browser.created += 1;
     browser.channel = channel(`new-${browser.created}`);
     return browser.channel;
   });
-  browserApi.removeChannel.mockReset().mockImplementation(async (endpoint: string) => {
+  browserApi.removeChannel.mockReset().mockImplementation(async (endpoint: string, precondition?: () => void) => {
+    await Promise.resolve();
     if (browser.removeFails) throw new DOMException('broken', 'InvalidStateError');
     if (browser.channel?.endpoint !== endpoint) return 'notCurrent';
+    precondition?.();
     browser.channel = null;
     return 'removed';
   });

@@ -209,6 +209,28 @@ describe('row 49 — a write queued on skein.push.store after the appearance was
   });
 });
 
+describe('row 49 — the appearance is replaced while the browser removes a channel', () => {
+  test('the controller passes its liveness to the browser: the channel stays', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    seed({ [A]: { state: 'off', endpoint: a.endpoint } });
+    await load();
+    const remove = browserApi.removeChannel.getMockImplementation()!;
+    browserApi.removeChannel.mockImplementationOnce(async (endpoint: string, precondition?: () => void) => {
+      // The appearance changes after the browser read its subscription.
+      noteLogin(A);
+      return remove(endpoint, precondition);
+    });
+    api.pushListDevices.mockImplementation(async (userId: string) =>
+      api.pushListDevices.mock.calls.length > 1 ? { kind: 'lost' } : model.list(userId),
+    );
+
+    await appear(A);
+
+    expect(browser.channel).toEqual(a);
+  });
+});
+
 describe('row 49 — a channel created while the appearance was replaced', () => {
   test('is removed again; the consent is not written', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('gone'), null) });
