@@ -27,6 +27,7 @@ import { toaster } from '../components/Toaster';
 import {
   type Appearance,
   currentAppearance,
+  isCurrentAppearance,
   type MeReadReason,
   noteLogin,
   noteMeAnswer,
@@ -124,6 +125,8 @@ interface LogoutVariables {
   departure: ExplicitDeparture | null;
   /** The appearance a logout after account deletion belongs to. */
   owner: Appearance | null;
+  /** The appearance current when the logout was asked for. */
+  asked: Appearance | null;
 }
 
 /**
@@ -240,7 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (`finish`), then `onSettled` writes `null` and follows the SSO/OIDC
   // redirect — the channel is gone before the page is left.
   const logoutMutation = useMutation<LogoutOutcome, Error, LogoutVariables>({
-    mutationFn: async ({ kind, departure, owner }) => {
+    mutationFn: async ({ kind, departure, owner, asked }) => {
       const verdict = departure === null ? 'proceed' : await departure.prepare();
       if (verdict === 'userChanged') {
         // The page appears again with the user the server confirmed; their
@@ -249,6 +252,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { kind: 'userChanged' };
       }
       if (verdict === 'superseded') return { kind: 'superseded' };
+      // The logout request ends the session of whoever the cookie names now;
+      // it goes only while the appearance it was asked in is still current
+      // (the request may have waited for the network, push or not).
+      if (kind !== 'accountDeleted' && asked !== null && !isCurrentAppearance(asked)) return { kind: 'superseded' };
       if (kind === 'accountDeleted' && (await departAfterAccountDeletion(owner)) === 'superseded') {
         return { kind: 'superseded' };
       }
@@ -358,8 +365,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (kind: LogoutKind, owner: Appearance | null = null) => {
       // Started here, in the caller's click: the appearance is taken and the
       // budget of the push part starts now.
+      const asked = currentAppearance();
       const departure = kind === 'explicit' ? beginExplicitDeparture() : null;
-      const outcome = await logoutMutation.mutateAsync({ kind, departure, owner });
+      const outcome = await logoutMutation.mutateAsync({ kind, departure, owner, asked });
       return outcome.kind;
     },
     [logoutMutation],

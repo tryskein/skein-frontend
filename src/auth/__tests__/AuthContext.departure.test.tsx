@@ -329,6 +329,31 @@ describe('row 68a — another appearance while the logout prepares', () => {
   });
 });
 
+describe('row 68a — the logout request waited for the network while another user appeared', () => {
+  test('without push support too: no POST /api/auth/logout for the session that appeared', async () => {
+    browserApi.browserPushSupported.mockReturnValue(false);
+    const client = await mount();
+    onlineManager.setOnline(false);
+
+    let result: unknown;
+    const pending = current()
+      .logout('explicit')
+      .then((r) => {
+        result = r;
+      });
+    server.caller = B;
+    act(() => noteLogin(B));
+    await act(async () => {
+      onlineManager.setOnline(true);
+      await pending;
+    });
+
+    expect(result).toBe('superseded');
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(client.getQueryData(ME_KEY)).not.toBeNull();
+  });
+});
+
 // ───────────────────────── Row 69 ─────────────────────────
 
 describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-5)', () => {
