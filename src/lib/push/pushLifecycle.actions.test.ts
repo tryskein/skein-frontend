@@ -532,6 +532,31 @@ describe('row 61 — the current channel carries a label S does not have', () =>
   });
 });
 
+describe('row 61 — the removal by id of a full S is recorded with the revocation', () => {
+  test('a failed removal by id is repeated by the next appearance of the owner, which removes the subscription', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    const sub = addSub(A, x.endpoint, LABEL_A);
+    const labels = Array.from({ length: 1000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    seed({ [A]: { state: 'none', labels } });
+    const tab = await openTab(A);
+    api.pushRemoveDevice.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'failed', reason: 'unconfirmed' });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, removeSubscriptionId: sub.id }),
+    ]);
+    expect(server.subs).toHaveLength(1);
+
+    // A reload: the owner appears again.
+    await openTab(A, true);
+
+    expect(api.pushRemoveDevice).toHaveBeenCalledTimes(2);
+    expect(server.subs).toEqual([]);
+    expect(readPushState().works).toEqual([]);
+  });
+});
+
 // ───────────────────────── Row 62 ─────────────────────────
 
 describe('row 62 — removal of another device (US-3)', () => {

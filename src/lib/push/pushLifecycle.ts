@@ -293,10 +293,7 @@ async function repeatWork(step: Step): Promise<void> {
       }
       case 'deviceRevoke':
         if (work.ownerUserId === userId) {
-          const outcome = await request(step, (signal) =>
-            pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
-          );
-          if (outcome.kind === 'ok') await removePushWork(work.id, guardOf(step));
+          await repeatOwnRevocation(step, work);
         } else if (typeof work.guard === 'object' && work.endpoint !== undefined) {
           // Another user's revocation: only the subscription the owner's
           // confirmed list showed, and only if it is still that record. The
@@ -310,6 +307,27 @@ async function repeatWork(step: Step): Promise<void> {
         break;
     }
   }
+}
+
+/**
+ * Sends the owner's revocation work as the step's user, its owner: the
+ * labels and the endpoint in one request, then the removal by id it
+ * records. Only when all of it is confirmed is the work finished; it then
+ * returns `true`.
+ */
+async function repeatOwnRevocation(step: Step, work: Extract<PushWork, { type: 'deviceRevoke' }>): Promise<boolean> {
+  const userId = step.token.userId;
+  const outcome = await request(step, (signal) =>
+    pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
+  );
+  if (outcome.kind !== 'ok') return false;
+  if (work.removeSubscriptionId !== undefined) {
+    const id = work.removeSubscriptionId;
+    const removal = await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id }, signal));
+    if (removal.kind !== 'ok' && removal.kind !== 'notFound') return false;
+  }
+  await removePushWork(work.id, guardOf(step));
+  return true;
 }
 
 // ───────────────────────── The decision ─────────────────────────
@@ -1221,7 +1239,13 @@ export async function revokeConfirmedDevice(
   live(step);
   const { consent: revokedConsent, work, localWork } = await revokeConsent(
     userId,
-    { endpoint, guard, localUnsubscribe: true, alsoLabels: missing && removeById === undefined ? [serverLabel] : [] },
+    {
+      endpoint,
+      guard,
+      localUnsubscribe: true,
+      alsoLabels: missing && removeById === undefined ? [serverLabel] : [],
+      removeSubscriptionId: removeById,
+    },
     guardOf(step),
   );
   // "User changed" on a request of this revocation: the server confirmed
@@ -1245,21 +1269,9 @@ export async function revokeConfirmedDevice(
     if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));
     return { confirmed: true, revoked: true, endpoint };
   }
-  const outcome = await undoingOnUserChanged(
-    request(step, (signal) =>
-      pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
-    ),
-    undo,
-  );
-  if (outcome.kind !== 'ok') return { confirmed: true, revoked: false, endpoint };
-  if (removeById !== undefined) {
-    const removal = await undoingOnUserChanged(
-      request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id: removeById }, signal)),
-      undo,
-    );
-    if (removal.kind !== 'ok' && removal.kind !== 'notFound') return { confirmed: true, revoked: false, endpoint };
-  }
-  await removePushWork(work.id, guardOf(step));
+  // The work records the removal by id too, so a repeat performs all of it.
+  const done = await undoingOnUserChanged(repeatOwnRevocation(step, work), undo);
+  if (!done) return { confirmed: true, revoked: false, endpoint };
   const off = readConsent(userId);
   live(step);
   if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false, guardOf(step));

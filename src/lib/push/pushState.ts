@@ -88,6 +88,12 @@ export type PushWork =
       labels: string[];
       endpoint?: string;
       guard: RevokeGuard;
+      /**
+       * A subscription of the owner removed by id after the labels are
+       * revoked (its label did not fit into the labels); the removal by id
+       * also revokes its label.
+       */
+      removeSubscriptionId?: string;
     };
 
 /** A work as the caller describes it; the id is assigned on write. */
@@ -214,6 +220,7 @@ function parseWork(v: unknown): PushWork | undefined {
       guard,
     };
     if (isString(w.endpoint)) work.endpoint = w.endpoint;
+    if (isString(w.removeSubscriptionId) && w.removeSubscriptionId !== '') work.removeSubscriptionId = w.removeSubscriptionId;
     return work;
   }
   return undefined;
@@ -601,6 +608,8 @@ export interface RevokeConsentArgs {
    * far as it has room, so a repeat revokes them too.
    */
   alsoLabels?: string[];
+  /** A subscription to remove by id after the revocation (see {@link PushWork}). */
+  removeSubscriptionId?: string;
 }
 
 /** Result of {@link revokeConsent}. */
@@ -643,6 +652,7 @@ export async function revokeConsent(
         guard: args.guard,
       };
       if (endpoint !== null) newWork.endpoint = endpoint;
+      if (args.removeSubscriptionId !== undefined) newWork.removeSubscriptionId = args.removeSubscriptionId;
       work = appendWork(record, newWork);
     } else if (parseGuard(args.guard) === undefined) {
       throw new InvalidPushWorkError('deviceRevoke needs a guard');
