@@ -548,6 +548,12 @@ export interface RevokeConsentArgs {
   /** Endpoint of this browser's channel, when known. */
   endpoint: string | null;
   guard: RevokeGuard;
+  /**
+   * Also writes, in the same transition, a `localUnsubscribe` work for
+   * `endpoint` (when there is one): the removal of this device's channel
+   * that follows the revocation.
+   */
+  localUnsubscribe?: boolean;
 }
 
 /** Result of {@link revokeConsent}. */
@@ -555,6 +561,8 @@ export interface RevokeConsentResult {
   consent: Consent;
   /** The revocation work, or `null` when there is neither a label nor an endpoint. */
   work: PushWork | null;
+  /** The `localUnsubscribe` work, when one was asked for and there is an endpoint. */
+  localWork: PushWork | null;
 }
 
 /**
@@ -584,6 +592,10 @@ export async function revokeConsent(userId: string, args: RevokeConsentArgs): Pr
     } else if (parseGuard(args.guard) === undefined) {
       throw new InvalidPushWorkError('deviceRevoke needs a guard');
     }
+    const localWork =
+      args.localUnsubscribe === true && endpoint !== null
+        ? appendWork(record, { type: 'localUnsubscribe', endpoint })
+        : null;
     const next = store(record, userId, {
       ...consent,
       state: 'off',
@@ -594,7 +606,7 @@ export async function revokeConsent(userId: string, args: RevokeConsentArgs): Pr
       endpoint: endpoint ?? consent.endpoint,
       offUnconfirmed: true,
     });
-    return { consent: next, work };
+    return { consent: next, work, localWork };
   });
 }
 

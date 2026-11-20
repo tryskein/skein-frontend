@@ -65,6 +65,7 @@ import {
   type NotificationPermissionState,
   readChannel,
   removeChannel,
+  requestNotificationPermission,
 } from './browserPush';
 import { decide, type DecisionAction, type DecisionChannel, type DecisionRow, type RegisterPlan } from './decide';
 import { endpointFingerprint, keysFingerprint } from './fingerprint';
@@ -76,8 +77,12 @@ import {
   type Consent,
   type ConsentSnapshot,
   confirmConsent,
+  MAX_CONSENT_LABELS,
+  PushLabelLimitError,
+  PushStateConflictError,
   type PushWork,
   readConsent,
+  readConsentGen,
   readPushState,
   recordUnconfirmedChannel,
   removePushWork,
@@ -634,23 +639,44 @@ async function decideOnAppearance(step: Step): Promise<void> {
 const running = new Set<AbortController>();
 let stopAppearance: (() => void) | null = null;
 
-/** Runs the decision of `token`; returns when it ended, whatever the outcome. */
-async function runAppearance(token: Appearance): Promise<void> {
+/** How an operation of an appearance ended early. */
+type EndedEarly = 'superseded' | 'userChanged';
+
+/**
+ * Runs `body` as a step of `token` under `skein.push.op`. Returns its result,
+ * or how it ended early: the appearance was replaced (the step is aborted
+ * then), or the server said the user changed — then `/me` is read again.
+ * Any other error is thrown.
+ */
+async function underOpLock<T>(token: Appearance, body: (step: Step) => Promise<T>): Promise<T | EndedEarly> {
   const controller = new AbortController();
   running.add(controller);
   const step: Step = { token, signal: controller.signal };
-  let userChanged = false;
+  let ended: EndedEarly;
   try {
-    await withPushOpLock(() => decideOnAppearance(step), controller.signal);
+    return await withPushOpLock(() => {
+      live(step);
+      return body(step);
+    }, controller.signal);
   } catch (error) {
-    // A replaced appearance, an abort, a storage failure or a consent that
-    // moved on end the decision as it stands; the next appearance decides
-    // again.
-    if (error instanceof StepEnded && error.reason === 'userChanged') userChanged = true;
+    if (error instanceof StepEnded) ended = error.reason;
+    else if (controller.signal.aborted || !isCurrentAppearance(token)) ended = 'superseded';
+    else throw error;
   } finally {
     running.delete(controller);
   }
-  if (userChanged && isCurrentAppearance(token)) await reloadMeAfterUserChanged();
+  if (ended === 'userChanged' && isCurrentAppearance(token)) await reloadMeAfterUserChanged();
+  return ended;
+}
+
+/** Runs the decision of `token`; returns when it ended, whatever the outcome. */
+async function runAppearance(token: Appearance): Promise<void> {
+  try {
+    await underOpLock(token, decideOnAppearance);
+  } catch {
+    // A storage failure or a consent that moved on ends the decision as it
+    // stands; the next appearance decides again.
+  }
 }
 
 function abortRunning(reason: string): void {
@@ -721,4 +747,347 @@ export async function repeatPushDecision(): Promise<void> {
   const appearance = currentAppearance();
   if (appearance === null || stopAppearance === null || !browserPushSupported()) return;
   await runAppearance(appearance);
+}
+
+// ───────────────────────── Explicit actions ─────────────────────────
+
+/** Result of an explicit push action. */
+export type PushActionResult =
+  | { kind: 'done' }
+  /** The notification permission is denied (or the prompt was dismissed). */
+  | { kind: 'denied' }
+  /** Push is not available: no support, no signed-in user, or push disabled on the server. */
+  | { kind: 'unavailable' }
+  /**
+   * The action did not complete:
+   *   - `unconfirmed` — the server's answer is missing (lost, session ended)
+   *     or the user could not be confirmed; an enable stays unconfirmed, a
+   *     disable stays "not confirmed";
+   *   - `refused` — the server refused the registration; the consent is "no mark";
+   *   - `revoked` — the device label is revoked; the consent is "explicitly off";
+   *   - `labelLimit` — S is full, no new label until this device is revoked;
+   *   - `storage` — the push state could not be written;
+   *   - `channel` — the browser could not read, create or replace the channel.
+   */
+  | { kind: 'failed'; reason: 'unconfirmed' | 'refused' | 'revoked' | 'labelLimit' | 'storage' | 'channel' }
+  /**
+   * The action ended without effect: the appearance was replaced, the server
+   * said the user changed, or a revocation of this device came first.
+   */
+  | { kind: 'superseded' };
+
+const NOTHING: DecisionAction = { type: 'nothing' };
+
+function endedEarly<T>(result: T | EndedEarly): result is EndedEarly {
+  return result === 'superseded' || result === 'userChanged';
+}
+
+/** Maps an error that ended an action to its result. */
+function failure(error: unknown): PushActionResult {
+  if (error instanceof PushStateConflictError) return { kind: 'superseded' };
+  if (error instanceof PushLabelLimitError) return { kind: 'failed', reason: 'labelLimit' };
+  return { kind: 'failed', reason: 'storage' };
+}
+
+/** Reads the confirmed list of the step's user; `null` when it did not come. */
+async function confirmUser(step: Step): Promise<PushDevice[] | null> {
+  const list = await request(step, (signal) => pushListDevices(step.token.userId, signal));
+  return list.kind === 'ok' ? list.value : null;
+}
+
+/** The step's user takes back a label sent in a registration whose consent could not be written. */
+async function undoRegistration(step: Step, label: string, endpoint: string): Promise<void> {
+  const userId = step.token.userId;
+  await request(step, (signal) => pushRevokeDevices({ expectedUserId: userId, deviceLabels: [label], endpoint }, signal));
+  live(step);
+  await removeChannelQuietly(endpoint);
+}
+
+/**
+ * The enable of `step`'s user under `skein.push.op` (US-1). `gen` is the
+ * consent generation read in the click handler: a revocation of this device
+ * since then ends the enable before any label is written (rule 8).
+ */
+async function enableUnderLock(step: Step, gen: number): Promise<PushActionResult> {
+  const userId = step.token.userId;
+  const devices = await confirmUser(step);
+  if (devices === null) return { kind: 'failed', reason: 'unconfirmed' };
+  const server = await readServerPush();
+  live(step);
+  if (!server.enabled) return { kind: 'unavailable' };
+
+  let consent = readConsent(userId);
+  if (consent.gen !== gen) return { kind: 'superseded' };
+
+  const read = await readChannel();
+  live(step);
+  if (read.kind === 'unreadable') return { kind: 'failed', reason: 'channel' };
+  let current: BrowserChannel | null = read.kind === 'channel' ? read.channel : null;
+
+  // An unconfirmed accept is given up: the explicit enable writes its own label.
+  if (consent.state === 'enabled' && consent.pending?.kind === 'accept') {
+    live(step);
+    consent = await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label });
+  }
+  // "Enabled" keeps its label (row 4); "no mark" and "explicitly off" get a new one.
+  const keptLabel = consent.state === 'enabled' ? consent.label : null;
+  // With a full S no new label is created (the store refuses it too); the
+  // channel is not touched for an enable that cannot happen.
+  if (keptLabel === null && consent.labels.length >= MAX_CONSENT_LABELS) {
+    return { kind: 'failed', reason: 'labelLimit' };
+  }
+
+  // The current channel is kept unless it is another user's or revoked.
+  if (current !== null) {
+    const hash = await endpointFingerprint(current.endpoint);
+    const listed = devices.some((d) => d.endpointHash === hash);
+    const own = consent.endpoint === current.endpoint;
+    if (consent.state === 'off' && (own || listed)) {
+      live(step);
+      if ((await removeChannelQuietly(current.endpoint)) === 'failed') return { kind: 'failed', reason: 'channel' };
+      current = null;
+    } else if (!own && !listed) {
+      const ctx: DecisionContext = {
+        step,
+        userId,
+        consent,
+        channel: current,
+        channelKeysFingerprint: null,
+        devices,
+        publicKey: server.publicKey,
+        deviceRemoved: false,
+      };
+      await execute(ctx, { type: 'removeForeignChannel', endpoint: current.endpoint, then: NOTHING });
+      if (readPushState().works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === current?.endpoint)) {
+        return { kind: 'failed', reason: 'channel' };
+      }
+      current = null;
+    }
+  }
+
+  let created = false;
+  if (current === null) {
+    live(step);
+    try {
+      current = await createChannel(server.publicKey, step.signal);
+    } catch {
+      live(step);
+      return { kind: 'failed', reason: 'channel' };
+    }
+    created = true;
+  }
+  const channel = current;
+  const fingerprint = await keysFingerprint(channel.keys);
+  live(step);
+
+  // The label is in the consent, unconfirmed, before the registration is sent.
+  let pending: Consent;
+  try {
+    pending =
+      keptLabel === null
+        ? await beginConsentLabel(userId, {
+            expect: { gen },
+            kind: 'enable',
+            endpoint: channel.endpoint,
+            keysFingerprint: fingerprint,
+          })
+        : await recordUnconfirmedChannel(userId, {
+            expect: { gen, rev: consent.rev },
+            label: keptLabel,
+            endpoint: channel.endpoint,
+            keysFingerprint: fingerprint,
+            kind: 'enable',
+          });
+  } catch (error) {
+    if (created) await removeChannelQuietly(channel.endpoint);
+    return failure(error);
+  }
+  const label = pending.label;
+  if (label === null) return { kind: 'failed', reason: 'storage' };
+
+  const outcome = await request(step, (signal) =>
+    pushSubscribe(
+      {
+        expectedUserId: userId,
+        endpoint: channel.endpoint,
+        keys: channel.keys,
+        ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+        deviceLabel: label,
+        mode: 'upsert',
+      },
+      signal,
+    ),
+  );
+  const ctx: DecisionContext = {
+    step,
+    userId,
+    consent: pending,
+    channel,
+    channelKeysFingerprint: fingerprint,
+    devices,
+    publicKey: server.publicKey,
+    deviceRemoved: false,
+  };
+  switch (outcome.kind) {
+    case 'ok':
+      try {
+        // Confirmed only with the same generation and the same pending label:
+        // a revocation since then keeps the consent off.
+        await confirmConsent(userId, { expect: snapshotOf(pending), label, endpoint: channel.endpoint, keysFingerprint: fingerprint });
+      } catch (error) {
+        if (error instanceof PushStateConflictError) return { kind: 'superseded' };
+        await undoRegistration(step, label, channel.endpoint);
+        return { kind: 'failed', reason: 'storage' };
+      }
+      publish(step, {});
+      return { kind: 'done' };
+    case 'revoked':
+      await goOffAfterRevoked(ctx, channel.endpoint);
+      publish(step, {});
+      return { kind: 'failed', reason: 'revoked' };
+    case 'notFound':
+    case 'refused':
+    case 'taken':
+      try {
+        await abandonConsentLabel(userId, { expect: snapshotOf(pending), label });
+      } catch (error) {
+        return failure(error);
+      }
+      publish(step, {});
+      return { kind: 'failed', reason: 'refused' };
+    case 'sessionEnded':
+    case 'lost':
+      publish(step, {});
+      return { kind: 'failed', reason: 'unconfirmed' };
+    case 'userChanged':
+      // `request` ends the step on this outcome before it gets here.
+      return { kind: 'superseded' };
+  }
+}
+
+async function finishAction(token: Appearance, body: (step: Step) => Promise<PushActionResult>): Promise<PushActionResult> {
+  try {
+    const result = await underOpLock(token, body);
+    return endedEarly(result) ? { kind: 'superseded' } : result;
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Enables push on this device for the signed-in user (US-1). Call it from
+ * the click handler: the consent generation and the appearance are taken
+ * synchronously, and the permission prompt is the first `await`, before the
+ * lock and the network — browsers honour it only inside the user's gesture.
+ */
+export function enablePush(): Promise<PushActionResult> {
+  const token = currentAppearance();
+  if (token === null || !browserPushSupported()) return Promise.resolve({ kind: 'unavailable' });
+  const gen = readConsentGen(token.userId);
+  const permission = notificationPermission();
+  if (permission === 'denied') return Promise.resolve({ kind: 'denied' });
+  const asked = permission === 'default' ? requestNotificationPermission() : Promise.resolve(permission);
+  return asked.then(
+    (answer) => (answer === 'granted' ? finishAction(token, (step) => enableUnderLock(step, gen)) : { kind: 'denied' }),
+    () => ({ kind: 'denied' }),
+  );
+}
+
+/** Result of the server part of a revocation of this device. */
+interface ServerRevocation {
+  /** The list confirmed the user; without it nothing was written or sent. */
+  confirmed: boolean;
+  /** The server confirmed the revocation (or there was nothing to send it for). */
+  revoked: boolean;
+  /** Endpoint of this device's channel known at the confirmation; `null` when unread. */
+  endpoint: string | null;
+}
+
+/**
+ * The server part of the revocation of this device (disable here, removal of
+ * the current device, explicit logout): the list confirms the user; the
+ * revocation transition — consent off, `gen + 1`, S into a `deviceRevoke`
+ * work guarded by that list, a `localUnsubscribe` work for the channel —
+ * is written; then one request revokes S and the channel's endpoint. `ok`
+ * finishes the revocation work and clears "disable not confirmed". With an
+ * empty S and an unread channel nothing is sent: row 7 removes the
+ * subscription by its endpoint once the channel is read.
+ */
+async function revokeDeviceOnServer(step: Step): Promise<ServerRevocation> {
+  const userId = step.token.userId;
+  const devices = await confirmUser(step);
+  if (devices === null) return { confirmed: false, revoked: false, endpoint: null };
+  const read = await readChannel();
+  live(step);
+  const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
+  const guard: RevokeGuard = endpoint === null ? 'absent' : await guardFromList(devices, endpoint);
+  live(step);
+  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true });
+  if (work === null || work.type !== 'deviceRevoke') {
+    // No label and no channel: nothing of this device is on the server,
+    // unless the channel could not be read (row 7 removes it once it is) or
+    // an earlier revocation is still unfinished.
+    const pendingRevocation = readPushState().works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId);
+    if (read.kind !== 'none' || pendingRevocation) return { confirmed: true, revoked: false, endpoint };
+    const off = readConsent(userId);
+    if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false);
+    return { confirmed: true, revoked: true, endpoint };
+  }
+  const outcome = await request(step, (signal) =>
+    pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
+  );
+  if (outcome.kind !== 'ok') return { confirmed: true, revoked: false, endpoint };
+  await removePushWork(work.id);
+  const off = readConsent(userId);
+  if (off.state === 'off') await setConsentOffUnconfirmed(userId, snapshotOf(off), false);
+  return { confirmed: true, revoked: true, endpoint };
+}
+
+/**
+ * The local part of the revocation of this device: the channel with the
+ * endpoint known at the confirmation is removed, if it is still current;
+ * success finishes its `localUnsubscribe` work.
+ */
+async function removeLocalChannel(step: Step, endpoint: string): Promise<boolean> {
+  live(step);
+  const result = await removeChannelQuietly(endpoint);
+  if (result === 'failed') return false;
+  live(step);
+  await removeWorks((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint);
+  return true;
+}
+
+/**
+ * Disables push on this device, or removes the current device from the list
+ * (US-3): the server part of the revocation, then the local part.
+ */
+export function disablePush(): Promise<PushActionResult> {
+  const token = currentAppearance();
+  if (token === null || !browserPushSupported()) return Promise.resolve({ kind: 'unavailable' });
+  return finishAction(token, async (step) => {
+    const server = await revokeDeviceOnServer(step);
+    if (!server.confirmed) return { kind: 'failed', reason: 'unconfirmed' };
+    if (server.endpoint !== null) await removeLocalChannel(step, server.endpoint);
+    publish(step, {});
+    return server.revoked ? { kind: 'done' } : { kind: 'failed', reason: 'unconfirmed' };
+  });
+}
+
+/**
+ * Removes another device of the signed-in user by its subscription id
+ * (US-3): its subscription is deleted and its label revoked. The consent and
+ * the channel of this browser do not change.
+ */
+export function removeOtherDevice(id: string): Promise<PushActionResult> {
+  const token = currentAppearance();
+  if (token === null || !browserPushSupported()) return Promise.resolve({ kind: 'unavailable' });
+  return finishAction(token, async (step) => {
+    const outcome = await request(step, (signal) =>
+      pushRemoveDevice({ expectedUserId: step.token.userId, id }, signal),
+    );
+    if (outcome.kind !== 'ok' && outcome.kind !== 'notFound') return { kind: 'failed', reason: 'unconfirmed' };
+    const devices = getPushLifecycleState().appearance === step.token ? getPushLifecycleState().devices : null;
+    publish(step, { devices: devices === null ? null : devices.filter((d) => d.id !== id) });
+    return { kind: 'done' };
+  });
 }
