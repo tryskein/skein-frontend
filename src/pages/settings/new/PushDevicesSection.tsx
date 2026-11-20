@@ -79,7 +79,13 @@ export function PushDevicesSection() {
       .finally(() => setBusy(false));
   };
 
-  const enabled = consent?.state === 'enabled';
+  // The channel could not be read (row 0) and this browser holds no mark:
+  // a subscription of the user listed here may be this device's (one made
+  // before the consent existed), so the switch offers to turn it off — the
+  // disable records "explicitly off" and row 7 removes it by its endpoint
+  // once the channel is read (US-3).
+  const maybeThisDevice = state.row === 0 && consent?.state === 'none' && (devices?.length ?? 0) > 0;
+  const enabled = consent?.state === 'enabled' || maybeThisDevice;
   const thisDeviceListed =
     thisDeviceHash !== null && (devices ?? []).some((d) => d.endpointHash === thisDeviceHash);
   const offUnconfirmed = consent?.state === 'off' && consent.offUnconfirmed && thisDeviceListed;

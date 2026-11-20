@@ -199,6 +199,16 @@ test('the channel could not be read (row 0): the list is shown and push can be t
   expect(push.disable).toHaveBeenCalledTimes(1);
 });
 
+test('the channel could not be read and this browser holds no mark (row 0): the switch turns push off, not on', () => {
+  const OLD = { id: 'dev-old', endpointHash: 'old-hash', ua: '', createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: null, version: 1 };
+  push.state = decided({ decided: false, row: 0, devices: [OLD], thisDeviceHash: null });
+  renderSection();
+
+  fireEvent.click(categorySwitch('Push on this device is on'));
+  expect(push.disable).toHaveBeenCalledTimes(1);
+  expect(push.enable).not.toHaveBeenCalled();
+});
+
 describe('PushDevicesSection — "disable not confirmed" (row 79, US-3)', () => {
   const THIS = { id: 'dev-this', endpointHash: CURRENT_HASH, ua: '', createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: null, version: 1 };
 
