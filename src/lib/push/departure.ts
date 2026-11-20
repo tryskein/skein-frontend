@@ -149,16 +149,25 @@ function shorterStep(step: PushStep, ms: number): { step: PushStep; stop: () => 
   };
 }
 
+/** What `finish` may remove after the server part of an explicit logout. */
+interface Removal {
+  /** The channels of this device may go: branch (a), or (c) after `ok`. */
+  allowed: boolean;
+  /** The channel endpoint known at the confirmation, or `null`. */
+  endpoint: string | null;
+}
+
+const NO_REMOVAL: Removal = { allowed: false, endpoint: null };
+
 /**
- * The server part of an explicit logout. Returns the channel endpoint that
- * `finish` removes, or `null`.
+ * The server part of an explicit logout. Returns what `finish` removes.
  *
  * The list (the confirmation of U) and the channel are read within
  * {@link DEPARTURE_CONFIRM_MS}; whatever did not come by then counts as not
  * read, so the revocation transition of branch (c) still has the rest of the
  * budget.
  */
-async function revokeOnLogout(step: PushStep): Promise<string | null> {
+async function revokeOnLogout(step: PushStep): Promise<Removal> {
   const userId = step.token.userId;
   const confirmation = shorterStep(step, DEPARTURE_CONFIRM_MS);
   let listed: { value: PushOutcome<PushDevice[]> } | undefined;
@@ -179,16 +188,16 @@ async function revokeOnLogout(step: PushStep): Promise<string | null> {
   if (listed?.value.kind === 'ok') {
     // (a) U is confirmed.
     const revocation = await revokeConfirmedDevice(step, listed.value.value, read);
-    return revocation.endpoint;
+    return { allowed: true, endpoint: revocation.endpoint };
   }
   // (c) U could not be confirmed: the consent of U alone goes off.
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
   const { work } = await revokeConsent(userId, { endpoint, guard: 'unconfirmed' }, guardOf(step));
-  if (work === null || work.type !== 'deviceRevoke') return null;
+  if (work === null || work.type !== 'deviceRevoke') return NO_REMOVAL;
   const outcome = await request(step, (signal) =>
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
-  if (outcome.kind !== 'ok') return null;
+  if (outcome.kind !== 'ok') return NO_REMOVAL;
   // `ok` confirms U: the work is finished and the channel may go. The
   // removal of the channel takes its place in the same write, so a failed
   // or cut-off removal is repeated on the next page load.
@@ -202,7 +211,22 @@ async function revokeOnLogout(step: PushStep): Promise<string | null> {
   if (off.state === 'off') {
     await setConsentOffUnconfirmed(userId, { gen: off.gen, rev: off.rev }, false, guardOf(step));
   }
-  return endpoint;
+  return { allowed: true, endpoint };
+}
+
+/**
+ * Removes the channel known at the confirmation, then the channel this
+ * browser has now if it is another one: the logout takes no `skein.push.op`,
+ * so another tab may have created a channel after the confirmation read it.
+ * Each removal is journaled.
+ */
+async function removeChannels(step: PushStep, confirmed: string | null): Promise<void> {
+  if (confirmed !== null) await removeLocalChannel(step, confirmed);
+  const now = await readChannel();
+  if (now.kind !== 'channel' || now.channel.endpoint === confirmed) return;
+  const endpoint = now.channel.endpoint;
+  await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+  await removeLocalChannel(step, endpoint);
 }
 
 /**
@@ -214,12 +238,12 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   const budgeted = budgetedStep();
   if (budgeted === null) return NO_PUSH;
   const { step, stop } = budgeted;
-  let channelToRemove: string | null = null;
+  let removal: Removal = NO_REMOVAL;
   return {
     prepare() {
       const work = revokeOnLogout(step).then(
-        (endpoint): DepartureVerdict => {
-          channelToRemove = endpoint;
+        (endpoint: Removal): DepartureVerdict => {
+          removal = endpoint;
           return 'proceed';
         },
         (error: unknown): DepartureVerdict => {
@@ -241,9 +265,8 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     },
     async finish() {
       try {
-        const endpoint = channelToRemove;
-        if (endpoint !== null && isLive(step)) {
-          await withinBudget(removeLocalChannel(step, endpoint), step.signal, false);
+        if (removal.allowed && isLive(step)) {
+          await withinBudget(removeChannels(step, removal.endpoint), step.signal, undefined);
         }
       } finally {
         stop();

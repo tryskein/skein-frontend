@@ -370,6 +370,24 @@ describe('row 64 (c) — after ok the removal of the channel is journaled', () =
   });
 });
 
+describe('row 64 (a) — a channel created after the confirmation read the channel', () => {
+  test('is removed by finish as well', async () => {
+    addSub(A, channel('old').endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, channel('old'), null) });
+    appearA();
+    api.pushRevokeDevices.mockImplementationOnce(async (args: RevokeDevicesArgs) => {
+      // Row 2 of another tab created a channel meanwhile.
+      browser.channel = channel('late');
+      return model.revokeDevices(args);
+    });
+
+    expect(await clickLogout().verdict).toBe('proceed');
+    expect(browserApi.removeChannel).toHaveBeenCalledWith(channel('late').endpoint, expect.any(Function));
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works).toEqual([]);
+  });
+});
+
 // ───────────────────────── Row 65 ─────────────────────────
 
 describe('row 65 — the appearance grows after the click', () => {
