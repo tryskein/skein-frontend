@@ -320,6 +320,21 @@ describe('row 46 — off without labels, a full S', () => {
   });
 });
 
+describe('row 41 — row 3: the listed subscription carries the consent\'s label', () => {
+  test.each<[string, string | null]>([
+    ['an unlabelled record', null],
+    ['another label', OLD_LABEL],
+  ])('a confirmed consent whose listed row has %s updates it with the consent\'s label', (_name, deviceLabel) => {
+    expect(decide(input(consentOf('confirmed'), channel(OWN), listed(device(OWN, deviceLabel)))))
+      .toEqual({ row: 3, action: { type: 'register', endpoint: OWN, register: updateOnly } });
+  });
+
+  test('with permission denied the mismatch changes nothing', () => {
+    expect(decide(input(consentOf('confirmed'), channel(OWN), listed(device(OWN, null)), { permission: 'denied' })))
+      .toEqual({ row: 3, action: NOTHING });
+  });
+});
+
 describe('row 47 — row 3: key fingerprint', () => {
   test('a key fingerprint other than the recorded one updates the own subscription', () => {
     expect(decide(input(consentOf('confirmed'), channel(OWN, 'fp-2'), listed(device(OWN)))))

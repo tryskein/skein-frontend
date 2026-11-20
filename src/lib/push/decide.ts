@@ -11,8 +11,10 @@
  *   0  channel not read                       → nothing
  *   1  list not read                          → nothing
  *   2  enabled, no channel                    → create a channel, register
- *   3  enabled confirmed, own, listed         → nothing; refresh keys on a
- *                                               fingerprint mismatch
+ *   3  enabled confirmed, own, listed         → nothing; update the
+ *                                               subscription when its label
+ *                                               is not the consent's or the
+ *                                               key fingerprint differs
  *   4  enabled, own, not listed or unconfirmed→ register (rule 7)
  *   5  any, foreign, not listed               → remove the foreign channel,
  *                                               then row 2 when enabled
@@ -193,6 +195,13 @@ export function decide(input: DecisionInput): Decision {
   const label = consent.label;
   if (listed !== undefined && consent.pending === null) {
     if (!registrationsAllowed || label === null) return decision(3);
+    // Rule 7: the consent is confirmed only by a subscription with its label
+    // at its endpoint. A listed row without that label (an unlabelled record
+    // left by an older api, another label) is brought to the consent's label
+    // by an update; a revoked label is refused by the server.
+    if (listed.deviceLabel !== label) {
+      return decision(3, { type: 'register', endpoint: channel.endpoint, register: { mode: 'updateOnly', label } });
+    }
     if (consent.keysFingerprint === null || consent.keysFingerprint === channel.keysFingerprint) return decision(3);
     return decision(3, { type: 'register', endpoint: channel.endpoint, register: { mode: 'updateOnly', label } });
   }
