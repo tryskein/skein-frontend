@@ -196,6 +196,38 @@ describe('row 76a — the banner through the real controller', () => {
     expect(screen.getByRole('alert').textContent).toBe(i18n.t(reason));
   });
 
+  test('"Yes" whose answer is lost: the reason is shown, without inviting again (the consent is enabled, unconfirmed)', async () => {
+    mount();
+    await appear(A);
+    await settled();
+    api.pushSubscribe.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chrome:push.yes') }));
+    await settled();
+
+    expect(screen.getByRole('alert').textContent).toBe(i18n.t('push:device.failed.unconfirmed'));
+    expect(screen.queryByRole('button', { name: i18n.t('chrome:push.yes') })).toBeNull();
+  });
+
+  test('"Not now" waits while "Yes" runs, so a late answer cannot bring the banner back past it', async () => {
+    mount();
+    await appear(A);
+    await settled();
+    let answer: (o: PushOutcome<PushDevice>) => void = () => undefined;
+    api.pushSubscribe.mockImplementationOnce(() => new Promise((r) => (answer = r)));
+
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chrome:push.yes') }));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect((screen.getByRole('button', { name: i18n.t('chrome:push.later') }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      answer({ kind: 'refused' });
+    });
+    await settled();
+  });
+
   test('"Not now" hides it from this user; B, appearing next, gets it after the read of B\'s list', async () => {
     mount();
     await appear(A);

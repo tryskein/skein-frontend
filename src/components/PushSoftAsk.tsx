@@ -71,20 +71,18 @@ export function PushSoftAsk() {
   const mine = appearance !== null && answer?.seq === appearance.seq ? answer : null;
 
   if (appearance === null || mine?.phase === 'hidden') return null;
-  if (
-    !shouldShowSoftAsk({
-      supported: state.supported,
-      decided: state.decided,
-      serverPush: state.serverPush,
-      permission: state.permission,
-      consentState: state.consent?.state ?? null,
-      userId: appearance.userId,
-      now: Date.now(),
-    })
-  ) {
-    // An enable that did not turn push on keeps the banner with its reason.
-    if (mine?.phase !== 'failed') return null;
-  }
+  const invites = shouldShowSoftAsk({
+    supported: state.supported,
+    decided: state.decided,
+    serverPush: state.serverPush,
+    permission: state.permission,
+    consentState: state.consent?.state ?? null,
+    userId: appearance.userId,
+    now: Date.now(),
+  });
+  // An enable that did not turn push on keeps the banner with its reason;
+  // it invites again only while the conditions of US-12 still hold.
+  if (!invites && mine?.phase !== 'failed') return null;
 
   const seq = appearance.seq;
   const onYes = () => {
@@ -93,7 +91,14 @@ export function PushSoftAsk() {
     setAnswer({ seq, phase: 'busy' });
     void action.then((result) => {
       const key = failureKey(result);
-      setAnswer(key === null ? { seq, phase: 'hidden' } : { seq, phase: 'failed', message: t(key) });
+      // Only the answer of the click still waited for counts.
+      setAnswer((now) =>
+        now?.seq !== seq || now.phase !== 'busy'
+          ? now
+          : key === null
+            ? { seq, phase: 'hidden' }
+            : { seq, phase: 'failed', message: t(key) },
+      );
     });
   };
 
@@ -112,10 +117,12 @@ export function PushSoftAsk() {
       ) : null}
       {/* sk-381 — no `color`: the primary ramp answers `--on-primary`
        * (src/theme.ts), Mantine's builtin cyan did not meet contrast. */}
-      <Button size="xs" variant="filled" loading={mine?.phase === 'busy'} onClick={onYes}>
-        {t('push.yes')}
-      </Button>
-      <Button size="xs" variant="default" onClick={onLater}>
+      {invites ? (
+        <Button size="xs" variant="filled" loading={mine?.phase === 'busy'} onClick={onYes}>
+          {t('push.yes')}
+        </Button>
+      ) : null}
+      <Button size="xs" variant="default" disabled={mine?.phase === 'busy'} onClick={onLater}>
         {t('push.later')}
       </Button>
     </div>
