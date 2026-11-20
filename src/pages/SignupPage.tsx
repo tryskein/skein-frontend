@@ -14,6 +14,7 @@ import {
 import { signupByInvitation, type InvitationSignupResponse } from '../api/invitations';
 import type { SpaceRef } from '../api/spaces';
 import { ME_KEY, useAuth } from '../auth/AuthContext';
+import { noteLogin } from '../auth/appearance';
 import { Turnstile } from '../components/Turnstile';
 import { emailLanguage } from '../lib/emailLanguage';
 import { useAuthConfig } from '../lib/useAuthConfig';
@@ -259,7 +260,11 @@ export function SignupForm({ config, invitation, onSignedUp, onInvitationGone }:
       // the space with a document load (`InvitePage.tsx`), which reads the
       // session afresh — setting it here would first redraw the link page
       // as a signed-in one.
-      if (!invitation) queryClient.setQueryData<User | null>(ME_KEY, result);
+      if (!invitation) {
+        // The new session's user appears here, as after a login.
+        noteLogin(result.id);
+        queryClient.setQueryData<User | null>(ME_KEY, result);
+      }
       onSignedUp(result);
     } catch (err) {
       if (siteKey !== null) setCaptcha((prev) => ({ id: prev.id + 1, token: null }));

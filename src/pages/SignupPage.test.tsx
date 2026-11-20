@@ -23,6 +23,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
+import { currentAppearance, noteSignedOut } from '../auth/appearance';
 import i18n from '../i18n/config';
 
 const world = vi.hoisted(() => ({
@@ -175,6 +176,16 @@ describe('row 252 — Turnstile only with a configured site key', () => {
     expect(api.signupApi.mock.calls[0][0]).toMatchObject({
       email: 'dev@client.io', username: 'dev', termsAccepted: true, turnstileToken: null,
     });
+  });
+
+  test('an open registration is the appearance of the new user, as a login is', async () => {
+    noteSignedOut();
+    await openSignup();
+    fillForm();
+    fireEvent.click(consentBox());
+    fireEvent.click(signupButton());
+    await waitFor(() => expect(currentAppearance()?.userId).toBe('u-new'));
+    noteSignedOut();
   });
 
   test('a key: one widget with that key; the request waits for its token and carries it', async () => {
