@@ -13,7 +13,7 @@
  * real store `auth/appearance.ts`.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { RemoveChannelArgs } from '../../api/push';
+import type { RemoveChannelArgs, SubscribeArgs } from '../../api/push';
 import { noteLogin, noteSignedOut, registerMeReload } from '../../auth/appearance';
 import {
   A,
@@ -36,7 +36,7 @@ import {
 import type { BrowserChannel } from './browserPush';
 import { keysFingerprint } from './fingerprint';
 import { PUSH_STORE_LOCK } from './locks';
-import { type Consent, PUSH_STATE_KEY, readConsent, readPushState } from './pushState';
+import { type Consent, PUSH_STATE_KEY, readConsent, readPushState, revokeConsent } from './pushState';
 
 const api = vi.hoisted(() => ({
   getPushConfig: vi.fn(),
@@ -734,6 +734,25 @@ describe('rows 7 and 10 — the removal of the channel is journaled (US-2 "Repea
 
     expect(browser.channel).toBeNull();
     expect(readPushState().works).toEqual([]);
+  });
+});
+
+describe('rule 8 — row 2 answered after a revocation of this device', () => {
+  test('the channel the decision created is removed by it; "enabled" does not come back', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('gone'), null) });
+    await load();
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      const answer = await model.subscribe(args);
+      // A logout in another tab: the revocation transition, without skein.push.op.
+      await revokeConsent(A, { endpoint: null, guard: 'unconfirmed' });
+      return answer;
+    });
+
+    await appear(A);
+
+    expect(browserApi.createChannel).toHaveBeenCalledTimes(1);
+    expect(browser.channel).toBeNull();
+    expect(readConsent(A).state).toBe('off');
   });
 });
 

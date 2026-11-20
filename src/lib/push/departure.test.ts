@@ -370,21 +370,24 @@ describe('row 64 (c) — after ok the removal of the channel is journaled', () =
   });
 });
 
-describe('row 64 (a) — a channel created after the confirmation read the channel', () => {
-  test('is removed by finish as well', async () => {
-    addSub(A, channel('old').endpoint, LABEL_A);
-    seed({ [A]: enabledConsent(LABEL_A, channel('old'), null) });
+describe('row 64 (a) — a channel the browser has besides the confirmed one', () => {
+  test('is not removed: another tab accepted it for the user who appeared since', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
     appearA();
-    api.pushRevokeDevices.mockImplementationOnce(async (args: RevokeDevicesArgs) => {
-      // Row 2 of another tab created a channel meanwhile.
-      browser.channel = channel('late');
-      return model.revokeDevices(args);
+    const remove = browserApi.removeChannel.getMockImplementation()!;
+    browserApi.removeChannel.mockImplementationOnce(async (endpoint: string, precondition?: () => void) => {
+      const result = await remove(endpoint, precondition);
+      // Another tab: B appeared and its decision created B's channel.
+      browser.channel = channel('b-new');
+      return result;
     });
 
     expect(await clickLogout().verdict).toBe('proceed');
-    expect(browserApi.removeChannel).toHaveBeenCalledWith(channel('late').endpoint, expect.any(Function));
-    expect(browser.channel).toBeNull();
-    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(channel('b-new'));
+    expect(browserApi.removeChannel.mock.calls.map((c) => c[0])).toEqual([a.endpoint]);
   });
 });
 

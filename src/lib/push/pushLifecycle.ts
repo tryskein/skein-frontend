@@ -421,6 +421,7 @@ async function register(
   fingerprint: string | null,
   plan: RegisterPlan,
   undo?: () => Promise<void>,
+  created = false,
 ): Promise<void> {
   const { step, userId } = ctx;
   const outcome = await undoingOnUserChanged(
@@ -441,7 +442,16 @@ async function register(
   );
   switch (outcome.kind) {
     case 'ok':
-      await confirmConsent(userId, { expect: snapshotOf(consent), label: plan.label, endpoint, keysFingerprint: fingerprint }, guardOf(step));
+      try {
+        await confirmConsent(userId, { expect: snapshotOf(consent), label: plan.label, endpoint, keysFingerprint: fingerprint }, guardOf(step));
+      } catch (error) {
+        // A revocation of this device (a logout, a disable in another tab)
+        // came after the registration was sent: "enabled" does not come back
+        // (rule 8), and a channel this decision created is nobody's — the
+        // revocation did not know it.
+        if (created && readConsent(userId).gen !== consent.gen) await removeChannelQuietly(endpoint, null);
+        throw error;
+      }
       return;
     case 'revoked':
       await goOffAfterRevoked(ctx, endpoint);
@@ -518,10 +528,19 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         await removeChannelQuietly(channel.endpoint, null);
         throw error;
       }
-      await register(ctx, recorded, channel.endpoint, channel.keys, fingerprint, action.register, async () => {
-        await undoConsentWrite(userId, consent, recorded)();
-        await removeChannelQuietly(channel.endpoint, null);
-      });
+      await register(
+        ctx,
+        recorded,
+        channel.endpoint,
+        channel.keys,
+        fingerprint,
+        action.register,
+        async () => {
+          await undoConsentWrite(userId, consent, recorded)();
+          await removeChannelQuietly(channel.endpoint, null);
+        },
+        true,
+      );
       return;
     }
 
@@ -1080,7 +1099,12 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
           guardOf(step),
         );
       } catch (error) {
-        if (error instanceof PushStateConflictError) return { kind: 'superseded' };
+        if (error instanceof PushStateConflictError) {
+          // A revocation came first (rule 8): a channel this enable created
+          // is nobody's.
+          if (created && readConsent(userId).gen !== gen) await removeChannelQuietly(channel.endpoint, null);
+          return { kind: 'superseded' };
+        }
         await undoRegistration(step, label, channel.endpoint);
         return { kind: 'failed', reason: 'storage' };
       }

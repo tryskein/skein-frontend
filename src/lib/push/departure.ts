@@ -215,18 +215,14 @@ async function revokeOnLogout(step: PushStep): Promise<Removal> {
 }
 
 /**
- * Removes the channel known at the confirmation, then the channel this
- * browser has now if it is another one: the logout takes no `skein.push.op`,
- * so another tab may have created a channel after the confirmation read it.
- * Each removal is journaled.
+ * Removes only the channel known at the confirmation (journaled). A channel
+ * the browser has besides it is not this logout's to remove: another tab may
+ * have accepted it for a user who appeared since. A channel created by an
+ * operation that started before this revocation is removed by that operation
+ * itself, when it finds its consent revoked (`pushLifecycle.ts#register`).
  */
 async function removeChannels(step: PushStep, confirmed: string | null): Promise<void> {
   if (confirmed !== null) await removeLocalChannel(step, confirmed);
-  const now = await readChannel();
-  if (now.kind !== 'channel' || now.channel.endpoint === confirmed) return;
-  const endpoint = now.channel.endpoint;
-  await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
-  await removeLocalChannel(step, endpoint);
 }
 
 /**
