@@ -1,3 +1,4 @@
+import { noteSignedOut } from '../auth/appearance';
 import {
   MutationCache,
   QueryCache,
@@ -53,6 +54,9 @@ export function createAppQueryClient(): QueryClient {
     if (client.getQueryData(ME_KEY) === null) return;
     clearSessionQueries(client);
     client.setQueryData(ME_KEY, null);
+    // No user is confirmed any more: the appearance ends with the answer, so
+    // a push step of the user that is still running has no effect after it.
+    noteSignedOut();
   };
 
   // `client` is referenced by the handlers above but only ever CALLED

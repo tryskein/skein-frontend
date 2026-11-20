@@ -81,7 +81,7 @@ vi.mock('../../lib/push/browserPush', async (importOriginal) => ({
 
 import { AuthProvider, ME_KEY, useAuth } from '../AuthContext';
 import { createAppQueryClient } from '../../lib/appQueryClient';
-import { noteLogin, noteSignedOut } from '../appearance';
+import { currentAppearance, noteLogin, noteSignedOut } from '../appearance';
 
 const SIGN_OUT_URL = 'https://sso.example.net/oauth2/sign_out';
 const realSetTimeout = globalThis.setTimeout;
@@ -381,6 +381,8 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     });
 
     expect(client.getQueryData(ME_KEY)).toBeNull();
+    // The appearance of A ends with the 401: a push step of A has no effect after it.
+    expect(currentAppearance()).toBeNull();
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
     expect(browser.channel).toEqual(channel('a'));
     expect(pushCallsBesidesList()).toBe(0);
