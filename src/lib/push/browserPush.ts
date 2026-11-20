@@ -97,12 +97,37 @@ async function ensureRegistration(): Promise<ServiceWorkerRegistration> {
 }
 
 /**
- * Creates a new channel with the server's VAPID public key (base64url).
- * Rejects when the browser refuses.
+ * Resolves with `promise`, or rejects with the abort reason as soon as
+ * `signal` aborts.
  */
-export async function createChannel(publicKey: string): Promise<BrowserChannel> {
-  await ensureRegistration();
-  const registration = await navigator.serviceWorker.ready;
+function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Creates a new channel with the server's VAPID public key (base64url).
+ * Rejects when the browser refuses. `navigator.serviceWorker.ready` never
+ * settles while no worker is active, so the wait for it ends when `signal`
+ * aborts — the caller may hold the `skein.push.op` lock.
+ */
+export async function createChannel(publicKey: string, signal?: AbortSignal): Promise<BrowserChannel> {
+  await untilAborted(ensureRegistration(), signal);
+  const registration = await untilAborted(navigator.serviceWorker.ready, signal);
   const subscription = await registration.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(publicKey),

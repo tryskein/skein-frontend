@@ -11,7 +11,7 @@
  * The browser APIs are stand-ins: this checks our mapping, not the browser.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { browserPushSupported, readChannel } from './browserPush';
+import { browserPushSupported, createChannel, readChannel } from './browserPush';
 
 type Capability = 'serviceWorker' | 'PushManager' | 'Notification' | 'locks';
 const CAPABILITIES: Capability[] = ['serviceWorker', 'PushManager', 'Notification', 'locks'];
@@ -96,5 +96,25 @@ describe('row 47b — reading the channel', () => {
       kind: 'channel',
       channel: { endpoint: 'https://push.example.test/send/one', keys: { p256dh: '-_-_', auth: 'AQID' } },
     });
+  });
+});
+
+describe('row 47b — creating the channel', () => {
+  test('with no active worker the wait for serviceWorker.ready ends when the signal aborts', async () => {
+    const subscribe = vi.fn();
+    const registration = { pushManager: { subscribe } };
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {
+        getRegistration: vi.fn(async () => registration),
+        register: vi.fn(),
+        ready: new Promise<never>(() => {}),
+      },
+      configurable: true,
+    });
+    const controller = new AbortController();
+    const pending = createChannel('AQID', controller.signal);
+    controller.abort(new DOMException('deadline', 'AbortError'));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(subscribe).not.toHaveBeenCalled();
   });
 });
