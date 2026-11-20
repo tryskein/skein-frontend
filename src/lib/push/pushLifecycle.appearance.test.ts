@@ -209,6 +209,50 @@ describe('row 49 — a write queued on skein.push.store after the appearance was
   });
 });
 
+describe('row 49 — the appearance is replaced after a write the row prepared, before its request', () => {
+  const withoutRev = (c: Consent) => ({ ...c, rev: 0 });
+
+  /** Replaces the appearance as the first push state write of the decision is done. */
+  function replaceAfterFirstWrite(): void {
+    locks.onRelease = (name) => {
+      if (name !== PUSH_STORE_LOCK) return;
+      locks.onRelease = null;
+      noteLogin(server.caller);
+    };
+    api.pushListDevices.mockImplementation(async (userId: string) =>
+      api.pushListDevices.mock.calls.length > 1 ? { kind: 'lost' } : model.list(userId),
+    );
+  }
+
+  test('row 2: the new channel is taken away again and the consent put back; nothing is registered', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('gone'), null) });
+    await load();
+    const before = withoutRev(readConsent(A));
+    server.caller = A;
+    replaceAfterFirstWrite();
+
+    await appear(A);
+
+    expect(browserApi.createChannel).toHaveBeenCalledTimes(1);
+    expect(api.pushSubscribe).not.toHaveBeenCalled();
+    expect(browser.channel).toBeNull();
+    expect(withoutRev(readConsent(A))).toEqual(before);
+  });
+
+  test('row 5: the first of its two works is taken back', async () => {
+    browser.channel = channel('a');
+    await load();
+    server.caller = B;
+    replaceAfterFirstWrite();
+
+    await appear(B);
+
+    expect(api.pushRemoveChannel).not.toHaveBeenCalled();
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(channel('a'));
+  });
+});
+
 describe('row 49 — the appearance is replaced while the browser removes a channel', () => {
   test('the controller passes its liveness to the browser: the channel stays', async () => {
     const a = channel('a');

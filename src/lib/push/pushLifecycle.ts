@@ -410,15 +410,26 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
 }
 
 /**
- * Passes `outcome` on; when it ends the step as "user changed", `undo` takes
+ * Passes `outcome` on; when it ends the step as "user changed" — or fails in
+ * any way before the request was sent, as `sent` tells — `undo` takes
  * back what the decision prepared for this request first (rule 5: the refused
- * decision leaves no consequence). A failed undo leaves the record as it is.
+ * or abandoned decision leaves no consequence). After a request was sent and
+ * its answer is unknown, nothing is undone: the next appearance repeats it.
+ * A failed undo leaves the record as it is.
  */
-async function undoingOnUserChanged<T>(outcome: Promise<T>, undo?: () => Promise<void>): Promise<T> {
+async function undoingOnUserChanged<T>(
+  outcome: Promise<T>,
+  undo?: () => Promise<void>,
+  sent?: () => boolean,
+): Promise<T> {
   try {
     return await outcome;
   } catch (error) {
-    if (undo !== undefined && error instanceof StepEnded && error.reason === 'userChanged') {
+    // Also when the step ended before its request was sent: nothing reached
+    // the server, so nothing the decision prepared for it may stay.
+    const notSent = sent !== undefined && !sent();
+    const userChanged = error instanceof StepEnded && error.reason === 'userChanged';
+    if (undo !== undefined && (userChanged || notSent)) {
       try {
         await undo();
       } catch {
@@ -455,9 +466,11 @@ async function register(
   created = false,
 ): Promise<void> {
   const { step, userId } = ctx;
+  let sent = false;
   const outcome = await undoingOnUserChanged(
-    request(step, (signal) =>
-      pushSubscribe(
+    request(step, (signal) => {
+      sent = true;
+      return pushSubscribe(
         {
           expectedUserId: userId,
           endpoint,
@@ -467,9 +480,10 @@ async function register(
           mode: plan.mode,
         },
         signal,
-      ),
-    ),
+      );
+    }),
     undo,
+    () => sent,
   );
   switch (outcome.kind) {
     case 'ok':
@@ -538,10 +552,13 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         if (error instanceof StepEnded) throw error;
         return;
       }
-      const fingerprint = await keysFingerprint(channel.keys);
-      live(step);
+      let fingerprint: string;
       let recorded: Consent;
       try {
+        // From here until the registration is sent, an ending step takes the
+        // new channel away again.
+        fingerprint = await keysFingerprint(channel.keys);
+        live(step);
         recorded = await recordUnconfirmedChannel(
           userId,
           {
@@ -580,23 +597,32 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       // Both steps are written first, so a closed tab finishes them later.
       const works = readPushState().works;
       const added: string[] = [];
-      live(step);
-      if (!works.some((w) => w.type === 'foreignRemoval' && w.endpoint === endpoint)) {
-        added.push((await addPushWork({ type: 'foreignRemoval', endpoint }, guardOf(step))).id);
-      }
-      if (!works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) {
-        added.push((await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step))).id);
-      }
-      publish(step, {});
+      let sent = false;
+      const undoWorks = async () => {
+        for (const id of added) await removePushWork(id);
+        republishWarnings(step);
+      };
       // The removal by endpoint, without a condition: only its `ok` proves the
-      // previous user's subscription at this endpoint is gone. "User changed"
-      // takes the works of this decision back.
+      // previous user's subscription at this endpoint is gone. "User changed",
+      // or a step that ends before the request, takes the works of this
+      // decision back.
       const outcome = await undoingOnUserChanged(
-        request(step, (signal) => pushRemoveChannel({ expectedUserId: userId, endpoint }, signal)),
-        async () => {
-          for (const id of added) await removePushWork(id);
-          republishWarnings(step);
-        },
+        (async () => {
+          live(step);
+          if (!works.some((w) => w.type === 'foreignRemoval' && w.endpoint === endpoint)) {
+            added.push((await addPushWork({ type: 'foreignRemoval', endpoint }, guardOf(step))).id);
+          }
+          if (!works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) {
+            added.push((await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step))).id);
+          }
+          publish(step, {});
+          return request(step, (signal) => {
+            sent = true;
+            return pushRemoveChannel({ expectedUserId: userId, endpoint }, signal);
+          });
+        })(),
+        undoWorks,
+        () => sent,
       );
       if (outcome.kind === 'ok') {
         await removeWorks(step, (w) => w.type === 'foreignRemoval' && w.endpoint === endpoint);
@@ -1071,12 +1097,15 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
     created = true;
   }
   const channel = current;
-  const fingerprint = await keysFingerprint(channel.keys);
-  live(step);
 
   // The label is in the consent, unconfirmed, before the registration is sent.
+  // Until the registration is sent, an ending step takes a channel this
+  // enable created away again.
+  let fingerprint: string;
   let pending: Consent;
   try {
+    fingerprint = await keysFingerprint(channel.keys);
+    live(step);
     pending =
       keptLabel === null
         ? await beginConsentLabel(
@@ -1091,23 +1120,34 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
           );
   } catch (error) {
     if (created) await removeChannelQuietly(channel.endpoint, null);
+    if (error instanceof StepEnded) throw error;
     return failure(error);
   }
   const label = pending.label;
   if (label === null) return { kind: 'failed', reason: 'storage' };
+  const written = pending;
 
-  const outcome = await request(step, (signal) =>
-    pushSubscribe(
-      {
-        expectedUserId: userId,
-        endpoint: channel.endpoint,
-        keys: channel.keys,
-        ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
-        deviceLabel: label,
-        mode: 'upsert',
-      },
-      signal,
-    ),
+  let sent = false;
+  const outcome = await undoingOnUserChanged(
+    request(step, (signal) => {
+      sent = true;
+      return pushSubscribe(
+        {
+          expectedUserId: userId,
+          endpoint: channel.endpoint,
+          keys: channel.keys,
+          ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+          deviceLabel: label,
+          mode: 'upsert',
+        },
+        signal,
+      );
+    }),
+    async () => {
+      await undoConsentWrite(userId, consent, written)();
+      if (created) await removeChannelQuietly(channel.endpoint, null);
+    },
+    () => sent,
   );
   const ctx: DecisionContext = {
     step,
