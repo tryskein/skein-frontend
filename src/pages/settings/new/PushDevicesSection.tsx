@@ -190,23 +190,6 @@ export function PushDevicesSection() {
                     components={{ b: <b />, code: <Code /> }}
                   />
                 </Text>
-                {isBrave ? (
-                  <Text size="sm">
-                    <strong>Brave</strong> disables Google push by default. Open{' '}
-                    <Code>brave://settings/privacy</Code>, turn on "Use Google
-                    services for push messaging" and <strong>fully restart
-                    Brave</strong>. If that doesn't help — create a new Brave
-                    profile or use Chrome / Edge / Firefox.
-                  </Text>
-                ) : (
-                  <Text size="sm">
-                    If this is <strong>Brave</strong> — open{' '}
-                    <Code>brave://settings/privacy</Code>, turn on "Use Google
-                    services for push messaging" and restart the browser.
-                    Otherwise try Chrome, Edge or Firefox on desktop and check
-                    that the network / VPN isn't blocking Google services.
-                  </Text>
-                )}
               </Stack>
             </Alert>
           ) : null}
@@ -221,7 +204,7 @@ export function PushDevicesSection() {
             {devices === null && state.row === null ? (
               <Box className="settings-loading" role="status" aria-live="polite">
                 <Loader size="sm" aria-hidden="true" />
-                <span className="sr-only">Loading devices</span>
+                <span className="sr-only">{t('devices.loading')}</span>
               </Box>
             ) : devices === null ? (
               <Alert variant="light" style={ERR_ALERT_VARS} title={t('devices.error')}>
@@ -229,7 +212,7 @@ export function PushDevicesSection() {
               </Alert>
             ) : sortedDevices.length === 0 ? (
               <Text size="sm" c="var(--ink-2)">
-                No devices with push enabled yet.
+                {t('devices.empty')}
               </Text>
             ) : (
               // A homogeneous set of revocable rows is a list: AT should hear
@@ -262,8 +245,7 @@ export function PushDevicesSection() {
                           ) : null}
                         </Group>
                         <Text size="xs" c="var(--ink-2)">
-                          added {formatTime(d.createdAt)} · active{' '}
-                          {formatTime(d.lastSeenAt)}
+                          {t('devices.meta', { created: formatTime(d.createdAt), lastSeen: formatTime(d.lastSeenAt) })}
                         </Text>
                       </Box>
                       <Button
