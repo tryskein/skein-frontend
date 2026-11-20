@@ -138,7 +138,7 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   });
 
-  test('push requests hang: at 1.5 s the consent goes off with an unconfirmed revocation; the logout goes on at 2 s; late answers change nothing', async () => {
+  test('push requests hang: at 1.5 s the consent goes off with an unconfirmed revocation; the logout goes on by 1.75 s; late answers change nothing', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
     const list = deferred<PushOutcome<never>>();
@@ -158,7 +158,7 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     ]);
     expect(api.pushRevokeDevices).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS - DEPARTURE_CONFIRM_MS - 1);
+    await vi.advanceTimersByTimeAsync(DEPARTURE_PREPARE_MS - DEPARTURE_CONFIRM_MS - 1);
     expect(run.done()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await flush();
@@ -172,7 +172,7 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateAtDeadline);
   });
 
-  test('the wait for skein.push.store hangs: the logout goes on at 2 s; a lock granted later writes nothing', async () => {
+  test('the wait for skein.push.store hangs: the logout goes on by 1.75 s; a lock granted later writes nothing', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
     api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
@@ -182,7 +182,7 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
 
     const run = clickLogout();
     await flush();
-    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS - 1);
+    await vi.advanceTimersByTimeAsync(DEPARTURE_PREPARE_MS - 1);
     expect(run.done()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await flush();
