@@ -60,7 +60,7 @@ vi.mock('./browserPush', async (importOriginal) => ({
   ...browserApi,
 }));
 
-import { beginExplicitDeparture, DEPARTURE_BUDGET_MS, type DepartureVerdict } from './departure';
+import { beginExplicitDeparture, DEPARTURE_BUDGET_MS, DEPARTURE_CONFIRM_MS, type DepartureVerdict } from './departure';
 import { startPushLifecycle, stopPushLifecycle } from './pushLifecycle';
 
 const realSetTimeout = globalThis.setTimeout;
@@ -132,25 +132,38 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   });
 
-  test('push requests hang: the logout goes on at 2 s; a late answer sends nothing and writes nothing', async () => {
+  test('push requests hang: at 1.5 s the consent goes off with an unconfirmed revocation; the logout goes on at 2 s; late answers change nothing', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
     const list = deferred<PushOutcome<never>>();
     api.pushListDevices.mockImplementationOnce(() => list.promise);
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    const revocation = deferred<PushOutcome>();
+    api.pushRevokeDevices.mockImplementationOnce(() => revocation.promise);
 
     const run = clickLogout();
     await flush();
-    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS - 1);
+    await vi.advanceTimersByTimeAsync(DEPARTURE_CONFIRM_MS);
+    await flush();
+    // Rule 5, the explicit logout without a confirmation: U's consent is off
+    // and the revocation is recorded within the budget.
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1, labels: [] });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed' }),
+    ]);
+    expect(api.pushRevokeDevices).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS - DEPARTURE_CONFIRM_MS - 1);
     expect(run.done()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await flush();
     expect(run.done()).toBe(true);
 
+    const stateAtDeadline = localStorage.getItem(PUSH_STATE_KEY);
     list.resolve({ kind: 'lost' });
+    revocation.resolve({ kind: 'ok', value: undefined });
     await flush();
-    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expect(api.pushRevokeDevices).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateAtDeadline);
   });
 
   test('the wait for skein.push.store hangs: the logout goes on at 2 s; a lock granted later writes nothing', async () => {
@@ -213,6 +226,11 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     await flush();
     expect(run.done()).toBe(true);
     expect(await run.verdict).toBe('proceed');
+    // Neither the list nor the channel came: the consent is off all the same.
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1 });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', labels: [LABEL_A], guard: 'unconfirmed' }),
+    ]);
   });
 });
 

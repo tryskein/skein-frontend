@@ -29,15 +29,22 @@
  * `skein.push.op`: it does not wait for another tab's network.
  */
 
-import { pushListDevices, pushRevokeDevices } from '../../api/push';
+import { type PushDevice, type PushOutcome, pushListDevices, pushRevokeDevices } from '../../api/push';
 import { currentAppearance } from '../../auth/appearance';
-import { browserPushSupported, readChannel, removeChannel } from './browserPush';
+import { browserPushSupported, type ChannelRead, readChannel, removeChannel } from './browserPush';
 import { removeLocalChannel, revokeConfirmedDevice } from './pushLifecycle';
 import { deleteConsent, readConsent, removePushWork, revokeConsent, setConsentOffUnconfirmed } from './pushState';
 import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 
 /** How long the push parts may hold up an explicit logout. */
 export const DEPARTURE_BUDGET_MS = 2000;
+
+/**
+ * The part of the budget for confirming the user and reading the channel.
+ * The rest is kept for the revocation transition, which an explicit logout
+ * writes also when the confirmation did not come in time (rule 5).
+ */
+export const DEPARTURE_CONFIRM_MS = 1500;
 
 /** What the logout does after `prepare`. */
 export type DepartureVerdict = 'proceed' | 'userChanged';
@@ -90,20 +97,75 @@ function budgetedStep(): { step: PushStep; stop: () => void } | null {
 }
 
 /**
+ * Settles with `{ value }` of `work`, or with `undefined` once `signal` is
+ * aborted first; a rejection of `work` before that is passed on.
+ */
+function untilAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<{ value: T } | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(undefined);
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve({ value });
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** A step of `step`'s appearance that also ends after `ms`. */
+function shorterStep(step: PushStep, ms: number): { step: PushStep; stop: () => void } {
+  const controller = new AbortController();
+  const end = () => controller.abort(new DOMException('the confirmation ran out of time', 'TimeoutError'));
+  const timer = setTimeout(end, ms);
+  step.signal.addEventListener('abort', end, { once: true });
+  return {
+    step: { token: step.token, signal: controller.signal },
+    stop: () => {
+      clearTimeout(timer);
+      step.signal.removeEventListener('abort', end);
+    },
+  };
+}
+
+/**
  * The server part of an explicit logout. Returns the channel endpoint that
  * `finish` removes, or `null`.
+ *
+ * The list (the confirmation of U) and the channel are read within
+ * {@link DEPARTURE_CONFIRM_MS}; whatever did not come by then counts as not
+ * read, so the revocation transition of branch (c) still has the rest of the
+ * budget.
  */
 async function revokeOnLogout(step: PushStep): Promise<string | null> {
   const userId = step.token.userId;
-  const list = await request(step, (signal) => pushListDevices(userId, signal));
-  if (list.kind === 'ok') {
+  const confirmation = shorterStep(step, DEPARTURE_CONFIRM_MS);
+  let listed: { value: PushOutcome<PushDevice[]> } | undefined;
+  let channelRead: { value: ChannelRead } | undefined;
+  try {
+    [listed, channelRead] = await Promise.all([
+      untilAbort(
+        request(confirmation.step, (signal) => pushListDevices(userId, signal)),
+        confirmation.step.signal,
+      ),
+      untilAbort(readChannel(), confirmation.step.signal),
+    ]);
+  } finally {
+    confirmation.stop();
+  }
+  live(step);
+  const read: ChannelRead = channelRead?.value ?? { kind: 'unreadable' };
+  if (listed?.value.kind === 'ok') {
     // (a) U is confirmed.
-    const revocation = await revokeConfirmedDevice(step, list.value);
+    const revocation = await revokeConfirmedDevice(step, listed.value.value, read);
     return revocation.endpoint;
   }
   // (c) U could not be confirmed: the consent of U alone goes off.
-  const read = await readChannel();
-  live(step);
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
   const { work } = await revokeConsent(userId, { endpoint, guard: 'unconfirmed' }, guardOf(step));
   if (work === null || work.type !== 'deviceRevoke') return null;

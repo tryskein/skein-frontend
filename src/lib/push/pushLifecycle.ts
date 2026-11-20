@@ -59,6 +59,7 @@ import {
   type BrowserChannel,
   browserPushSupported,
   type ChannelKeys,
+  type ChannelRead,
   createChannel,
   notificationPermission,
   type NotificationPermissionState,
@@ -1035,12 +1036,17 @@ async function revokeDeviceOnServer(step: Step): Promise<ServerRevocation> {
 /**
  * The server part of the revocation of this device once `devices`, the
  * user's list read in this step, confirmed the user (see
- * {@link revokeDeviceOnServer}). Every wait for the store lock and every
- * request is bounded by the step's signal.
+ * {@link revokeDeviceOnServer}). `channelRead` is the channel as the caller
+ * already read it. Every wait for the store lock and every request is
+ * bounded by the step's signal.
  */
-export async function revokeConfirmedDevice(step: PushStep, devices: PushDevice[]): Promise<ServerRevocation> {
+export async function revokeConfirmedDevice(
+  step: PushStep,
+  devices: PushDevice[],
+  channelRead?: ChannelRead,
+): Promise<ServerRevocation> {
   const userId = step.token.userId;
-  const read = await readChannel();
+  const read = channelRead ?? (await readChannel());
   live(step);
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
   const guard: RevokeGuard = endpoint === null ? 'absent' : await guardFromList(devices, endpoint);
