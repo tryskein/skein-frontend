@@ -544,8 +544,11 @@ export interface RevokeConsentResult {
  * The revocation transition of this device (explicit logout, disable here,
  * removal of the current device): the consent becomes `off`, `gen` grows —
  * also when S is empty — and S moves whole into a new `deviceRevoke` work,
- * written only when it has a label or an endpoint. Not a compare-and-set:
- * a revocation always applies.
+ * written only when it has a label or an endpoint. The same write marks the
+ * disable as not confirmed (`offUnconfirmed`), also with an empty S and an
+ * unread channel, so a reload still shows it; the mark is cleared by
+ * {@link setConsentOffUnconfirmed} once the server confirmed the result. Not
+ * a compare-and-set: a revocation always applies.
  */
 export async function revokeConsent(userId: string, args: RevokeConsentArgs): Promise<RevokeConsentResult> {
   return commit((record) => {
@@ -572,7 +575,7 @@ export async function revokeConsent(userId: string, args: RevokeConsentArgs): Pr
       label: null,
       pending: null,
       endpoint: endpoint ?? consent.endpoint,
-      offUnconfirmed: false,
+      offUnconfirmed: true,
     });
     return { consent: next, work };
   });

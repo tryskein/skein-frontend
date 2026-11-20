@@ -32,6 +32,7 @@ import {
   readPushState,
   recordUnconfirmedChannel,
   revokeConsent,
+  setConsentOffUnconfirmed,
   updateConsentChannel,
   type NewPushWork,
   type RevokeGuard,
@@ -184,6 +185,27 @@ describe('row 36 — consent writes are compare-and-set on gen and rev', () => {
       .rejects.toBeInstanceOf(PushStateConflictError);
 
     expect(raw()).toBe(before);
+  });
+});
+
+describe('row 35 — the revocation write marks the disable as not confirmed (US-3)', () => {
+  test.each<[string, () => Promise<unknown>, string | null]>([
+    ['with labels and an endpoint', () => enabledConsent(A), ENDPOINT],
+    ['with an empty S and an unread channel', async () => undefined, null],
+  ])('%s: off, gen + 1 and offUnconfirmed land in one write and survive a reload', async (_name, arrange, endpoint) => {
+    await arrange();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+
+    await revokeConsent(A, { endpoint, guard: 'unconfirmed' });
+
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1, offUnconfirmed: true });
+  });
+
+  test('the mark is cleared once the server confirmed the result', async () => {
+    const { consent } = await revokeConsent(A, { endpoint: ENDPOINT, guard: 'absent' });
+    await setConsentOffUnconfirmed(A, { gen: consent.gen, rev: consent.rev }, false);
+    expect(readConsent(A)).toMatchObject({ state: 'off', offUnconfirmed: false });
   });
 });
 
