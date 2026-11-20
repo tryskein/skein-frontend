@@ -1192,13 +1192,15 @@ async function revokeDeviceOnServer(step: Step): Promise<ServerRevocation> {
  * The server part of the revocation of this device once `devices`, the
  * user's list read in this step, confirmed the user (see
  * {@link revokeDeviceOnServer}). `channelRead` is the channel as the caller
- * already read it. Every wait for the store lock and every request is
- * bounded by the step's signal.
+ * already read it; `onTransition` hears the endpoint once the revocation
+ * transition is written, before the request. Every wait for the store lock
+ * and every request is bounded by the step's signal.
  */
 export async function revokeConfirmedDevice(
   step: PushStep,
   devices: PushDevice[],
   channelRead?: ChannelRead,
+  onTransition?: (endpoint: string | null) => void,
 ): Promise<ServerRevocation> {
   const userId = step.token.userId;
   const read = channelRead ?? (await readChannel());
@@ -1221,6 +1223,9 @@ export async function revokeConfirmedDevice(
     { endpoint, guard, localUnsubscribe: true, alsoLabels: missing && removeById === undefined ? [serverLabel] : [] },
     guardOf(step),
   );
+  // The transition is written (with the local removal journaled): the
+  // channel may go now, whatever the revocation request answers.
+  onTransition?.(endpoint);
   if (work === null || work.type !== 'deviceRevoke') {
     // No label and no channel: nothing of this device is on the server,
     // unless the channel could not be read (row 7 removes it once it is) or

@@ -54,6 +54,13 @@ export const DEPARTURE_BUDGET_MS = 2000;
  */
 export const DEPARTURE_CONFIRM_MS = 1500;
 
+/**
+ * The part of the budget for the whole server part (`prepare`). The rest is
+ * kept for removing the known channel after the logout request, also when
+ * the revocation request does not answer.
+ */
+export const DEPARTURE_PREPARE_MS = 1750;
+
 /** What the logout does after `prepare`. */
 /**
  * What the logout does after `prepare`: `proceed` — log out; `userChanged` —
@@ -168,7 +175,7 @@ const NO_REMOVAL: Removal = { allowed: false, endpoint: null };
  * read, so the revocation transition of branch (c) still has the rest of the
  * budget.
  */
-async function revokeOnLogout(step: PushStep): Promise<Removal> {
+async function revokeOnLogout(step: PushStep, allowRemoval: (endpoint: string | null) => void): Promise<Removal> {
   const userId = step.token.userId;
   const confirmation = shorterStep(step, DEPARTURE_CONFIRM_MS);
   let listed: { value: PushOutcome<PushDevice[]> } | undefined;
@@ -188,7 +195,7 @@ async function revokeOnLogout(step: PushStep): Promise<Removal> {
   const read: ChannelRead = channelRead?.value ?? { kind: 'unreadable' };
   if (listed?.value.kind === 'ok') {
     // (a) U is confirmed.
-    const revocation = await revokeConfirmedDevice(step, listed.value.value, read);
+    const revocation = await revokeConfirmedDevice(step, listed.value.value, read, allowRemoval);
     return { allowed: true, endpoint: revocation.endpoint };
   }
   // (c) U could not be confirmed: the consent of U alone goes off.
@@ -240,6 +247,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   const { step, stop } = budgeted;
   let removal: Removal = NO_REMOVAL;
   const prepared = startPrepare();
+  function allowRemoval(endpoint: string | null): void {
+    removal = { allowed: true, endpoint };
+  }
   return {
     prepare: () => prepared,
     async finish() {
@@ -254,9 +264,12 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   };
 
   function startPrepare(): Promise<DepartureVerdict> {
-    const work = revokeOnLogout(step).then(
-      (endpoint: Removal): DepartureVerdict => {
-        removal = endpoint;
+    // The server part ends by DEPARTURE_PREPARE_MS, leaving time for the
+    // removal of the channel in `finish`.
+    const part = shorterStep(step, DEPARTURE_PREPARE_MS);
+    const work = revokeOnLogout(part.step, allowRemoval).then(
+      (result: Removal): DepartureVerdict => {
+        if (result.allowed) removal = result;
         return 'proceed';
       },
       (error: unknown): DepartureVerdict => {
@@ -268,7 +281,8 @@ export function beginExplicitDeparture(): ExplicitDeparture {
         return 'proceed';
       },
     );
-    return withinBudget(work, step.signal, 'proceed').then((verdict) => {
+    return withinBudget(work, part.step.signal, 'proceed').then((verdict) => {
+      part.stop();
       if (verdict !== 'proceed' || isCurrentAppearance(step.token)) return verdict;
       // The page has another appearance by now: the logout was for one
       // that is gone, and must not end the session that replaced it.

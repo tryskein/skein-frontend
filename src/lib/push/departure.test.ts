@@ -60,7 +60,13 @@ vi.mock('./browserPush', async (importOriginal) => ({
   ...browserApi,
 }));
 
-import { beginExplicitDeparture, DEPARTURE_BUDGET_MS, DEPARTURE_CONFIRM_MS, type DepartureVerdict } from './departure';
+import {
+  beginExplicitDeparture,
+  DEPARTURE_BUDGET_MS,
+  DEPARTURE_CONFIRM_MS,
+  DEPARTURE_PREPARE_MS,
+  type DepartureVerdict,
+} from './departure';
 import { startPushLifecycle, stopPushLifecycle } from './pushLifecycle';
 
 const realSetTimeout = globalThis.setTimeout;
@@ -212,6 +218,29 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     await flush();
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateAtDeadline);
     expect(readPushState().works).toEqual([expect.objectContaining({ type: 'localUnsubscribe', endpoint: a.endpoint })]);
+  });
+
+  test('the list confirms U but the revocation does not answer: the known channel is removed within 2 s', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    api.pushRevokeDevices.mockImplementation(() => never());
+
+    const run = clickLogout();
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_PREPARE_MS);
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS - DEPARTURE_PREPARE_MS);
+    await flush();
+
+    expect(run.done()).toBe(true);
+    expect(browser.channel).toBeNull();
+    // The revocation stays recorded for the next appearance of U.
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], endpoint: a.endpoint }),
+    ]);
   });
 
   test('every push part hangs at once: still at most 2 s', async () => {
