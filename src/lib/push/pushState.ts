@@ -1,0 +1,568 @@
+/**
+ * Browser push state: the consent of every user of this browser and the
+ * journal of unfinished push work, kept in ONE localStorage record
+ * (`skein.push.v1.state`).
+ *
+ * One record, because a revocation is one transition — the consent becomes
+ * "explicitly off", its generation grows and every label it holds moves into
+ * a `deviceRevoke` work — and two keys could be left half-written by a failed
+ * second write or a closed tab. Every transition is a single `setItem` of the
+ * whole record under the `skein.push.store` lock, followed by a read back; a
+ * `setItem` that throws leaves the previous record whole.
+ *
+ * Consent of a user (spec "Terms"):
+ *   - `none` with no labels is "no mark"; `none` with labels is still "no
+ *     mark" for the decision table, the labels only wait for a revocation;
+ *   - `enabled` carries the device label, the channel endpoint and key
+ *     fingerprint; `pending` is set until the server confirmed the
+ *     subscription with this label, and says whether it came from an
+ *     explicit enable or from accepting an existing subscription;
+ *   - `off` is "explicitly off".
+ *
+ * `labels` is the set S: every label written into the consent or sent in a
+ * registration, from its creation until the revocation transition moves S
+ * whole into a `deviceRevoke` work. Nothing else takes a label out of S: an
+ * abandoned accept or a definite refusal leaves it there. While S holds
+ * {@link MAX_CONSENT_LABELS} labels no new label is created, so S always fits
+ * one revocation request.
+ *
+ * `gen` grows with every revocation of this device, even without labels. An
+ * explicit action reads it synchronously in its click handler
+ * ({@link readConsentGen}) and every consent write of that action is a
+ * compare-and-set on it, so an action started before a revocation never
+ * turns the consent back on. `rev` grows with every write of the consent.
+ */
+
+import { MAX_REVOKED_DEVICE_LABELS } from '../../api/push';
+import { withPushStoreLock } from './locks';
+
+/** localStorage key of the push state record. */
+export const PUSH_STATE_KEY = 'skein.push.v1.state';
+
+/** Largest size of the label set S of one consent. */
+export const MAX_CONSENT_LABELS = MAX_REVOKED_DEVICE_LABELS;
+
+export type ConsentState = 'none' | 'enabled' | 'off';
+
+/** How an unconfirmed label came into the consent. */
+export type PendingKind = 'enable' | 'accept';
+
+export interface Consent {
+  state: ConsentState;
+  /** Generation: grows with every revocation of this device. */
+  gen: number;
+  /** The label set S. */
+  labels: string[];
+  /** Device label of an `enabled` consent; `null` otherwise. */
+  label: string | null;
+  /** Set while the server has not confirmed `label`. */
+  pending: { label: string; kind: PendingKind } | null;
+  /** Endpoint of this user's channel. Kept when the consent is `off`. */
+  endpoint: string | null;
+  /** Fingerprint of the channel keys written with `endpoint`. */
+  keysFingerprint: string | null;
+  /** `off` whose revocation the server has not confirmed yet. */
+  offUnconfirmed: boolean;
+  /** Grows with every write of this consent. */
+  rev: number;
+}
+
+/**
+ * Protection of a `deviceRevoke` work replayed by another user: the owner's
+ * subscription with the work's endpoint as the owner's confirmed list showed
+ * it, `absent` when that list had none, `unconfirmed` when the owner could not
+ * be confirmed.
+ */
+export type RevokeGuard = { id: string; version: number } | 'absent' | 'unconfirmed';
+
+export type PushWork =
+  /** Unsubscribe the browser channel with this endpoint, if it is still current. */
+  | { id: string; type: 'localUnsubscribe'; endpoint: string }
+  /** Remove the channel with this endpoint on the server, for any user. */
+  | { id: string; type: 'foreignRemoval'; endpoint: string }
+  /** Revoke the owner's device labels (and unlabelled endpoint). */
+  | {
+      id: string;
+      type: 'deviceRevoke';
+      ownerUserId: string;
+      labels: string[];
+      endpoint?: string;
+      guard: RevokeGuard;
+    };
+
+/** A work as the caller describes it; the id is assigned on write. */
+export type NewPushWork = PushWork extends infer W ? (W extends PushWork ? Omit<W, 'id'> : never) : never;
+
+export interface PushStateRecord {
+  consents: Record<string, Consent>;
+  works: PushWork[];
+}
+
+/** Storage is unavailable, or the write did not land. Nothing changed. */
+export class PushStorageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PushStorageError';
+  }
+}
+
+/** The consent moved on since the caller read it. Nothing changed. */
+export class PushStateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PushStateConflictError';
+  }
+}
+
+/** S is full: no new label is created until this device is revoked. */
+export class PushLabelLimitError extends Error {
+  constructor() {
+    super(`the consent already holds ${MAX_CONSENT_LABELS} device labels`);
+    this.name = 'PushLabelLimitError';
+  }
+}
+
+/** A work that must not be written. Nothing changed. */
+export class InvalidPushWorkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidPushWorkError';
+  }
+}
+
+/** The consent of a user with no record: "no mark". */
+export function emptyConsent(): Consent {
+  return {
+    state: 'none',
+    gen: 0,
+    labels: [],
+    label: null,
+    pending: null,
+    endpoint: null,
+    keysFingerprint: null,
+    offUnconfirmed: false,
+    rev: 0,
+  };
+}
+
+// ───────────────────────── Reading ─────────────────────────
+
+function storage(): Storage {
+  let s: Storage | undefined;
+  try {
+    s = window.localStorage;
+  } catch {
+    s = undefined;
+  }
+  if (!s) throw new PushStorageError('localStorage is unavailable');
+  return s;
+}
+
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+const stringOrNull = (v: unknown): string | null => (isString(v) ? v : null);
+
+function parseGuard(v: unknown): RevokeGuard | undefined {
+  if (v === 'absent' || v === 'unconfirmed') return v;
+  if (v !== null && typeof v === 'object') {
+    const g = v as Record<string, unknown>;
+    if (isString(g.id) && g.id !== '' && isCount(g.version)) return { id: g.id, version: g.version };
+  }
+  return undefined;
+}
+
+function parseConsent(v: unknown): Consent {
+  const c = emptyConsent();
+  if (v === null || typeof v !== 'object') return c;
+  const r = v as Record<string, unknown>;
+  if (r.state === 'enabled' || r.state === 'off' || r.state === 'none') c.state = r.state;
+  if (isCount(r.gen)) c.gen = r.gen;
+  if (Array.isArray(r.labels)) c.labels = r.labels.filter(isString);
+  c.label = stringOrNull(r.label);
+  if (r.pending !== null && typeof r.pending === 'object') {
+    const p = r.pending as Record<string, unknown>;
+    if (isString(p.label) && (p.kind === 'enable' || p.kind === 'accept')) {
+      c.pending = { label: p.label, kind: p.kind };
+    }
+  }
+  c.endpoint = stringOrNull(r.endpoint);
+  c.keysFingerprint = stringOrNull(r.keysFingerprint);
+  c.offUnconfirmed = r.offUnconfirmed === true;
+  if (isCount(r.rev)) c.rev = r.rev;
+  return c;
+}
+
+function parseWork(v: unknown): PushWork | undefined {
+  if (v === null || typeof v !== 'object') return undefined;
+  const w = v as Record<string, unknown>;
+  if (!isString(w.id)) return undefined;
+  if ((w.type === 'localUnsubscribe' || w.type === 'foreignRemoval') && isString(w.endpoint)) {
+    return { id: w.id, type: w.type, endpoint: w.endpoint };
+  }
+  if (w.type === 'deviceRevoke' && isString(w.ownerUserId) && Array.isArray(w.labels)) {
+    const guard = parseGuard(w.guard);
+    if (guard === undefined) return undefined;
+    const work: PushWork = {
+      id: w.id,
+      type: 'deviceRevoke',
+      ownerUserId: w.ownerUserId,
+      labels: w.labels.filter(isString),
+      guard,
+    };
+    if (isString(w.endpoint)) work.endpoint = w.endpoint;
+    return work;
+  }
+  return undefined;
+}
+
+function parseRecord(raw: string | null): PushStateRecord {
+  const record: PushStateRecord = { consents: {}, works: [] };
+  if (raw === null) return record;
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return record;
+  }
+  if (v === null || typeof v !== 'object') return record;
+  const r = v as Record<string, unknown>;
+  if (r.consents !== null && typeof r.consents === 'object') {
+    for (const [userId, consent] of Object.entries(r.consents as Record<string, unknown>)) {
+      record.consents[userId] = parseConsent(consent);
+    }
+  }
+  if (Array.isArray(r.works)) {
+    for (const w of r.works) {
+      const work = parseWork(w);
+      if (work !== undefined) record.works.push(work);
+    }
+  }
+  return record;
+}
+
+/**
+ * Reads the whole record synchronously. Without storage, or with a record
+ * that is not JSON, the browser holds no consent and no work.
+ */
+export function readPushState(): PushStateRecord {
+  let raw: string | null;
+  try {
+    raw = storage().getItem(PUSH_STATE_KEY);
+  } catch {
+    raw = null;
+  }
+  return parseRecord(raw);
+}
+
+/** The consent of `userId`; "no mark" when there is none. */
+export function readConsent(userId: string): Consent {
+  return readPushState().consents[userId] ?? emptyConsent();
+}
+
+/**
+ * The generation of `userId`'s consent, read synchronously — an explicit
+ * action reads it in its click handler, before the permission prompt, the
+ * lock queue and the network.
+ */
+export function readConsentGen(userId: string): number {
+  return readConsent(userId).gen;
+}
+
+/** Whether the consent is "no mark" for the decision table. */
+export function isNoMark(consent: Consent): boolean {
+  return consent.state === 'none';
+}
+
+// ───────────────────────── Writing ─────────────────────────
+
+/**
+ * Applies `change` to the current record under `skein.push.store` and
+ * writes the result with one `setItem`, then reads it back. If `change`
+ * throws, nothing is written.
+ */
+async function commit<T>(change: (record: PushStateRecord) => T): Promise<T> {
+  return withPushStoreLock(() => {
+    const s = storage();
+    let before: string | null;
+    try {
+      before = s.getItem(PUSH_STATE_KEY);
+    } catch {
+      throw new PushStorageError('the push state could not be read');
+    }
+    const record = parseRecord(before);
+    const result = change(record);
+    const next = JSON.stringify(record);
+    try {
+      s.setItem(PUSH_STATE_KEY, next);
+    } catch {
+      throw new PushStorageError('the push state could not be written');
+    }
+    let after: string | null;
+    try {
+      after = s.getItem(PUSH_STATE_KEY);
+    } catch {
+      after = null;
+    }
+    if (after !== next) throw new PushStorageError('the push state did not persist');
+    return result;
+  });
+}
+
+/** What the caller saw: the generation and, optionally, the revision. */
+export interface ConsentExpectation {
+  gen: number;
+  rev?: number;
+}
+
+function consentFor(record: PushStateRecord, userId: string): Consent {
+  return record.consents[userId] ?? emptyConsent();
+}
+
+function checkExpectation(consent: Consent, expect: ConsentExpectation): void {
+  if (consent.gen !== expect.gen) {
+    throw new PushStateConflictError('the consent generation changed');
+  }
+  if (expect.rev !== undefined && consent.rev !== expect.rev) {
+    throw new PushStateConflictError('the consent revision changed');
+  }
+}
+
+function store(record: PushStateRecord, userId: string, consent: Consent): Consent {
+  const next = { ...consent, rev: consent.rev + 1 };
+  record.consents[userId] = next;
+  return next;
+}
+
+function newId(): string {
+  return crypto.randomUUID();
+}
+
+function validateWork(work: NewPushWork): void {
+  if (work.type !== 'deviceRevoke') {
+    if (!isString(work.endpoint) || work.endpoint === '') {
+      throw new InvalidPushWorkError(`${work.type} needs an endpoint`);
+    }
+    return;
+  }
+  if (parseGuard(work.guard) === undefined) {
+    throw new InvalidPushWorkError('deviceRevoke needs a guard');
+  }
+  const hasEndpoint = isString(work.endpoint) && work.endpoint !== '';
+  if (work.labels.length === 0 && !hasEndpoint) {
+    throw new InvalidPushWorkError('deviceRevoke needs a label or an endpoint');
+  }
+  if (work.labels.length > MAX_CONSENT_LABELS) {
+    throw new InvalidPushWorkError(`deviceRevoke carries at most ${MAX_CONSENT_LABELS} labels`);
+  }
+}
+
+function appendWork(record: PushStateRecord, work: NewPushWork): PushWork {
+  validateWork(work);
+  const stored = { ...work, id: newId() } as PushWork;
+  record.works.push(stored);
+  return stored;
+}
+
+/** Arguments of {@link beginConsentLabel}. */
+export interface BeginLabelArgs {
+  expect: ConsentExpectation;
+  kind: PendingKind;
+  /** Endpoint of the channel the label is for. */
+  endpoint: string;
+  keysFingerprint: string | null;
+}
+
+/**
+ * Creates a new device label and writes it into the consent as "enabled,
+ * not confirmed" — before the registration that carries it is sent. Only
+ * from "no mark" or "explicitly off". Refused with {@link PushLabelLimitError}
+ * when S is full.
+ */
+export async function beginConsentLabel(userId: string, args: BeginLabelArgs): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    if (consent.state === 'enabled') {
+      throw new PushStateConflictError('the consent is already enabled');
+    }
+    if (consent.labels.length >= MAX_CONSENT_LABELS) throw new PushLabelLimitError();
+    const label = newId();
+    return store(record, userId, {
+      ...consent,
+      state: 'enabled',
+      labels: [...consent.labels, label],
+      label,
+      pending: { label, kind: args.kind },
+      endpoint: args.endpoint,
+      keysFingerprint: args.keysFingerprint,
+      offUnconfirmed: false,
+    });
+  });
+}
+
+/** Arguments of {@link confirmConsent}. */
+export interface ConfirmConsentArgs {
+  expect: ConsentExpectation;
+  /** The label the server confirmed. */
+  label: string;
+  endpoint: string;
+  keysFingerprint: string | null;
+}
+
+/**
+ * Marks the consent confirmed: the server holds a subscription with this
+ * label at this endpoint. Refused when the consent moved on or no longer
+ * carries this label.
+ */
+export async function confirmConsent(userId: string, args: ConfirmConsentArgs): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    if (consent.state !== 'enabled' || consent.label !== args.label) {
+      throw new PushStateConflictError('the consent no longer carries this label');
+    }
+    return store(record, userId, {
+      ...consent,
+      pending: null,
+      endpoint: args.endpoint,
+      keysFingerprint: args.keysFingerprint,
+    });
+  });
+}
+
+/** Arguments of {@link abandonConsentLabel}. */
+export interface AbandonLabelArgs {
+  expect: ConsentExpectation;
+  /** The unconfirmed label being given up. */
+  label: string;
+}
+
+/**
+ * Returns an unconfirmed consent to "no mark" (an abandoned accept, a
+ * definite refusal of an enable). The label stays in S.
+ */
+export async function abandonConsentLabel(userId: string, args: AbandonLabelArgs): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    if (consent.state !== 'enabled' || consent.pending?.label !== args.label) {
+      throw new PushStateConflictError('the consent no longer waits for this label');
+    }
+    return store(record, userId, {
+      ...consent,
+      state: 'none',
+      label: null,
+      pending: null,
+      endpoint: null,
+      keysFingerprint: null,
+    });
+  });
+}
+
+/** Arguments of {@link updateConsentChannel}. */
+export interface UpdateChannelArgs {
+  expect: ConsentExpectation;
+  endpoint: string;
+  keysFingerprint: string | null;
+}
+
+/** Replaces the endpoint and key fingerprint of an `enabled` consent. */
+export async function updateConsentChannel(userId: string, args: UpdateChannelArgs): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    if (consent.state !== 'enabled') {
+      throw new PushStateConflictError('the consent is not enabled');
+    }
+    return store(record, userId, {
+      ...consent,
+      endpoint: args.endpoint,
+      keysFingerprint: args.keysFingerprint,
+    });
+  });
+}
+
+/** Arguments of {@link revokeConsent}. */
+export interface RevokeConsentArgs {
+  /** Endpoint of this browser's channel, when known. */
+  endpoint: string | null;
+  guard: RevokeGuard;
+}
+
+/** Result of {@link revokeConsent}. */
+export interface RevokeConsentResult {
+  consent: Consent;
+  /** The revocation work, or `null` when there is neither a label nor an endpoint. */
+  work: PushWork | null;
+}
+
+/**
+ * The revocation transition of this device (explicit logout, disable here,
+ * removal of the current device): the consent becomes `off`, `gen` grows —
+ * also when S is empty — and S moves whole into a new `deviceRevoke` work,
+ * written only when it has a label or an endpoint. Not a compare-and-set:
+ * a revocation always applies.
+ */
+export async function revokeConsent(userId: string, args: RevokeConsentArgs): Promise<RevokeConsentResult> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    const endpoint = args.endpoint !== null && args.endpoint !== '' ? args.endpoint : null;
+    let work: PushWork | null = null;
+    if (consent.labels.length > 0 || endpoint !== null) {
+      const newWork: NewPushWork = {
+        type: 'deviceRevoke',
+        ownerUserId: userId,
+        labels: [...consent.labels],
+        guard: args.guard,
+      };
+      if (endpoint !== null) newWork.endpoint = endpoint;
+      work = appendWork(record, newWork);
+    } else if (parseGuard(args.guard) === undefined) {
+      throw new InvalidPushWorkError('deviceRevoke needs a guard');
+    }
+    const next = store(record, userId, {
+      ...consent,
+      state: 'off',
+      gen: consent.gen + 1,
+      labels: [],
+      label: null,
+      pending: null,
+      endpoint: endpoint ?? consent.endpoint,
+      offUnconfirmed: false,
+    });
+    return { consent: next, work };
+  });
+}
+
+/** Sets or clears "disable not confirmed" on an `off` consent. */
+export async function setConsentOffUnconfirmed(
+  userId: string,
+  expect: ConsentExpectation,
+  offUnconfirmed: boolean,
+): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, expect);
+    if (consent.state !== 'off') throw new PushStateConflictError('the consent is not off');
+    return store(record, userId, { ...consent, offUnconfirmed });
+  });
+}
+
+/** Deletes the consent of `userId` (the account was deleted). */
+export async function deleteConsent(userId: string): Promise<void> {
+  await commit((record) => {
+    delete record.consents[userId];
+  });
+}
+
+/** Writes a new unfinished work and returns it with its id. */
+export async function addPushWork(work: NewPushWork): Promise<PushWork> {
+  return commit((record) => appendWork(record, work));
+}
+
+/** Removes a finished work; a missing id is not an error. */
+export async function removePushWork(id: string): Promise<void> {
+  await commit((record) => {
+    record.works = record.works.filter((w) => w.id !== id);
+  });
+}
