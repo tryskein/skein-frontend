@@ -10,7 +10,7 @@
  * (`api/push.ts`, a model of the server's push contract), the browser
  * adapter `browserPush.ts`, and `window.location.assign`.
  */
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { User } from '../../api/auth';
@@ -147,6 +147,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  onlineManager.setOnline(true);
   vi.useRealTimers();
   cleanup();
   latest = null;
@@ -238,6 +239,41 @@ describe('row 68b — one budget of 2 s on the whole logout (INV-7, SC-006)', ()
     await flush();
     expect(client.getQueryData(ME_KEY)).toBeNull();
     expect(events).toEqual(['revoke', 'logoutApi', 'removeChannel', 'assign:null']);
+  });
+});
+
+describe('row 64 (c) — an explicit logout while offline longer than 2 s', () => {
+  test('the consent goes off with an unconfirmed revocation in the click; the logout request goes once online', async () => {
+    pushOnForA();
+    await mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    onlineManager.setOnline(false);
+    // Offline: the push requests get no answer.
+    api.pushListDevices.mockImplementation(async () => ({ kind: 'lost' }));
+    api.pushRevokeDevices.mockImplementation(async () => ({ kind: 'lost' }));
+
+    let ended = false;
+    void current()
+      .logout('explicit')
+      .then(() => {
+        ended = true;
+      });
+    await flush();
+    await vi.advanceTimersByTimeAsync(2500);
+    await flush();
+
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(readPushState().consents[A]).toMatchObject({ state: 'off', gen: 1 });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed' }),
+    ]);
+
+    onlineManager.setOnline(true);
+    await flush();
+    await vi.advanceTimersByTimeAsync(0);
+    await flush();
+    expect(auth.logoutApi).toHaveBeenCalledTimes(1);
+    expect(ended).toBe(true);
   });
 });
 

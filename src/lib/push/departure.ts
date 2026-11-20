@@ -139,7 +139,8 @@ function shorterStep(step: PushStep, ms: number): { step: PushStep; stop: () => 
   const controller = new AbortController();
   const end = () => controller.abort(new DOMException('the confirmation ran out of time', 'TimeoutError'));
   const timer = setTimeout(end, ms);
-  step.signal.addEventListener('abort', end, { once: true });
+  if (step.signal.aborted) end();
+  else step.signal.addEventListener('abort', end, { once: true });
   return {
     step: { token: step.token, signal: controller.signal },
     stop: () => {
@@ -227,38 +228,20 @@ async function removeChannels(step: PushStep, confirmed: string | null): Promise
 
 /**
  * Starts the push part of an explicit logout of the rendered user. Call it
- * in the click: the appearance is taken and the budget starts here. Without
- * a user or without push support the push part does nothing.
+ * in the click: the appearance is taken, the budget starts and the server
+ * part of the revocation runs from here, not when the logout request is
+ * sent — a logout request held back while offline must not hold back the
+ * local revocation (rule 5: without a confirmation the consent still goes
+ * off). Without a user or without push support the push part does nothing.
  */
 export function beginExplicitDeparture(): ExplicitDeparture {
   const budgeted = budgetedStep();
   if (budgeted === null) return NO_PUSH;
   const { step, stop } = budgeted;
   let removal: Removal = NO_REMOVAL;
+  const prepared = startPrepare();
   return {
-    prepare() {
-      const work = revokeOnLogout(step).then(
-        (endpoint: Removal): DepartureVerdict => {
-          removal = endpoint;
-          return 'proceed';
-        },
-        (error: unknown): DepartureVerdict => {
-          if (error instanceof StepEnded && error.reason === 'userChanged') {
-            // Nobody logs out: there is no `finish`, the budget ends here.
-            stop();
-            return 'userChanged';
-          }
-          return 'proceed';
-        },
-      );
-      return withinBudget(work, step.signal, 'proceed').then((verdict) => {
-        if (verdict !== 'proceed' || isCurrentAppearance(step.token)) return verdict;
-        // The page has another appearance by now: the logout was for one
-        // that is gone, and must not end the session that replaced it.
-        stop();
-        return 'superseded';
-      });
-    },
+    prepare: () => prepared,
     async finish() {
       try {
         if (removal.allowed && isLive(step)) {
@@ -269,6 +252,30 @@ export function beginExplicitDeparture(): ExplicitDeparture {
       }
     },
   };
+
+  function startPrepare(): Promise<DepartureVerdict> {
+    const work = revokeOnLogout(step).then(
+      (endpoint: Removal): DepartureVerdict => {
+        removal = endpoint;
+        return 'proceed';
+      },
+      (error: unknown): DepartureVerdict => {
+        if (error instanceof StepEnded && error.reason === 'userChanged') {
+          // Nobody logs out: there is no `finish`, the budget ends here.
+          stop();
+          return 'userChanged';
+        }
+        return 'proceed';
+      },
+    );
+    return withinBudget(work, step.signal, 'proceed').then((verdict) => {
+      if (verdict !== 'proceed' || isCurrentAppearance(step.token)) return verdict;
+      // The page has another appearance by now: the logout was for one
+      // that is gone, and must not end the session that replaced it.
+      stop();
+      return 'superseded';
+    });
+  }
 }
 
 /**
