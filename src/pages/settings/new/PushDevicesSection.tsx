@@ -132,7 +132,7 @@ export function PushDevicesSection() {
               <Switch
                 size="md"
                 checked={enabled}
-                disabled={busy || !state.decided}
+                disabled={busy || devices === null}
                 onChange={(e) => onToggleDevicePush(e.currentTarget.checked)}
                 label={enabled ? t('device.switchOn') : t('device.switchOff')}
               />
@@ -218,7 +218,7 @@ export function PushDevicesSection() {
             title={t('devices.title')}
             description={t('devices.description')}
           >
-            {devices === null && !state.decided && state.row === null ? (
+            {devices === null && state.row === null ? (
               <Box className="settings-loading" role="status" aria-live="polite">
                 <Loader size="sm" aria-hidden="true" />
                 <span className="sr-only">Loading devices</span>

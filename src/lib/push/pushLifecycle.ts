@@ -680,7 +680,16 @@ async function decideOnAppearance(step: Step): Promise<void> {
   }
 
   if (channel.kind === 'unreadable') {
-    publish(step, { decided: false, row: 0 });
+    // Row 0: nothing is done. The list is still read for the settings, which
+    // offer the disable also when the channel cannot be read (US-3).
+    const listed = await request(step, (signal) => pushListDevices(userId, signal));
+    const ownEndpoint = readConsent(userId).endpoint;
+    publish(step, {
+      decided: false,
+      row: 0,
+      devices: listed.kind === 'ok' ? listed.value : null,
+      thisDeviceHash: ownEndpoint === null ? null : await endpointFingerprint(ownEndpoint),
+    });
     return;
   }
 
@@ -721,15 +730,28 @@ async function decideOnAppearance(step: Step): Promise<void> {
   };
   await execute(ctx, decision.action);
   await settleOffUnconfirmed(ctx);
+  // What the settings show is read after the row: a row that acted may have
+  // replaced the channel (5 → 2) or changed the list.
+  let devices = list.value;
+  let channelNow: ChannelRead = read;
+  if (decision.action.type !== 'nothing') {
+    channelNow = await readChannel();
+    const relisted = await request(step, (signal) => pushListDevices(userId, signal));
+    if (relisted.kind === 'ok') devices = relisted.value;
+  }
   const ownEndpoint = readConsent(userId).endpoint;
   const thisDeviceHash =
-    channel.kind === 'channel' ? channel.endpointHash : ownEndpoint !== null ? await endpointFingerprint(ownEndpoint) : null;
+    channelNow.kind === 'channel'
+      ? await endpointFingerprint(channelNow.channel.endpoint)
+      : ownEndpoint !== null
+        ? await endpointFingerprint(ownEndpoint)
+        : null;
   publish(step, {
     decided: true,
     row: decision.row,
     serverPush: server.state,
     permission,
-    devices: list.value,
+    devices,
     thisDeviceHash,
   });
 }

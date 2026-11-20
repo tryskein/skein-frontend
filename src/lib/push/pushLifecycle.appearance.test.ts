@@ -30,6 +30,7 @@ import {
   seed,
   server,
   settle as settleLocks,
+  sha256,
   uninstallPushHarness,
 } from '../../test/pushHarness';
 import type { BrowserChannel } from './browserPush';
@@ -796,6 +797,36 @@ describe('the push configuration of the server could not be read', () => {
 
     expect(api.pushSubscribe).not.toHaveBeenCalled();
     expect(getPushLifecycleState().serverPush).toBe('disabled');
+  });
+});
+
+describe('what the settings are shown (US-3)', () => {
+  test('row 0 (channel not read): the list and this device are published, nothing is done', async () => {
+    const a = channel('a');
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    browser.readFails = true;
+    await load();
+
+    await appear(A);
+
+    const shown = getPushLifecycleState();
+    expect(shown).toMatchObject({ decided: false, row: 0, thisDeviceHash: await sha256(a.endpoint) });
+    expect(shown.devices?.map((d) => d.deviceLabel)).toEqual([LABEL_A]);
+    expect(api.pushSubscribe).not.toHaveBeenCalled();
+  });
+
+  test('after 5 → 2 the published device and list are the new channel\'s', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('old'), null) });
+    browser.channel = channel('renewed');
+    await load();
+
+    await appear(A);
+
+    const shown = getPushLifecycleState();
+    expect(browser.channel?.endpoint).toBe(channel('new-1').endpoint);
+    expect(shown.thisDeviceHash).toBe(await sha256(channel('new-1').endpoint));
+    expect(shown.devices?.map((d) => d.endpointHash)).toEqual([await sha256(channel('new-1').endpoint)]);
   });
 });
 

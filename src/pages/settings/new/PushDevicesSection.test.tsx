@@ -188,6 +188,17 @@ test('the server configuration could not be read: the switch stays, with that re
   expect(screen.queryByText(t('device.serverDisabledTitle'))).toBeNull();
 });
 
+test('the channel could not be read (row 0): the list is shown and push can be turned off', () => {
+  const THIS = { id: 'dev-this', endpointHash: CURRENT_HASH, ua: '', createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: 'l', version: 1 };
+  push.state = decided({ decided: false, row: 0, devices: [THIS] }, { state: 'enabled', label: 'l', labels: ['l'] });
+  renderSection();
+
+  expect(screen.getByRole('list')).toBeTruthy();
+  expect(screen.queryByText(t('devices.loadFailed'))).toBeNull();
+  fireEvent.click(categorySwitch('Push on this device is on'));
+  expect(push.disable).toHaveBeenCalledTimes(1);
+});
+
 describe('PushDevicesSection — "disable not confirmed" (row 79, US-3)', () => {
   const THIS = { id: 'dev-this', endpointHash: CURRENT_HASH, ua: '', createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: null, version: 1 };
 
