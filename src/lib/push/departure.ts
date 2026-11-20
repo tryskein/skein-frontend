@@ -38,7 +38,6 @@ import {
   deleteConsent,
   readConsent,
   removePushWork,
-  replacePushWork,
   revokeConsent,
   setConsentOffUnconfirmed,
 } from './pushState';
@@ -206,14 +205,16 @@ async function revokeOnLogout(step: PushStep, allowRemoval: (endpoint: string | 
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return NO_REMOVAL;
-  // `ok` confirms U: the work is finished and the channel may go. The
-  // removal of the channel takes its place in the same write, so a failed
-  // or cut-off removal is repeated on the next page load.
+  // `ok` confirms U, and the channel may go (its removal journaled, so a
+  // failed or cut-off one is repeated on the next page load). Without a
+  // list the label of the subscription at the endpoint is unknown, and a
+  // revocation by endpoint leaves a labelled one: the work stays until the
+  // owner's repeat checked the endpoint against the list.
   if (endpoint !== null) {
-    await replacePushWork(work.id, { type: 'localUnsubscribe', endpoint }, guardOf(step));
-  } else {
-    await removePushWork(work.id, guardOf(step));
+    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+    return { allowed: true, endpoint };
   }
+  await removePushWork(work.id, guardOf(step));
   const off = readConsent(userId);
   live(step);
   if (off.state === 'off') {

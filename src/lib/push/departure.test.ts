@@ -359,7 +359,7 @@ describe('row 64 — the three branches of prepare', () => {
     },
   );
 
-  test('(c) ok of the revocation within the budget: the work is finished and the channel removed', async () => {
+  test('(c) ok of the revocation within the budget: the channel is removed; the work waits for the owner\'s list', async () => {
     const a = channel('a');
     browser.channel = a;
     addSub(A, a.endpoint, LABEL_A);
@@ -369,9 +369,34 @@ describe('row 64 — the three branches of prepare', () => {
 
     expect(await clickLogout().verdict).toBe('proceed');
     expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: a.endpoint }]);
-    expect(readPushState().works).toEqual([]);
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, endpoint: a.endpoint, guard: 'unconfirmed' }),
+    ]);
     expect(browser.channel).toBeNull();
     expect(server.subs).toEqual([]);
+  });
+
+  test('(c) ok of a revocation by endpoint whose subscription carries an unknown label: the next appearance of U removes it', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    // The consent that held the label was lost: empty S, a labelled subscription.
+    addSub(A, a.endpoint, LABEL_A);
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    expect(await clickLogout().verdict).toBe('proceed');
+    expect(server.subs).toHaveLength(1);
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [], endpoint: a.endpoint }),
+    ]);
+
+    noteSignedOut();
+    startPushLifecycle();
+    appearA();
+    await settle(locks);
+
+    expect(server.subs).toEqual([]);
+    expect(readPushState().works).toEqual([]);
   });
 });
 
@@ -387,7 +412,9 @@ describe('row 64 (c) — after ok the removal of the channel is journaled', () =
 
     expect(await clickLogout().verdict).toBe('proceed');
     expect(browser.channel).toEqual(a);
-    expect(readPushState().works).toEqual([expect.objectContaining({ type: 'localUnsubscribe', endpoint: a.endpoint })]);
+    expect(readPushState().works).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'localUnsubscribe', endpoint: a.endpoint })]),
+    );
 
     noteSignedOut();
     browser.removeFails = false;
@@ -395,7 +422,7 @@ describe('row 64 (c) — after ok the removal of the channel is journaled', () =
     await settle(locks);
 
     expect(browser.channel).toBeNull();
-    expect(readPushState().works).toEqual([]);
+    expect(readPushState().works.filter((w) => w.type === 'localUnsubscribe')).toEqual([]);
   });
 });
 

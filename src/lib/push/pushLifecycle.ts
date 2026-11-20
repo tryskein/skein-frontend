@@ -312,8 +312,9 @@ async function repeatWork(step: Step): Promise<void> {
 /**
  * Sends the owner's revocation work as the step's user, its owner: the
  * labels and the endpoint in one request, then the removal by id it
- * records. Only when all of it is confirmed is the work finished; it then
- * returns `true`.
+ * records — or, for a work written without a confirmed list, of the
+ * subscription the owner's list still shows at the endpoint. Only when all
+ * of it is confirmed is the work finished; it then returns `true`.
  */
 async function repeatOwnRevocation(step: Step, work: Extract<PushWork, { type: 'deviceRevoke' }>): Promise<boolean> {
   const userId = step.token.userId;
@@ -321,8 +322,20 @@ async function repeatOwnRevocation(step: Step, work: Extract<PushWork, { type: '
     pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
   );
   if (outcome.kind !== 'ok') return false;
-  if (work.removeSubscriptionId !== undefined) {
-    const id = work.removeSubscriptionId;
+  let removeId = work.removeSubscriptionId;
+  if (work.guard === 'unconfirmed' && work.endpoint !== undefined) {
+    // Written without a confirmed list (an explicit logout that could not
+    // confirm the user): the subscription at the endpoint may carry a label
+    // the work does not know, which a revocation by endpoint leaves. The
+    // owner's list decides: such a subscription is removed by id.
+    const listed = await request(step, (signal) => pushListDevices(userId, signal));
+    if (listed.kind !== 'ok') return false;
+    const hash = await endpointFingerprint(work.endpoint);
+    const left = listed.value.find((d) => d.endpointHash === hash);
+    if (left !== undefined) removeId = left.id;
+  }
+  if (removeId !== undefined) {
+    const id = removeId;
     const removal = await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id }, signal));
     if (removal.kind !== 'ok' && removal.kind !== 'notFound') return false;
   }
