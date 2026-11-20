@@ -8,8 +8,15 @@
  * `Content-Type: text/javascript` headers — this file is just the logic.
  *
  * Plain dependency-free JS on purpose: the SW runs in a worker scope with
- * no bundler, no imports, no app code. Everything it needs (the API base,
- * the VAPID key) it derives at runtime from same-origin endpoints.
+ * no bundler, no imports, no app code.
+ *
+ * The worker shows notifications and opens their URL on click — nothing
+ * else. It never writes to the server and never creates a push channel:
+ * when the browser changes the subscription (`pushsubscriptionchange`) the
+ * worker does nothing, and the page applies its decision table on the next
+ * appearance of a user with consent. Registering a channel from the worker
+ * would use whichever session cookie happens to be present, without
+ * checking whose it is.
  *
  * userVisibleOnly contract: the subscription is created with
  * `userVisibleOnly: true`, so the browser REQUIRES that every `push`
@@ -19,8 +26,6 @@
 
 /* global self, clients */
 
-const PUSH_CONFIG_URL = '/api/v1/push/config';
-const SUBSCRIPTIONS_URL = '/api/v1/push/subscriptions';
 const NOTIFICATION_ICON = '/favicon.svg';
 const DEFAULT_URL = '/';
 
@@ -128,81 +133,3 @@ self.addEventListener('notificationclick', (event) => {
       }),
   );
 });
-
-/*
- * pushsubscriptionchange — the browser rotated / expired our subscription.
- * Re-subscribe with the SAME applicationServerKey and tell the backend
- * about the new endpoint, otherwise pushes silently stop arriving.
- *
- * VAPID key delivery: we RE-FETCH `/api/v1/push/config` from the worker
- * rather than baking the key in at build time. The SW runs same-origin so
- * the session cookie rides along and the config endpoint returns the
- * server's current public key. This is the robust choice — a server-side
- * VAPID key rotation is picked up automatically, whereas a build-time
- * inlined key would go stale and break re-subscription after rotation.
- */
-self.addEventListener('pushsubscriptionchange', (event) => {
-  event.waitUntil(resubscribe());
-});
-
-async function resubscribe() {
-  let publicKey = '';
-  try {
-    const res = await fetch(PUSH_CONFIG_URL, { credentials: 'include' });
-    if (res.ok) {
-      const cfg = await res.json();
-      if (cfg && typeof cfg.publicKey === 'string') publicKey = cfg.publicKey;
-    }
-  } catch (err) {
-    // Network failure — nothing we can do from the worker; the page-side
-    // re-sync (usePush, on next load with permission granted) will repair.
-    return;
-  }
-  if (!publicKey) return; // push disabled server-side
-
-  let subscription;
-  try {
-    subscription = await self.registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
-  } catch (err) {
-    return;
-  }
-
-  const json = subscription.toJSON();
-  if (!json || !json.endpoint || !json.keys) return;
-
-  try {
-    await fetch(SUBSCRIPTIONS_URL, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        endpoint: json.endpoint,
-        keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-        ua: self.navigator ? self.navigator.userAgent : undefined,
-      }),
-    });
-  } catch (err) {
-    // Swallow — page-side re-sync repairs the server record next load.
-  }
-}
-
-/*
- * urlBase64ToUint8Array — convert a base64url VAPID public key (as the
- * server hands it out) into the Uint8Array the Push API's
- * applicationServerKey expects. Standard helper, duplicated here because
- * the worker can't import the app's copy. Kept byte-for-byte identical to
- * src/lib/usePush.ts so both code paths agree.
- */
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const raw = self.atob(base64);
-  const output = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i += 1) {
-    output[i] = raw.charCodeAt(i);
-  }
-  return output;
-}

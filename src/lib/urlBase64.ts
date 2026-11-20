@@ -11,9 +11,8 @@
  * So we re-pad to a multiple of 4 and swap the alphabet back before
  * handing the result to `atob`.
  *
- * Pure + dependency-free so it can be unit-tested in isolation. A
- * byte-for-byte copy lives inside `public/sw.js` (the worker can't import
- * app modules); keep the two in sync.
+ * Pure + dependency-free so it can be unit-tested in isolation. The service
+ * worker no longer creates channels, so `public/sw.js` keeps no copy of it.
  */
 export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
