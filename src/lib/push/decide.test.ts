@@ -363,8 +363,8 @@ describe('row 47 — row 3: key fingerprint', () => {
       .toEqual({ row: 3, action: NOTHING });
   });
 
-  test('no recorded fingerprint: no update', () => {
+  test('no recorded fingerprint: no update, the fingerprint of the channel read is recorded', () => {
     expect(decide(input(consentOf('confirmed', { keysFingerprint: null }), channel(OWN, 'fp-2'), listed(device(OWN)))))
-      .toEqual({ row: 3, action: NOTHING });
+      .toEqual({ row: 3, action: { type: 'recordKeysFingerprint', endpoint: OWN, keysFingerprint: 'fp-2' } });
   });
 });

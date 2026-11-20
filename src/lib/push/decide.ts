@@ -98,6 +98,11 @@ export type DecisionAction =
   | { type: 'createChannelAndRegister'; register: RegisterPlan }
   /** Rows 3 and 4: register the current own channel. */
   | { type: 'register'; endpoint: string; register: RegisterPlan }
+  /**
+   * Row 3 without a recorded key fingerprint: record the fingerprint of the
+   * channel just read (`updateConsentChannel`), no server call.
+   */
+  | { type: 'recordKeysFingerprint'; endpoint: string; keysFingerprint: string }
   /** Rule 7: the unconfirmed accept lost its channel — back to "no mark". */
   | { type: 'abandonPending'; label: string }
   /** Row 5: remove the foreign channel, then `then`. */
@@ -220,7 +225,12 @@ export function decide(input: DecisionInput): Decision {
     if (listed.deviceLabel !== label) {
       return decision(3, { type: 'register', endpoint: channel.endpoint, register: { mode: 'updateOnly', label } });
     }
-    if (consent.keysFingerprint === null || consent.keysFingerprint === channel.keysFingerprint) return decision(3);
+    // No recorded fingerprint: no key refresh; the fingerprint of the channel
+    // just read is recorded instead.
+    if (consent.keysFingerprint === null) {
+      return decision(3, { type: 'recordKeysFingerprint', endpoint: channel.endpoint, keysFingerprint: channel.keysFingerprint });
+    }
+    if (consent.keysFingerprint === channel.keysFingerprint) return decision(3);
     return decision(3, { type: 'register', endpoint: channel.endpoint, register: { mode: 'updateOnly', label } });
   }
 
