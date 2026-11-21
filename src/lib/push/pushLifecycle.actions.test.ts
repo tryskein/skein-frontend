@@ -860,14 +860,33 @@ describe('the fresh read after an action and the confirmation of the user (rule 
     expect(reload).not.toHaveBeenCalled();
   });
 
-  test('the fresh read does not answer: the enable answers within its wait, what it wrote already shown', async () => {
+  test('the fresh read does not answer: the enable answers at the end of its wait, what it wrote shown before', async () => {
     const tab = await openTab(A);
     api.pushListDevices.mockImplementationOnce(model.list).mockImplementationOnce(() => new Promise(() => undefined));
+    const realSetTimeout = globalThis.setTimeout;
+    const flush = async () => {
+      for (let i = 0; i < 50; i += 1) await new Promise((r) => realSetTimeout(r, 0));
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let answer: unknown = null;
+      void tab.lifecycle.enablePush().then((result) => {
+        answer = result;
+      });
+      for (let i = 0; i < 200 && api.pushListDevices.mock.calls.length < 2; i += 1) await flush();
+      expect(api.pushListDevices).toHaveBeenCalledTimes(2);
+      // What the enable wrote is shown before the list answers.
+      expect(tab.lifecycle.getPushLifecycleState().consent).toMatchObject({ state: 'enabled', pending: null });
 
-    const started = Date.now();
-    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'done' });
-    expect(Date.now() - started).toBeLessThan(tab.lifecycle.SHOWN_READ_WAIT_MS + 1000);
-    expect(tab.lifecycle.getPushLifecycleState().consent).toMatchObject({ state: 'enabled', pending: null });
+      await vi.advanceTimersByTimeAsync(tab.lifecycle.SHOWN_READ_WAIT_MS - 1);
+      await flush();
+      expect(answer).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(answer).toEqual({ kind: 'done' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
