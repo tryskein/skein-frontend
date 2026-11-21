@@ -77,6 +77,7 @@ import {
   addPushWork,
   beginConsentLabel,
   type Consent,
+  claimedByOther,
   type ConsentSnapshot,
   confirmConsent,
   isHeld,
@@ -245,7 +246,7 @@ async function removeChannelQuietly(
  */
 async function removeChannelJournaled(step: Step, endpoint: string): Promise<void> {
   if (!readPushState().works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) {
-    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+    await addPushWork({ type: 'localUnsubscribe', endpoint, ownerUserId: step.token.userId }, guardOf(step));
   }
   await removeLocalChannel(step, endpoint);
 }
@@ -283,6 +284,11 @@ async function repeatLocalUnsubscribe(
   signal?: AbortSignal,
 ): Promise<void> {
   if (step !== null) live(step);
+  if (claimedByOther(work)) {
+    // Another user accepted this channel since: it is theirs now.
+    await removePushWork(work.id, step === null ? undefined : guardOf(step));
+    return;
+  }
   const result = await removeChannelQuietly(work.endpoint, step, signal);
   if (result === 'failed') return;
   if (step !== null) live(step);

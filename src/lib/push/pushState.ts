@@ -83,7 +83,18 @@ export type RevokeGuard = { id: string; version: number } | 'absent' | 'unconfir
 
 export type PushWork =
   /** Unsubscribe the browser channel with this endpoint, if it is still current. */
-  | { id: string; type: 'localUnsubscribe'; endpoint: string; heldBy?: string }
+  | {
+      id: string;
+      type: 'localUnsubscribe';
+      endpoint: string;
+      heldBy?: string;
+      /**
+       * The user whose channel this is, when the writer knew it. A repeat
+       * does not remove a channel another user's confirmed consent names by
+       * then (see {@link claimedByOther}).
+       */
+      ownerUserId?: string;
+    }
   /** Remove the channel with this endpoint on the server, for any user. */
   | { id: string; type: 'foreignRemoval'; endpoint: string }
   /** Revoke the owner's device labels (and unlabelled endpoint). */
@@ -114,6 +125,20 @@ export type PushWork =
  */
 export function isHeld(work: PushWork, held: ReadonlySet<string>): boolean {
   return work.type !== 'foreignRemoval' && work.heldBy !== undefined && held.has(work.heldBy);
+}
+
+/**
+ * Whether a `localUnsubscribe` of a known owner is now another user's
+ * channel: a confirmed consent ("enabled", not pending) of someone else names
+ * its endpoint — that user accepted it after the work was written. Such a
+ * work is finished without a removal.
+ */
+export function claimedByOther(work: PushWork, record: PushStateRecord = readPushState()): boolean {
+  if (work.type !== 'localUnsubscribe' || work.ownerUserId === undefined) return false;
+  const owner = work.ownerUserId;
+  return Object.entries(record.consents).some(
+    ([id, consent]) => id !== owner && consent.state === 'enabled' && consent.pending === null && consent.endpoint === work.endpoint,
+  );
 }
 
 /** A work as the caller describes it; the id is assigned on write. */
@@ -234,6 +259,7 @@ function parseWork(v: unknown): PushWork | undefined {
   if (w.type === 'localUnsubscribe' && isString(w.endpoint)) {
     const work: PushWork = { id: w.id, type: w.type, endpoint: w.endpoint };
     if (isString(w.heldBy)) work.heldBy = w.heldBy;
+    if (isString(w.ownerUserId)) work.ownerUserId = w.ownerUserId;
     return work;
   }
   if (w.type === 'deviceRevoke' && isString(w.ownerUserId) && Array.isArray(w.labels)) {
@@ -724,7 +750,7 @@ export async function revokeConsent(
     }
     const localWork =
       args.localUnsubscribe === true && endpoint !== null
-        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint }, args.heldBy))
+        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint, ownerUserId: userId }, args.heldBy))
         : null;
     const next = store(record, userId, {
       ...consent,
@@ -806,7 +832,7 @@ export async function refineRevocation(userId: string, args: RefineRevocationArg
     );
     const localWork =
       args.localUnsubscribe && !journaled
-        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint: args.endpoint }, args.heldBy))
+        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint: args.endpoint, ownerUserId: userId }, args.heldBy))
         : null;
     return { work, localWork };
   }, guard);

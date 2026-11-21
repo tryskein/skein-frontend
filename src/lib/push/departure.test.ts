@@ -1023,6 +1023,32 @@ describe('row 69 — the deletion of the account invalidates the owner\'s operat
   });
 });
 
+describe('row 69 — a journaled removal of the deleted owner\'s channel and another user accepting it', () => {
+  test('the removal under the lock fails, then B accepts and confirms X: the repeat leaves X and finishes the work', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    browser.removeFails = true;
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    appearA();
+
+    expect(await departAfterAccountDeletion(null, async () => ({ kind: 'none' }))).toBe('proceed');
+    expect(readPushState().works).toEqual([expect.objectContaining({ type: 'localUnsubscribe', endpoint: x.endpoint, ownerUserId: A })]);
+
+    // B accepted X in another tab and the server confirmed it.
+    const record = JSON.parse(localStorage.getItem(PUSH_STATE_KEY)!);
+    record.consents[B] = { ...emptyConsent(), ...enabledConsent(LABEL_B, x, null) };
+    localStorage.setItem(PUSH_STATE_KEY, JSON.stringify(record));
+    browser.removeFails = false;
+
+    // The next page load, without a user.
+    noteSignedOut();
+    startPushLifecycle();
+    await settle(locks);
+    expect(browser.channel).toEqual(x);
+    expect(readPushState().works).toEqual([]);
+  });
+});
+
 describe('row 69 — a clean-up without skein.push.op journals nothing', () => {
   test('B accepts X after the clean-up of A gave up the lock: no work of A removes X later', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

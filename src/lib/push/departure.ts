@@ -467,7 +467,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     // names, its removal journaled.
     if (revocation.endpoint !== undefined) {
       if (revocation.endpoint === previous.endpoint) {
-        const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint, heldBy }, guardOf(step));
+        const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint, heldBy, ownerUserId: userId }, guardOf(step));
         written.push(local.id);
         removal = revocation.endpoint;
       }
@@ -666,7 +666,7 @@ async function cleanUp(token: Appearance, signal: AbortSignal, retired: Promise<
     // A channel not known to be the owner's is left to the decision table of
     // the next confirmed user (US-6).
     if (owned?.value !== true) return;
-    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+    await addPushWork({ type: 'localUnsubscribe', endpoint, ownerUserId: userId }, guardOf(step));
     await removeLocalChannel(step, endpoint);
   } finally {
     lockWait.stop();
