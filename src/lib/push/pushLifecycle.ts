@@ -926,8 +926,8 @@ async function decideOnAppearance(step: Step): Promise<Partial<PushLifecycleStat
   shownReads += 1;
   const ownEndpoint = readConsent(userId).endpoint;
   const thisDeviceHash =
-    read.kind === 'channel'
-      ? await endpointFingerprint(read.channel.endpoint)
+    channel.kind === 'channel'
+      ? channel.endpointHash
       : ownEndpoint !== null
         ? await endpointFingerprint(ownEndpoint)
         : null;
@@ -1119,7 +1119,7 @@ let shownReads = 0;
  * holds up no push operation. A list that does not come is shown as not
  * read (`null`), beside the device read with it; nothing else is done.
  */
-async function publishFresh(token: Appearance, patch: Partial<PushLifecycleState>): Promise<void> {
+async function publishFresh(token: Appearance, patch: Partial<PushLifecycleState>): Promise<'shown' | 'userChanged' | 'ended'> {
   const ticket = (shownReads += 1);
   const controller = new AbortController();
   running.add(controller);
@@ -1132,10 +1132,17 @@ async function publishFresh(token: Appearance, patch: Partial<PushLifecycleState
     const ownEndpoint = readConsent(userId).endpoint;
     const endpoint = read.kind === 'channel' ? read.channel.endpoint : ownEndpoint;
     const thisDeviceHash = endpoint === null ? null : await endpointFingerprint(endpoint);
-    if (ticket !== shownReads) return;
+    if (ticket !== shownReads) return 'ended';
     publish(step, { ...patch, devices: listed.kind === 'ok' ? listed.value : null, thisDeviceHash });
-  } catch {
-    // The step ended (another appearance, "user changed"): nothing is shown.
+    return 'shown';
+  } catch (error) {
+    // "User changed" for the appearance still current: `/me` is read again
+    // (rule 5, US-2). The answer of an appearance replaced since is dropped.
+    if (error instanceof StepEnded && error.reason === 'userChanged' && isCurrentAppearance(token)) {
+      void reloadMeAfterUserChanged();
+      return 'userChanged';
+    }
+    return 'ended';
   } finally {
     running.delete(controller);
   }
@@ -1361,14 +1368,33 @@ async function finishAction(
     const outcome = await underOpLock(token, (step) =>
       body(step, () => {
         wanted = true;
+        // What the action wrote is shown at once; the list follows.
+        if (isLive(step)) publish(step, {});
       }),
     );
     result = endedEarly(outcome) ? { kind: 'superseded' } : outcome;
   } catch (error) {
     result = failure(error);
   }
-  if (wanted && result.kind !== 'superseded') await publishFresh(token, {});
-  return result;
+  if (!wanted || result.kind === 'superseded') return result;
+  // The answer waits for the fresh read only so long; a later read still
+  // publishes, and a later "user changed" still reads `/me` again.
+  const shown = await withinTime(publishFresh(token, {}), SHOWN_READ_WAIT_MS);
+  return shown === 'userChanged' ? { kind: 'superseded' } : result;
+}
+
+/** How long the answer of an explicit action waits for the fresh read of what the settings show. */
+export const SHOWN_READ_WAIT_MS = 1500;
+
+/** Resolves with `work`, or with `undefined` after `ms`. */
+function withinTime<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), ms);
+    void work.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
 }
 
 /**

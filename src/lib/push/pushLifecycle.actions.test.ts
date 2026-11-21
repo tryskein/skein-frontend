@@ -691,6 +691,41 @@ describe('a browser read under skein.push.op ends with the operation (Edge 13)',
   });
 });
 
+describe('the fresh read after an action and the confirmation of the user (rule 5, US-2)', () => {
+  test('"user changed" on the list read after an enable: /me is read again and the enable ends as superseded', async () => {
+    const tab = await openTab(A);
+    const reload = vi.fn(async () => undefined);
+    tab.appearance.registerMeReload(reload);
+    api.pushListDevices.mockImplementationOnce(model.list).mockImplementationOnce(async () => ({ kind: 'userChanged' }));
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('a late "user changed" of an appearance replaced meanwhile is dropped', async () => {
+    const tab = await openTab(A);
+    const reload = vi.fn(async () => undefined);
+    tab.appearance.registerMeReload(reload);
+    api.pushListDevices.mockImplementationOnce(model.list).mockImplementationOnce(async () => {
+      tab.appearance.noteLogin(A);
+      return { kind: 'userChanged' };
+    });
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'done' });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  test('the fresh read does not answer: the enable answers within its wait, what it wrote already shown', async () => {
+    const tab = await openTab(A);
+    api.pushListDevices.mockImplementationOnce(model.list).mockImplementationOnce(() => new Promise(() => undefined));
+
+    const started = Date.now();
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'done' });
+    expect(Date.now() - started).toBeLessThan(tab.lifecycle.SHOWN_READ_WAIT_MS + 1000);
+    expect(tab.lifecycle.getPushLifecycleState().consent).toMatchObject({ state: 'enabled', pending: null });
+  });
+});
+
 describe('what the settings show after an action is read outside skein.push.op (US-3)', () => {
   test('the list read after an enable hangs: the lock is free for the next operation; the list and the device come as one read', async () => {
     const tab = await openTab(A);
