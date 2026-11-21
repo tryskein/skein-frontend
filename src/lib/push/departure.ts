@@ -199,19 +199,29 @@ function deadline(ms: number, parent?: AbortSignal): { signal: AbortSignal; stop
 
 /**
  * `skein.push.op` for the departure: `held` settles `true` once the lock is
- * granted, `false` when `signal` ended the wait first; the lock is kept
- * until `release`.
+ * granted, `false` when `signal` or `release` ended the wait first. `release`
+ * frees a granted lock, or withdraws the request still waiting for it.
  */
 function holdOpLock(signal: AbortSignal): { held: Promise<boolean>; release: () => void } {
+  const request = new AbortController();
+  const withdraw = () => request.abort(signal.reason ?? new DOMException('the logout ended', 'AbortError'));
+  if (signal.aborted) withdraw();
+  else signal.addEventListener('abort', withdraw, { once: true });
+  let granted = false;
   let release!: () => void;
   const released = new Promise<void>((resolve) => {
-    release = resolve;
+    release = () => {
+      signal.removeEventListener('abort', withdraw);
+      if (!granted) request.abort(new DOMException('the logout ended', 'AbortError'));
+      resolve();
+    };
   });
   const held = new Promise<boolean>((resolve) => {
     withPushOpLock(async () => {
+      granted = true;
       resolve(true);
       await released;
-    }, signal).catch(() => resolve(false));
+    }, request.signal).catch(() => resolve(false));
   });
   return { held, release };
 }
@@ -362,7 +372,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
       );
       // The channel is read as soon as the lock is held, beside the list.
       const channelRead = opLock.held.then((held): Promise<ChannelRead> =>
-        held ? readChannel() : Promise.resolve({ kind: 'unreadable' }),
+        held && isLive(step) ? readChannel() : Promise.resolve({ kind: 'unreadable' }),
       );
       const [listed, channel, done] = await Promise.all([
         listing,

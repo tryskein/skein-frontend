@@ -835,6 +835,25 @@ describe('row 64 (a) — the logout holds skein.push.op; it removes only the cha
     expect(otherRan).toBe(true);
   });
 
+  test('a logout refused while it waits for skein.push.op withdraws the request: no late grant reads the channel', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    server.caller = B;
+    const holder = deferred<void>();
+    void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, () => holder.promise);
+
+    expect(await clickLogout().verdict).toBe('userChanged');
+    await flush();
+    holder.resolve();
+    await settle(locks);
+
+    expect(locks.requests.filter((name) => name === PUSH_OP_LOCK)).toHaveLength(2);
+    expect(browserApi.readChannel).not.toHaveBeenCalled();
+    expect(locks.idle()).toBe(true);
+  });
+
   test('skein.push.op is not granted within 1.5 s: branch (c) without reading or removing the channel', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const a = channel('a');
