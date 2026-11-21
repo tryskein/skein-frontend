@@ -48,7 +48,7 @@
  * changed" before it revoked the labels.
  */
 
-import { type PushDevice, pushListDevices, pushRevokeDevices } from '../../api/push';
+import { type PushDevice, pushListDevices } from '../../api/push';
 import {
   type Appearance,
   appearedSince,
@@ -62,7 +62,9 @@ import {
   abortPushOperations,
   removeLocalChannel,
   repeatOwnRevocation,
-  type RevocationProgress,
+  revocationProgress,
+  revocationTakenBack,
+  sendRevocation,
 } from './pushLifecycle';
 import {
   addPushWork,
@@ -243,7 +245,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   let userChangedHeard = false;
   /** The logout request will not go: nothing more is written, the transition is taken back. */
   let abandoned = false;
-  const progress: RevocationProgress = { sent: false, revoked: false };
+  const progress = revocationProgress();
 
   const budget = deadline(DEPARTURE_BUDGET_MS);
   const server = deadline(DEPARTURE_PREPARE_MS, budget.signal);
@@ -310,9 +312,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   transition.catch(() => undefined);
 
   async function takeBack(): Promise<void> {
-    // Kept once the revocation reached the server: its request was sent
-    // and no "user changed" came back before the labels were revoked.
-    if (progress.sent && !(userChangedHeard && !progress.revoked)) return;
+    // Kept once the revocation may have reached the server: its own request
+    // was sent and not refused as "user changed" (see RevocationProgress).
+    if (!revocationTakenBack(progress)) return;
     let result: Awaited<typeof transition>;
     try {
       result = await transition;
@@ -411,10 +413,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     // (c) U could not be confirmed: one revocation is tried.
     if (work === null) return;
     const revocation = asRevocation(work);
-    const outcome = await request(step, (signal) => {
-      progress.sent = true;
-      return pushRevokeDevices({ expectedUserId: userId, deviceLabels: revocation.labels, endpoint: revocation.endpoint }, signal);
-    });
+    const outcome = await sendRevocation(step, revocation.labels, revocation.endpoint, progress);
     if (outcome.kind !== 'ok') return;
     progress.revoked = true;
     // `ok` confirms U. Without a list the label of the subscription at the

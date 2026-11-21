@@ -536,6 +536,36 @@ describe('row 64 (b) — "user changed" that arrives as the step ends', () => {
     await flush();
 
     expect(await run.verdict).toBe('userChanged');
+    // The revocation was sent and its answer is unknown: the list's "user
+    // changed" is no proof that it did not reach the server.
+    vi.useRealTimers();
+    await settle(locks);
+    expect(readConsent(A)).toMatchObject({ state: 'off', labels: [] });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A] }),
+    ]);
+  });
+
+  test('the revocation is lost, then an earlier work of U is refused as "user changed": no logout, the transition and both works stay', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) }, [
+      { id: 'w0', type: 'deviceRevoke', ownerUserId: A, labels: ['cccccccc-0000-4000-8000-000000000003'], guard: 'absent' },
+    ]);
+    appearA();
+    api.pushRevokeDevices
+      .mockImplementationOnce(async () => ({ kind: 'lost' }))
+      .mockImplementationOnce(async () => ({ kind: 'userChanged' }));
+
+    expect(await clickLogout().verdict).toBe('userChanged');
+    await settle(locks);
+    expect(readConsent(A)).toMatchObject({ state: 'off', labels: [] });
+    const revocations = readPushState().works.filter((w) => w.type === 'deviceRevoke');
+    expect(revocations).toHaveLength(2);
+    expect(revocations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'w0' }), expect.objectContaining({ labels: [LABEL_A], endpoint: a.endpoint })]),
+    );
   });
 });
 

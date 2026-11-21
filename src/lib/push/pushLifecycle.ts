@@ -47,6 +47,7 @@ import {
   pushRevokeDevices,
   pushSubscribe,
   type PushDevice,
+  type PushOutcome,
 } from '../../api/push';
 import {
   type Appearance,
@@ -312,21 +313,48 @@ async function repeatWork(step: Step): Promise<void> {
 
 /**
  * How far the server part of a revocation got: `sent` — its revocation
- * request went out; `revoked` — the server confirmed it. A transition is
- * taken back only while nothing reached the server: before `sent`, or on
- * "user changed" before `revoked` (rule 5). Once the labels are revoked,
- * a later "user changed" (on the list or the removal by id) keeps the
- * transition and its work, which the owner's next appearance finishes.
+ * request went out; `revoked` — the server confirmed it; `refused` — the
+ * server answered that very request "user changed". A transition is taken
+ * back only while nothing of it can have reached the server: before `sent`,
+ * or when its own request was refused (rule 5). A lost or pending answer of
+ * that request, or "user changed" on any other request (an earlier work,
+ * the list, the removal by id), keeps the transition and its work, which the
+ * owner's next appearance finishes.
  */
 export interface RevocationProgress {
   sent: boolean;
   revoked: boolean;
+  refused: boolean;
 }
 
-/** Whether a revocation that ended with `error` at `progress` is taken back. */
-export function revocationTakenBack(error: unknown, progress: RevocationProgress): boolean {
-  if (!progress.sent) return true;
-  return error instanceof StepEnded && error.reason === 'userChanged' && !progress.revoked;
+/** A progress before anything was sent. */
+export function revocationProgress(): RevocationProgress {
+  return { sent: false, revoked: false, refused: false };
+}
+
+/** Whether a revocation at `progress` is taken back. */
+export function revocationTakenBack(progress: RevocationProgress): boolean {
+  return !progress.sent || progress.refused;
+}
+
+/**
+ * Sends the revocation of `labels` and `endpoint` as the first request of a
+ * revocation, recording its progress.
+ */
+export async function sendRevocation(
+  step: Step,
+  labels: string[],
+  endpoint: string | undefined,
+  progress?: RevocationProgress,
+): Promise<PushOutcome> {
+  const userId = step.token.userId;
+  return request(step, async (signal) => {
+    if (progress !== undefined) progress.sent = true;
+    const outcome = await pushRevokeDevices({ expectedUserId: userId, deviceLabels: labels, endpoint }, signal);
+    // Recorded as the answer arrives, before the step hears it.
+    if (progress !== undefined && outcome.kind === 'userChanged') progress.refused = true;
+    return outcome;
+  });
 }
 
 /**
@@ -342,10 +370,7 @@ export async function repeatOwnRevocation(
   progress?: RevocationProgress,
 ): Promise<boolean> {
   const userId = step.token.userId;
-  const outcome = await request(step, (signal) => {
-    if (progress !== undefined) progress.sent = true;
-    return pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal);
-  });
+  const outcome = await sendRevocation(step, work.labels, work.endpoint, progress);
   if (outcome.kind !== 'ok') return false;
   if (progress !== undefined) progress.revoked = true;
   let removeId = work.removeSubscriptionId;
@@ -1419,7 +1444,7 @@ export async function revokeConfirmedDevice(
   // The transition is written (with the local removal journaled): the
   // channel may go now, whatever the revocation request answers.
   onTransition?.(endpoint);
-  const progress: RevocationProgress = { sent: false, revoked: false };
+  const progress = revocationProgress();
   let done: boolean;
   try {
     if (work !== null && work.type === 'deviceRevoke') {
@@ -1437,7 +1462,7 @@ export async function revokeConfirmedDevice(
       done = (await repeatOwnRevocation(step, earlier)) && done;
     }
   } catch (error) {
-    if (revocationTakenBack(error, progress)) {
+    if (revocationTakenBack(progress)) {
       try {
         await undo();
       } catch {
