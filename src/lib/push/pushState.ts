@@ -657,7 +657,7 @@ export interface RevokeConsentResult {
  * which also revokes its label. Decided on the record under the store lock,
  * so a label written meanwhile counts.
  */
-function withListedLabel(labels: string[], listed: ListedSubscription | undefined): { labels: string[]; removeSubscriptionId?: string } {
+export function withListedLabel(labels: string[], listed: ListedSubscription | undefined): { labels: string[]; removeSubscriptionId?: string } {
   const next = [...labels];
   if (listed === undefined || listed.label === null || next.includes(listed.label)) return { labels: next };
   if (next.length < MAX_CONSENT_LABELS) {

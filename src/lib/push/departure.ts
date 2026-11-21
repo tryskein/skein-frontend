@@ -48,7 +48,7 @@
  * changed" before it revoked the labels.
  */
 
-import { type PushDevice, pushListDevices } from '../../api/push';
+import { type PushDevice, pushListDevices, pushRemoveDevice } from '../../api/push';
 import {
   type Appearance,
   appearedSince,
@@ -72,7 +72,6 @@ import {
   type Consent,
   endpointNamedByOther,
   isHeld,
-  MAX_CONSENT_LABELS,
   type PushWork,
   readConsent,
   readPushState,
@@ -84,8 +83,9 @@ import {
   type RevokeGuard,
   setConsentOffUnconfirmed,
   undoRevocation,
+  withListedLabel,
 } from './pushState';
-import { guardOf, isLive, live, type PushStep, request } from './pushStep';
+import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 
 /** How long the push parts may hold up an explicit logout. */
 export const DEPARTURE_BUDGET_MS = 2000;
@@ -299,6 +299,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
 
   // ── 1. The local part, before anything that may end the logout ──
   abortPushOperations();
+  // The record as it is before the transition: what the revocation knows
+  // if the transition's write is refused or its result is not known.
+  const snapshot = readConsent(userId);
   const transition = marker.held.then((held) => {
     // The works are written only once they can be held.
     if (!held) throw new DOMException('the logout could not hold its works', 'AbortError');
@@ -356,6 +359,8 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     let read: ChannelRead = { kind: 'unreadable' };
     let previous: Consent;
     let work: PushWork | null;
+    /** The confirmed channel, when the write completing the work was refused. */
+    let unjournaled: { endpoint: string; listed?: PushDevice } | null = null;
     try {
       const listing = untilAbort(
         request(confirmStep, (signal) => pushListDevices(userId, signal)),
@@ -415,15 +420,27 @@ export function beginExplicitDeparture(): ExplicitDeparture {
             guardOf(step),
           );
           refining = refined;
-          const result = await refined;
-          if (!written.includes(result.work.id)) written.push(result.work.id);
-          if (result.localWork !== null) written.push(result.localWork.id);
-          work = result.work;
-          if (removable) removal = endpoint;
+          try {
+            const result = await refined;
+            if (!written.includes(result.work.id)) written.push(result.work.id);
+            if (result.localWork !== null) written.push(result.localWork.id);
+            work = result.work;
+            if (removable) removal = endpoint;
+          } catch (error) {
+            if (error instanceof StepEnded || !isLive(step)) throw error;
+            // The store refused the completing write: the revocation and the
+            // removal go on without it.
+            unjournaled = { endpoint, listed: listedSub };
+          }
         }
       }
     } finally {
       confirm.stop();
+    }
+    if (unjournaled !== null) {
+      const labels = work !== null && work.type === 'deviceRevoke' ? work.labels : snapshot.labels;
+      await revokeUnjournaled(labels, previous.endpoint, devices, unjournaled.endpoint, unjournaled.listed);
+      return;
     }
 
     if (devices !== null) {
@@ -461,28 +478,51 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   }
 
   /**
-   * The server part when the transition could not be written: one
-   * revocation of the labels S holds and of the endpoint the confirmation
-   * names, and the removal of that channel by the usual rule — without a
-   * journal, so nothing of it is repeated once the page is left.
+   * The server part when the transition could not be written, or its result
+   * is not known (the write may have landed, its check failed): from the
+   * record as it was before it, one revocation of the labels S held and of
+   * the endpoint the confirmation names, and the removal of that channel by
+   * the usual rule — without a journal, so nothing of it is repeated once
+   * the page is left.
    */
   async function revokeUnsaved(devices: PushDevice[] | null, read: ChannelRead, signal: AbortSignal): Promise<void> {
-    const consent = readConsent(userId);
-    const labels = [...consent.labels];
     let endpoint: string | undefined;
+    let listed: PushDevice | undefined;
     if (read.kind === 'channel') {
-      const named = await untilAbort(confirmedChannel(read.channel.endpoint, devices, consent), signal);
+      const named = await untilAbort(confirmedChannel(read.channel.endpoint, devices, snapshot), signal);
       live(step);
       if (named !== undefined && named.value.confirmed) {
         endpoint = read.channel.endpoint;
-        const label = named.value.listed?.deviceLabel ?? null;
-        if (label !== null && !labels.includes(label) && labels.length < MAX_CONSENT_LABELS) labels.push(label);
-        if (devices !== null) removal = endpoint;
+        listed = named.value.listed;
       }
     }
-    if (labels.length === 0 && endpoint === undefined) return;
-    const outcome = await sendRevocation(step, labels, endpoint, progress);
-    if (outcome.kind === 'ok' && endpoint !== undefined && endpoint === consent.endpoint) removal = endpoint;
+    await revokeUnjournaled(snapshot.labels, snapshot.endpoint, devices, endpoint, listed);
+  }
+
+  /**
+   * One revocation of `labels` and of the confirmed `endpoint` with the
+   * label of the subscription `listed` there — or, with a full S, the
+   * removal of that subscription by id (`pushState.ts#withListedLabel`) —
+   * and the removal of the channel by the usual rule, without a journal.
+   */
+  async function revokeUnjournaled(
+    labels: string[],
+    consentEndpoint: string | null,
+    devices: PushDevice[] | null,
+    endpoint: string | undefined,
+    listed: PushDevice | undefined,
+  ): Promise<void> {
+    const plan = withListedLabel(labels, listed === undefined ? undefined : { id: listed.id, label: listed.deviceLabel });
+    if (endpoint !== undefined && devices !== null) removal = endpoint;
+    if (plan.labels.length === 0 && endpoint === undefined) return;
+    const outcome = await sendRevocation(step, plan.labels, endpoint, progress);
+    if (outcome.kind !== 'ok') return;
+    progress.revoked = true;
+    if (plan.removeSubscriptionId !== undefined) {
+      const id = plan.removeSubscriptionId;
+      await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id }, signal));
+    }
+    if (endpoint !== undefined && endpoint === consentEndpoint) removal = endpoint;
   }
 
   async function clearOffUnconfirmed(): Promise<void> {

@@ -943,6 +943,57 @@ describe('row 64 (a) — the logout holds skein.push.op; it removes only the cha
   });
 });
 
+describe('row 64 — a write of the journal the store refuses does not stop the revocation (Edge 10)', () => {
+  /** Lets `setItem` of the push state run until its `n`-th call, which `fail` replaces. */
+  function failingWrite(n: number, fail: (write: () => void) => void): () => void {
+    const real = Storage.prototype.setItem;
+    let calls = 0;
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === PUSH_STATE_KEY) calls += 1;
+      if (key === PUSH_STATE_KEY && calls === n) return fail(() => real.call(this, key, value));
+      return real.call(this, key, value);
+    });
+    return () => spy.mockRestore();
+  }
+
+  test('only the write completing the work is refused: the labels and the confirmed endpoint are revoked, the channel goes', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    const restore = failingWrite(2, () => {
+      throw new DOMException('the quota is full', 'QuotaExceededError');
+    });
+
+    try {
+      expect(await clickLogout().verdict).toBe('proceed');
+    } finally {
+      restore();
+    }
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: a.endpoint }]);
+    expect(server.subs).toEqual([]);
+    expect(browser.channel).toBeNull();
+  });
+
+  test('the transition is written but its check fails: S comes from the record before it, also with the channel unread', async () => {
+    browser.readFails = true;
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    const restore = failingWrite(1, (write) => {
+      write();
+      throw new DOMException('the write could not be confirmed', 'UnknownError');
+    });
+
+    try {
+      expect(await clickLogout().verdict).toBe('proceed');
+    } finally {
+      restore();
+    }
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
+  });
+});
+
 // ───────────────────────── Row 69 ─────────────────────────
 
 describe('row 69 — the deletion of the account invalidates the owner\'s operations started before', () => {
