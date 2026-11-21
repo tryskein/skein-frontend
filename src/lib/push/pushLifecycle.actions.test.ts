@@ -629,6 +629,49 @@ describe('row 61 — the revocation transition is decided on the record under sk
   });
 });
 
+describe('row 56 — the channel an enable created goes when a revocation came meanwhile (rule 8)', () => {
+  test('"user changed" on the registration after a revocation wrote the consent: the consent stays off, the new channel goes', async () => {
+    const tab = await openTab(A);
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      // A logout in another tab: its transition keeps the undo of the enable from writing.
+      await revokeConsent(A, { endpoint: args.endpoint, guard: 'unconfirmed' });
+      return { kind: 'userChanged' };
+    });
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
+    expect(readConsent(A)).toMatchObject({ state: 'off', labels: [] });
+    expect(browser.created).toBe(1);
+    expect(browser.channel).toBeNull();
+  });
+
+  test('the appearance is replaced while the registration is answered after a revocation: the new channel goes', async () => {
+    const tab = await openTab(A);
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      const answer = await model.subscribe(args);
+      await revokeConsent(A, { endpoint: args.endpoint, guard: 'unconfirmed' });
+      tab.appearance.noteLogin(A);
+      return answer;
+    });
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
+    expect(browser.created).toBe(1);
+    expect(browser.channel).toBeNull();
+  });
+
+  test('the appearance is replaced while the registration is answered, without a revocation: the channel stays for the next appearance', async () => {
+    const tab = await openTab(A);
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      const answer = await model.subscribe(args);
+      tab.appearance.noteLogin(A);
+      return answer;
+    });
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
+    expect(browser.channel).not.toBeNull();
+    expect(readConsent(A)).toMatchObject({ state: 'enabled', endpoint: browser.channel?.endpoint });
+  });
+});
+
 describe('row 61 — the transition is taken back only while nothing of it reached the server (rule 5)', () => {
   test('the appearance is replaced after the transition, before the revocation request: the transition is taken back', async () => {
     const x = channel('x');

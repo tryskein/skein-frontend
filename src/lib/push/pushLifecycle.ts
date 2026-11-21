@@ -466,6 +466,43 @@ async function undoingOnUserChanged<T>(
   }
 }
 
+/**
+ * Passes `outcome` on; when it fails after the registration of a channel
+ * the step created was sent and `revokedSince` says a revocation of this
+ * device came meanwhile, the channel is removed: the revocation did not know
+ * it, so it is nobody's. Without a revocation the channel stays — the
+ * consent is unconfirmed, and the next appearance repeats the registration.
+ */
+async function compensatingCreated<T>(
+  created: boolean,
+  revokedSince: () => boolean,
+  endpoint: string,
+  outcome: Promise<T>,
+): Promise<T> {
+  try {
+    return await outcome;
+  } catch (error) {
+    if (created && revokedSince()) await removeChannelQuietly(endpoint, null);
+    throw error;
+  }
+}
+
+/**
+ * The undo of a write before the registration of a channel the step
+ * created: the consent is put back if nothing wrote it since, and the
+ * channel goes in any case — also when a newer write (a revocation) keeps
+ * the consent as it is.
+ */
+function undoWithCreatedChannel(undoConsent: () => Promise<void>, endpoint: string): () => Promise<void> {
+  return async () => {
+    try {
+      await undoConsent();
+    } finally {
+      await removeChannelQuietly(endpoint, null);
+    }
+  };
+}
+
 /** Puts the consent back as `previous` if `written` is still the last write of it. */
 function undoConsentWrite(userId: string, previous: Consent, written: Consent): () => Promise<void> {
   return async () => {
@@ -493,23 +530,28 @@ async function register(
 ): Promise<void> {
   const { step, userId } = ctx;
   let sent = false;
-  const outcome = await undoingOnUserChanged(
-    request(step, (signal) => {
-      sent = true;
-      return pushSubscribe(
-        {
-          expectedUserId: userId,
-          endpoint,
-          keys,
-          ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
-          deviceLabel: plan.label,
-          mode: plan.mode,
-        },
-        signal,
-      );
-    }),
-    undo,
-    () => sent,
+  const outcome = await compensatingCreated(
+    created,
+    () => sent && readConsent(userId).gen !== consent.gen,
+    endpoint,
+    undoingOnUserChanged(
+      request(step, (signal) => {
+        sent = true;
+        return pushSubscribe(
+          {
+            expectedUserId: userId,
+            endpoint,
+            keys,
+            ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+            deviceLabel: plan.label,
+            mode: plan.mode,
+          },
+          signal,
+        );
+      }),
+      undo,
+      () => sent,
+    ),
   );
   switch (outcome.kind) {
     case 'ok':
@@ -609,10 +651,7 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         channel.keys,
         fingerprint,
         action.register,
-        async () => {
-          await undoConsentWrite(userId, consent, recorded)();
-          await removeChannelQuietly(channel.endpoint, null);
-        },
+        undoWithCreatedChannel(undoConsentWrite(userId, consent, recorded), channel.endpoint),
         true,
       );
       return;
@@ -1168,26 +1207,29 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
   const written = pending;
 
   let sent = false;
-  const outcome = await undoingOnUserChanged(
-    request(step, (signal) => {
-      sent = true;
-      return pushSubscribe(
-        {
-          expectedUserId: userId,
-          endpoint: channel.endpoint,
-          keys: channel.keys,
-          ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
-          deviceLabel: label,
-          mode: 'upsert',
-        },
-        signal,
-      );
-    }),
-    async () => {
-      await undoConsentWrite(userId, consent, written)();
-      if (created) await removeChannelQuietly(channel.endpoint, null);
-    },
-    () => sent,
+  const undoEnable = undoConsentWrite(userId, consent, written);
+  const outcome = await compensatingCreated(
+    created,
+    () => sent && readConsent(userId).gen !== gen,
+    channel.endpoint,
+    undoingOnUserChanged(
+      request(step, (signal) => {
+        sent = true;
+        return pushSubscribe(
+          {
+            expectedUserId: userId,
+            endpoint: channel.endpoint,
+            keys: channel.keys,
+            ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+            deviceLabel: label,
+            mode: 'upsert',
+          },
+          signal,
+        );
+      }),
+      created ? undoWithCreatedChannel(undoEnable, channel.endpoint) : undoEnable,
+      () => sent,
+    ),
   );
   const ctx: DecisionContext = {
     step,
