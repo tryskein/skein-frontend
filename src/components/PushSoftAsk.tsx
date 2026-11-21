@@ -85,6 +85,21 @@ export function PushSoftAsk() {
   if (!invites && mine?.phase !== 'failed') return null;
 
   const seq = appearance.seq;
+  if (!invites) {
+    // The conditions of US-12 no longer hold (the enable wrote the consent):
+    // the reason alone, without the invitation and without "Not now".
+    return (
+      <div className="version-check-banner" role="region" aria-label={t('push.aria')}>
+        <span className="version-check-banner-text" role="alert">
+          {mine?.message}
+        </span>
+        <Button size="xs" variant="default" onClick={() => setAnswer({ seq, phase: 'hidden' })}>
+          {t('push.close')}
+        </Button>
+      </div>
+    );
+  }
+
   const onYes = () => {
     // First, inside the click: the permission prompt needs the gesture.
     const action = enable();
@@ -117,11 +132,9 @@ export function PushSoftAsk() {
       ) : null}
       {/* sk-381 — no `color`: the primary ramp answers `--on-primary`
        * (src/theme.ts), Mantine's builtin cyan did not meet contrast. */}
-      {invites ? (
-        <Button size="xs" variant="filled" loading={mine?.phase === 'busy'} onClick={onYes}>
-          {t('push.yes')}
-        </Button>
-      ) : null}
+      <Button size="xs" variant="filled" loading={mine?.phase === 'busy'} onClick={onYes}>
+        {t('push.yes')}
+      </Button>
       <Button size="xs" variant="default" disabled={mine?.phase === 'busy'} onClick={onLater}>
         {t('push.later')}
       </Button>

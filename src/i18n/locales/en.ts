@@ -278,6 +278,7 @@ export const en = {
       body: 'Turn on desktop notifications? Skein will push new tasks, mentions and reminders to you.',
       yes: 'Yes',
       later: 'Not now',
+      close: 'Close',
       foreignAria: 'Notifications of the previous user',
       foreignBody:
         'Notifications of the previous user of this browser may still arrive here until the server confirms their removal.',

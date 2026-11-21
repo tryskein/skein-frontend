@@ -207,6 +207,12 @@ describe('row 76a — the banner through the real controller', () => {
 
     expect(screen.getByRole('alert').textContent).toBe(i18n.t('push:device.failed.unconfirmed'));
     expect(screen.queryByRole('button', { name: i18n.t('chrome:push.yes') })).toBeNull();
+    // Not an invitation any more: neither its text nor "Not now".
+    expect(screen.queryByText(i18n.t('chrome:push.body'))).toBeNull();
+    expect(screen.queryByRole('button', { name: i18n.t('chrome:push.later') })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chrome:push.close') }));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   test('"Not now" waits while "Yes" runs, so a late answer cannot bring the banner back past it', async () => {
