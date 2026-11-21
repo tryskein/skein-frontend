@@ -837,18 +837,6 @@ export async function addPushWork(work: NewPushWork, guard?: WriteGuard): Promis
   return commit((record) => appendWork(record, work), guard);
 }
 
-/**
- * Replaces the work `id` with `next` in one write: a finished step whose
- * follow-up must survive a closed tab (a confirmed revocation followed by
- * the removal of the channel). A missing id only adds `next`.
- */
-export async function replacePushWork(id: string, next: NewPushWork, guard?: WriteGuard): Promise<PushWork> {
-  return commit((record) => {
-    record.works = record.works.filter((w) => w.id !== id);
-    return appendWork(record, next);
-  }, guard);
-}
-
 /** Removes a finished work; a missing id is not an error. */
 export async function removePushWork(id: string, guard?: WriteGuard): Promise<void> {
   await commit((record) => {
