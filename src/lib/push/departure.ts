@@ -471,9 +471,11 @@ export function beginExplicitDeparture(): ExplicitDeparture {
       // (a) U is confirmed.
       let done = work === null ? read.kind === 'none' : await repeatOwnRevocation(step, asRevocation(work), progress);
       const works = readPushState().works;
-      const held = await heldLockNames();
+      const held = await heldLockNames().catch(() => null);
       for (const earlier of works) {
-        if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier, held)) continue;
+        if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+        // Without a snapshot a marked work is not taken for free.
+        if (held === null ? earlier.heldBy !== undefined : isHeld(earlier, held)) continue;
         done = (await repeatOwnRevocation(step, earlier)) && done;
       }
       if (done) await clearOffUnconfirmed();

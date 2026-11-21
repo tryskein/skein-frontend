@@ -299,21 +299,22 @@ async function repeatLocalUnsubscribe(
 
 /**
  * Rule 6: the unfinished work of the browser, as user `step.token.userId`.
- * Returns the locks of the explicit logouts whose works it skipped (still
- * theirs, `pushState.ts#isHeld`): the caller repeats once they are free.
+ * A work an explicit logout still holds (`pushState.ts#isHeld`) is skipped,
+ * and `onHeld` hears its lock at once — the repeat is arranged at the first
+ * skip, whatever the rest of the step does.
  */
-async function repeatWork(step: Step): Promise<string[]> {
+async function repeatWork(step: Step, onHeld: (lock: string | null) => void): Promise<void> {
   const userId = step.token.userId;
   // The journal first, then the locks: a work written by a logout carries a
   // lock taken before the write, so a snapshot taken after the read shows
   // it while that logout is live.
   const works = readPushState().works;
-  const held = await heldLockNames();
+  const held = await heldLocksOrNull();
   live(step);
-  const skipped = new Set<string>();
   for (const work of works) {
-    if (isHeld(work, held)) {
-      skipped.add(heldByOf(work));
+    if (held === null ? heldByOf(work) !== '' : isHeld(work, held)) {
+      // Without a snapshot no marked work is taken for free (no fail-open).
+      onHeld(held === null ? null : heldByOf(work));
       continue;
     }
     switch (work.type) {
@@ -343,7 +344,6 @@ async function repeatWork(step: Step): Promise<string[]> {
         break;
     }
   }
-  return [...skipped];
 }
 
 /** The lock a held work is held by. */
@@ -351,17 +351,58 @@ function heldByOf(work: PushWork): string {
   return work.type === 'foreignRemoval' ? '' : (work.heldBy ?? '');
 }
 
+/** How many times a repeat is tried again when the browser's locks could not be read or waited for. */
+export const HOLD_RETRIES = 3;
+
+/** How long to wait before such a try. */
+export const HOLD_RETRY_MS = 1000;
+
+/** The snapshot of the held locks, or `null` when the browser cannot give one. */
+async function heldLocksOrNull(): Promise<Set<string> | null> {
+  try {
+    return await heldLockNames();
+  } catch {
+    return null;
+  }
+}
+
+/** Repeats waiting, by the lock (or `''` for a retry) and the repeat they run. */
+const waiting = new Map<string, Set<string>>();
+
+/** How many tries a repeat already had after the locks could not be read or waited for. */
+const retries = new Map<string, number>();
+
 /**
- * Runs `repeat` again once every lock in `names` is free — the explicit
- * logouts that held the works a repeat skipped have ended — and only while
- * the controller still runs. One wait per skipping repeat.
+ * Runs `repeat` once the lock `lock` is free — the explicit logout that held
+ * the works a repeat skipped has ended — while the controller still runs.
+ * Each lock is waited for on its own; one wait per lock and `key`. With
+ * `lock` `null` (the locks could not be read), or when the wait itself is
+ * refused, `repeat` runs again after {@link HOLD_RETRY_MS}, at most
+ * {@link HOLD_RETRIES} times per `key`.
  */
-function repeatAfterHolds(names: string[], repeat: () => Promise<void>): void {
-  if (names.length === 0) return;
-  void Promise.all(names.map((name) => afterLockReleased(name))).then(() => {
-    if (stopAppearance !== null) return repeat();
-    return undefined;
-  });
+function repeatWhenFree(lock: string | null, key: string, repeat: () => Promise<void>): void {
+  const name = lock ?? '';
+  const keys = waiting.get(name) ?? new Set<string>();
+  if (keys.has(key)) return;
+  keys.add(key);
+  waiting.set(name, keys);
+  const run = () => {
+    keys.delete(key);
+    if (keys.size === 0) waiting.delete(name);
+    if (stopAppearance !== null) void repeat().catch(() => undefined);
+  };
+  const later = () => {
+    const tries = retries.get(key) ?? 0;
+    if (tries >= HOLD_RETRIES) {
+      keys.delete(key);
+      if (keys.size === 0) waiting.delete(name);
+      return;
+    }
+    retries.set(key, tries + 1);
+    setTimeout(run, HOLD_RETRY_MS);
+  };
+  if (lock === null) later();
+  else afterLockReleased(lock).then(run, later);
 }
 
 /**
@@ -953,7 +994,14 @@ async function readServerPush(step: Step): Promise<{ state: ServerPush; publicKe
 async function decideOnAppearance(step: Step): Promise<DecisionResult> {
   const userId = step.token.userId;
   live(step);
-  const skipped = await repeatWork(step);
+  // The decision is run again, while this appearance is current, once a
+  // logout whose works or barrier it met has ended.
+  const token = step.token;
+  const again = (lock: string | null) =>
+    repeatWhenFree(lock, `appearance:${token.seq}`, async () => {
+      if (isCurrentAppearance(token)) await runAppearance(token);
+    });
+  await repeatWork(step, again);
 
   const read = await readChannel(step.signal);
   live(step);
@@ -984,13 +1032,13 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
       devices: listed.kind === 'ok' ? listed.value : null,
       thisDeviceHash: ownEndpoint === null ? null : await endpointFingerprint(ownEndpoint),
     });
-    return { shown: null, skipped };
+    return { shown: null };
   }
 
   const list = await request(step, (signal) => pushListDevices(userId, signal));
   if (list.kind !== 'ok') {
     publish(step, { decided: false, row: 1 });
-    return { shown: null, skipped };
+    return { shown: null };
   }
 
   const server = await readServerPush(step);
@@ -1000,10 +1048,12 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
   const works = readPushState().works;
   // Read after the consent and the journal: a logout of U that wrote them
   // began before, and its lock is in this snapshot while it is live.
-  const heldNow = await heldLockNames();
+  const heldNow = await heldLocksOrNull();
   live(step);
-  const departing = liveDeparturesOf(heldNow, userId);
-  skipped.push(...departing);
+  // Without a snapshot a live logout of U cannot be ruled out: rows 7 and 10 wait.
+  const departing = heldNow === null ? null : liveDeparturesOf(heldNow, userId);
+  if (departing === null) again(null);
+  else for (const lock of departing) again(lock);
   const decision = decide({
     consent,
     channel,
@@ -1016,7 +1066,7 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
     blocks: {
       ownRevokePending: works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId),
       foreignRemovalPending: works.some((w) => w.type === 'localUnsubscribe'),
-      ownRevokeHeld: departing.length > 0,
+      ownRevokeHeld: departing === null || departing.length > 0,
     },
   });
 
@@ -1050,17 +1100,12 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
         ? await endpointFingerprint(ownEndpoint)
         : null;
   publish(step, { ...shown, devices: list.value, thisDeviceHash });
-  return { shown: decision.action.type === 'nothing' ? null : shown, skipped };
+  return { shown: decision.action.type === 'nothing' ? null : shown };
 }
 
-/**
- * What a decision leaves for after its lock: what to publish again with a
- * fresh read (`null` when it did not act), and the locks of the explicit
- * logouts whose works it skipped.
- */
+/** What a decision leaves for after its lock: what to publish again with a fresh read (`null` when it did not act). */
 interface DecisionResult {
   shown: Partial<PushLifecycleState> | null;
-  skipped: string[];
 }
 
 // ───────────────────────── Running ─────────────────────────
@@ -1105,11 +1150,6 @@ async function runAppearance(token: Appearance): Promise<void> {
     const result = await underOpLock(token, decideOnAppearance);
     if (endedEarly(result)) return;
     if (result.shown !== null) await publishFresh(token, result.shown);
-    // The works an explicit logout still held are repeated once it ended,
-    // with a fresh read under the lock, while this appearance is current.
-    repeatAfterHolds(result.skipped, async () => {
-      if (isCurrentAppearance(token)) await runAppearance(token);
-    });
   } catch {
     // A storage failure or a consent that moved on ends the decision as it
     // stands; the next appearance decides again.
@@ -1146,20 +1186,22 @@ async function repeatLocalUnsubscribesOnLoad(): Promise<void> {
   // them): a browser that does not answer does not keep the lock.
   const controller = new AbortController();
   running.add(controller);
-  const skipped = new Set<string>();
   try {
     await withPushOpLock(async () => {
       const works = readPushState().works;
-      const held = await heldLockNames();
+      const held = await heldLocksOrNull();
       for (const work of works) {
         if (controller.signal.aborted) return;
         if (work.type !== 'localUnsubscribe') continue;
-        if (isHeld(work, held)) skipped.add(heldByOf(work));
-        else await repeatLocalUnsubscribe(work, null, controller.signal);
+        if (held === null ? work.heldBy !== undefined : isHeld(work, held)) {
+          // Repeated once the logout that holds it ended — arranged now,
+          // whatever happens to the rest of this pass.
+          repeatWhenFree(held === null ? null : heldByOf(work), 'load', repeatLocalUnsubscribesOnLoad);
+          continue;
+        }
+        await repeatLocalUnsubscribe(work, null, controller.signal);
       }
     }, controller.signal);
-    // Works a running logout still held: repeated once it ended.
-    repeatAfterHolds([...skipped], repeatLocalUnsubscribesOnLoad);
   } catch {
     // Storage or locks failed, or the repeat was ended: the work stays for the next load.
   } finally {
@@ -1655,9 +1697,10 @@ export async function revokeConfirmedDevice(
     // Earlier unfinished revocations of this device by the same owner are
     // sent now as well: a disable asked again is the manual retry of US-3.
     const works = readPushState().works;
-    const held = await heldLockNames();
+    const held = await heldLocksOrNull();
     for (const earlier of works) {
-      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier, held)) continue;
+      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+      if (held === null ? earlier.heldBy !== undefined : isHeld(earlier, held)) continue;
       done = (await repeatOwnRevocation(step, earlier)) && done;
     }
   } catch (error) {

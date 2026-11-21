@@ -1033,6 +1033,96 @@ describe('row 64 — a write of the journal the store refuses does not stop the 
   });
 });
 
+describe('row 66 — the repeat of works a logout held is arranged at the first skip, per lock, without fail-open', () => {
+  const M1 = 'skein.push.departure.' + A + '.m1';
+  const M2 = 'skein.push.departure.' + A + '.m2';
+  const LABEL_C = 'cccccccc-0000-4000-8000-000000000003';
+
+  function hold(name: string): () => void {
+    const holder = deferred<void>();
+    void locks.request(name, { mode: 'exclusive' }, () => holder.promise);
+    return () => holder.resolve();
+  }
+
+  test('two logouts\' works: each is repeated when its own lock is free, the other one still waits', async () => {
+    seed({ [A]: { state: 'off', gen: 2 } }, [
+      { id: 'w1', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed', heldBy: M1 },
+      { id: 'w2', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_C], guard: 'unconfirmed', heldBy: M2 },
+    ]);
+    const release1 = hold(M1);
+    const release2 = hold(M2);
+    startPushLifecycle();
+    appearA();
+    await flush();
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+
+    release1();
+    await flush();
+    expect(revocationBodies().map((b) => b.deviceLabels)).toEqual([[LABEL_A]]);
+
+    release2();
+    await settle(locks);
+    expect(revocationBodies().map((b) => b.deviceLabels)).toEqual([[LABEL_A], [LABEL_C]]);
+    expect(readPushState().works).toEqual([]);
+  });
+
+  test('the browser cannot give the snapshot of its locks: a marked work is not performed, and is tried again later', async () => {
+    seed({ [A]: { state: 'off', gen: 1 } }, [
+      { id: 'w', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed', heldBy: M1 },
+    ]);
+    const query = locks.query.bind(locks);
+    let refusals = 2;
+    locks.query = async () => {
+      if (refusals > 0) {
+        refusals -= 1;
+        throw new DOMException('the document is not fully active', 'InvalidStateError');
+      }
+      return query();
+    };
+    startPushLifecycle();
+    appearA();
+    await flush();
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+
+    await new Promise((r) => realSetTimeout(r, 1100));
+    await settle(locks);
+    expect(api.pushRevokeDevices).toHaveBeenCalledTimes(1);
+    expect(readPushState().works).toEqual([]);
+  });
+
+  test('a page load skips a held removal, then fails on another work: the held one is still repeated when its logout ends', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    seed({}, [
+      { id: 'u1', type: 'localUnsubscribe', endpoint: a.endpoint, heldBy: M1 },
+      { id: 'u2', type: 'localUnsubscribe', endpoint: channel('gone').endpoint },
+    ]);
+    const release = hold(M1);
+    // Finishing the second work fails once.
+    const real = Storage.prototype.setItem;
+    let failed = false;
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === PUSH_STATE_KEY && !failed) {
+        failed = true;
+        throw new DOMException('the quota is full', 'QuotaExceededError');
+      }
+      return real.call(this, key, value);
+    });
+    try {
+      startPushLifecycle();
+      await flush();
+      expect(failed).toBe(true);
+      expect(browser.channel).toEqual(a);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    release();
+    await settle(locks);
+    expect(browser.channel).toBeNull();
+  });
+});
+
 // ───────────────────────── Row 69 ─────────────────────────
 
 describe('row 69 — the deletion of the account invalidates the owner\'s operations started before', () => {
