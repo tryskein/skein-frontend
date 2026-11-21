@@ -16,7 +16,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { loginApi, LoginPayload, logoutApi, type LogoutResponse, meApi, User } from '../api/auth';
+import { checkSessionApi, loginApi, LoginPayload, logoutApi, type LogoutResponse, meApi, User } from '../api/auth';
 import { clearDensityBootCache } from '../lib/densityBootCache';
 import { clearNavLayoutBootCache } from '../lib/navLayoutBootCache';
 import { clearThemeBootCache } from '../lib/themeBootCache';
@@ -274,12 +274,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // only clears its cookie, so it goes only when the cookie is known
         // to hold no session — never on someone else's.
         const deletion = await departAfterAccountDeletion(owner, async () => {
-          const signedIn: unknown = await meApi();
-          if (signedIn === null) return { kind: 'none' };
-          const id = typeof signedIn === 'object' && signedIn !== null ? (signedIn as { id?: unknown }).id : undefined;
-          if (typeof id === 'string' && id !== '') return { kind: 'user', id };
-          // An answer that names nobody is no proof that no session is left.
-          throw new Error('the answer of /me names no user');
+          const signedIn = await checkSessionApi();
+          // An answer that is not a 401 and names nobody is no proof that no
+          // session is left.
+          if (signedIn.kind === 'unknown') throw new Error('the answer of /me is not known');
+          return signedIn;
         });
         if (deletion === 'superseded') return { kind: 'superseded' };
         if (deletion === 'userChanged') {

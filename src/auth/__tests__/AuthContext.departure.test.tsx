@@ -37,12 +37,14 @@ import { PUSH_STATE_KEY, readConsent, readPushState, recordUnconfirmedChannel } 
 
 const auth = vi.hoisted(() => ({
   meApi: vi.fn(),
+  checkSessionApi: vi.fn(),
   logoutApi: vi.fn(),
   getAuthConfig: vi.fn(),
 }));
 
 vi.mock('../../api/auth', () => ({
   meApi: (...args: unknown[]) => auth.meApi(...args),
+  checkSessionApi: (...args: unknown[]) => auth.checkSessionApi(...args),
   logoutApi: (...args: unknown[]) => auth.logoutApi(...args),
   getAuthConfig: (...args: unknown[]) => auth.getAuthConfig(...args),
   loginApi: vi.fn(),
@@ -137,6 +139,8 @@ beforeEach(() => {
   installPushHarness(api, browserApi, locks);
   server.caller = A;
   auth.meApi.mockReset().mockImplementation(async () => user(server.caller));
+  // The check before the logout after an account deletion (api/auth.ts#checkSessionApi).
+  auth.checkSessionApi.mockReset().mockImplementation(async () => ({ kind: 'user', id: server.caller }));
   auth.logoutApi.mockReset().mockImplementation(async () => ({ redirectTo: SIGN_OUT_URL }));
   auth.getAuthConfig.mockReset().mockResolvedValue({ authMode: 'keycloak', logoutRedirectUrl: SIGN_OUT_URL, mcpUrl: null });
   assign = vi.fn();
@@ -462,7 +466,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null), [B]: enabledConsent(LABEL_B, channel('b'), null) });
     await mount();
     // The deletion ended every session of the account (skein-api: after the 204 the next request gets 401).
-    auth.meApi.mockImplementation(async () => null);
+    auth.checkSessionApi.mockImplementation(async () => ({ kind: 'none' }));
 
     await act(async () => {
       await current().logout('accountDeleted');
@@ -486,7 +490,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     await mount();
     await settle(locks);
     expect(getPushLifecycleState().devices).toHaveLength(1);
-    auth.meApi.mockImplementation(async () => null);
+    auth.checkSessionApi.mockImplementation(async () => ({ kind: 'none' }));
 
     await act(async () => {
       await current().logout('accountDeleted', current().appearance);
@@ -504,7 +508,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     pushOnForA();
     browser.channel = old;
     await mount();
-    auth.meApi.mockImplementation(async () => null);
+    auth.checkSessionApi.mockImplementation(async () => ({ kind: 'none' }));
 
     await act(async () => {
       await current().logout('accountDeleted', current().appearance);
@@ -542,7 +546,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     pushOnForA();
     await mount();
     const owner = current().appearance;
-    auth.meApi.mockImplementation(async () => null);
+    auth.checkSessionApi.mockImplementation(async () => ({ kind: 'none' }));
     // The 401 handler: no user is confirmed any more, nobody else appeared.
     act(() => noteSignedOut());
 
@@ -597,7 +601,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     await waitFor(() => expect((client.getQueryData(ME_KEY) as User | null)?.id).toBe(B));
   });
 
-  test('accountDeleted: the cookie is read after the clean-up, and an answer naming nobody is no 401', async () => {
+  test('accountDeleted: the cookie is read after the clean-up, and an answer that is not a 401 and names nobody sends no logout', async () => {
     pushOnForA();
     const client = await mount();
     const events: string[] = [];
@@ -606,9 +610,9 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
       events.push('removeChannel');
       return removeChannel(...args);
     });
-    auth.meApi.mockImplementation(async () => {
+    auth.checkSessionApi.mockImplementation(async () => {
       events.push('me');
-      return {};
+      return { kind: 'unknown' };
     });
 
     let result: unknown;
@@ -626,7 +630,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     pushOnForA();
     const client = await mount();
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    auth.meApi.mockImplementation(() => new Promise(() => undefined));
+    auth.checkSessionApi.mockImplementation(() => new Promise(() => undefined));
 
     let result: unknown;
     const pending = current()
@@ -649,7 +653,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     pushOnForA();
     await mount();
     const owner = current().appearance;
-    auth.meApi.mockImplementation(async () => null);
+    auth.checkSessionApi.mockImplementation(async () => ({ kind: 'none' }));
     const consentRead = readConsent(A);
     // Another tab of A: an enable that read the consent before the deletion
     // holds skein.push.op and writes its new channel after it.

@@ -302,6 +302,35 @@ export async function confirmEmail(token: string): Promise<void> {
  * instead of throwing — the AuthProvider keeps `null` as a stable
  * "logged out" state.
  */
+/**
+ * Whose session the cookie holds, as `GET /api/auth/me` answers on the wire:
+ * `none` only for the status 401; `user` only for 200 with a JSON object
+ * carrying a non-empty string `id`; anything else — 204, 200 with `null` or
+ * without an id, another status, an unreadable body, no answer — is
+ * `unknown`. The logout after an account deletion asks this before it
+ * clears the cookie: only a 401 shows that no session is left to end.
+ */
+export type SessionCheck = { kind: 'none' } | { kind: 'user'; id: string } | { kind: 'unknown' };
+
+export async function checkSessionApi(): Promise<SessionCheck> {
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/me', { credentials: 'include', headers: { Accept: 'application/json' } });
+  } catch {
+    return { kind: 'unknown' };
+  }
+  if (response.status === 401) return { kind: 'none' };
+  if (response.status !== 200) return { kind: 'unknown' };
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { kind: 'unknown' };
+  }
+  const id = body !== null && typeof body === 'object' ? (body as { id?: unknown }).id : undefined;
+  return typeof id === 'string' && id !== '' ? { kind: 'user', id } : { kind: 'unknown' };
+}
+
 export async function meApi(): Promise<User | null> {
   try {
     return await apiJson<User>('/api/auth/me');
