@@ -574,9 +574,21 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     const outcome = await sendRevocation(step, plan.labels, endpoint, progress).finally(releaseIfFinal);
     if (outcome.kind !== 'ok') return;
     progress.revoked = true;
-    if (plan.removeSubscriptionId !== undefined) {
+    if (plan.removeSubscriptionId !== undefined && endpoint !== undefined && listed !== undefined) {
       const id = plan.removeSubscriptionId;
-      await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id }, signal));
+      const removed = await request(step, (signal) => pushRemoveDevice({ expectedUserId: userId, id }, signal));
+      if (removed.kind !== 'ok' && removed.kind !== 'notFound') {
+        // The labels are revoked; the removal by id is left to the owner's
+        // repeat when the journal takes it.
+        try {
+          await addPushWork(
+            { type: 'deviceRevoke', ownerUserId: userId, labels: [], endpoint, guard: { id: listed.id, version: listed.version }, removeSubscriptionId: id },
+            guardOf(step),
+          );
+        } catch (error) {
+          if (error instanceof StepEnded || !isLive(step)) throw error;
+        }
+      }
     }
     if (endpoint !== undefined && endpoint === consentEndpoint) removal = endpoint;
   }

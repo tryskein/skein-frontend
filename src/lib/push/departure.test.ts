@@ -976,6 +976,29 @@ describe('row 64 — a write of the journal the store refuses does not stop the 
     expect(browser.channel).toBeNull();
   });
 
+  test('without the completing write, a full S: the removal by id that fails is journaled for the owner', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    const sub = addSub(A, a.endpoint, LABEL_A);
+    const labels = Array.from({ length: 1000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    seed({ [A]: { state: 'none', labels, endpoint: a.endpoint } });
+    appearA();
+    api.pushRemoveDevice.mockImplementationOnce(async () => ({ kind: 'lost' }));
+    const restore = failingWrite(2, () => {
+      throw new DOMException('the quota is full', 'QuotaExceededError');
+    });
+
+    try {
+      expect(await clickLogout().verdict).toBe('proceed');
+    } finally {
+      restore();
+    }
+    expect(api.pushRemoveDevice).toHaveBeenCalledWith({ expectedUserId: A, id: sub.id }, expect.any(AbortSignal));
+    expect(readPushState().works).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, removeSubscriptionId: sub.id })]),
+    );
+  });
+
   /** The read back right after the transition's write gives something else: the write is not confirmed. */
   function unconfirmedTransition(): () => void {
     const realGet = Storage.prototype.getItem;
