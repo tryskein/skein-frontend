@@ -162,6 +162,21 @@ export class PushStorageError extends Error {
 }
 
 /**
+ * The write was given to the storage but could not be confirmed (the read
+ * back failed or differs): the record holds the previous or the new state
+ * whole. `attempted` is what the write would have made — built under the
+ * store lock, so a caller can tell its own works and generation apart from
+ * anyone else's afterwards. A refusal of `setItem` itself is a plain
+ * {@link PushStorageError}: then nothing changed.
+ */
+export class PushWriteUnconfirmedError extends PushStorageError {
+  constructor(readonly attempted: unknown) {
+    super('the push state did not persist');
+    this.name = 'PushWriteUnconfirmedError';
+  }
+}
+
+/**
  * A new label or a registration of a user meets a live explicit logout of
  * that user (`locks.ts#DEPARTURE_LOCK_PREFIX`), or whether one is live
  * could not be known. Nothing changed.
@@ -415,7 +430,7 @@ async function commit<T>(
     } catch {
       after = null;
     }
-    if (after !== next) throw new PushStorageError('the push state did not persist');
+    if (after !== next) throw new PushWriteUnconfirmedError(result);
     return result;
   }, signal);
 }
@@ -884,6 +899,11 @@ export interface UndoRevocationArgs {
   previous: Consent;
   /** The works the revocation wrote. */
   workIds: string[];
+  /**
+   * The lock of the explicit logout the transition is of: every work it
+   * holds goes too, also one whose write could not be confirmed.
+   */
+  heldBy?: string;
 }
 
 /**
@@ -900,10 +920,13 @@ export async function undoRevocation(userId: string, args: UndoRevocationArgs, g
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
-    if (!args.workIds.every((id) => record.works.some((w) => w.id === id))) {
+    const present = (id: string) => record.works.some((w) => w.id === id);
+    if (!args.workIds.every(present)) {
       throw new PushStateConflictError('a work of the revocation was finished meanwhile');
     }
-    record.works = record.works.filter((w) => !args.workIds.includes(w.id));
+    record.works = record.works.filter(
+      (w) => !args.workIds.includes(w.id) && !(args.heldBy !== undefined && w.type !== 'foreignRemoval' && w.heldBy === args.heldBy),
+    );
     return store(record, userId, { ...args.previous, gen: consent.gen, rev: consent.rev });
   }, guard);
 }

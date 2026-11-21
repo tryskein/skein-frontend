@@ -976,14 +976,34 @@ describe('row 64 — a write of the journal the store refuses does not stop the 
     expect(browser.channel).toBeNull();
   });
 
-  test('the transition is written but its check fails: S comes from the record before it, also with the channel unread', async () => {
+  /** The read back right after the transition's write gives something else: the write is not confirmed. */
+  function unconfirmedTransition(): () => void {
+    const realGet = Storage.prototype.getItem;
+    const realSet = Storage.prototype.setItem;
+    let pending = false;
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      realSet.call(this, key, value);
+      if (key === PUSH_STATE_KEY && JSON.parse(value).consents?.[A]?.state === 'off' && !pending) pending = true;
+    });
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key === PUSH_STATE_KEY && pending) {
+        pending = false;
+        set.mockRestore();
+        return null;
+      }
+      return realGet.call(this, key);
+    });
+    return () => {
+      set.mockRestore();
+      get.mockRestore();
+    };
+  }
+
+  test('the transition landed but its read back failed: the revocation carries the S of that transition, also with the channel unread', async () => {
     browser.readFails = true;
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
-    const restore = failingWrite(1, (write) => {
-      write();
-      throw new DOMException('the write could not be confirmed', 'UnknownError');
-    });
+    const restore = unconfirmedTransition();
 
     try {
       expect(await clickLogout().verdict).toBe('proceed');
@@ -991,6 +1011,25 @@ describe('row 64 — a write of the journal the store refuses does not stop the 
       restore();
     }
     expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
+    expect(readConsent(A)).toMatchObject({ state: 'off', labels: [] });
+  });
+
+  test('the transition landed but its read back failed, then "user changed" on the revocation: it is taken back', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    const consentBefore = readConsent(A);
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'userChanged' }));
+    const restore = unconfirmedTransition();
+
+    try {
+      expect(await clickLogout().verdict).toBe('userChanged');
+      await settle(locks);
+    } finally {
+      restore();
+    }
+    expect(effective(readConsent(A))).toEqual(effective(consentBefore));
+    expect(readPushState().works).toEqual([]);
   });
 });
 

@@ -74,11 +74,14 @@ import {
   isHeld,
   type PushWork,
   readConsent,
+  PushWriteUnconfirmedError,
   readPushState,
   refineRevocation,
+  type RefineRevocationResult,
   removePushWork,
   retireConsent,
   type RetireConsentResult,
+  type RevokeConsentResult,
   revokeConsent,
   type RevokeGuard,
   setConsentOffUnconfirmed,
@@ -310,10 +313,23 @@ export function beginExplicitDeparture(): ExplicitDeparture {
         if (abandoned) throw new DOMException('the logout was refused', 'AbortError');
       },
     });
-  }).then((result) => {
-    if (result.work !== null) written.push(result.work.id);
-    return result;
-  });
+  }).then(
+    (result) => {
+      if (result.work !== null) written.push(result.work.id);
+      return result;
+    },
+    (error: unknown) => {
+      // Given to the storage, not confirmed: the transition as it was built
+      // under the store lock is this logout's — its S, its generation, its
+      // works — whether or not it landed (a take-back is a compare-and-set).
+      if (error instanceof PushWriteUnconfirmedError) {
+        const attempted = error.attempted as RevokeConsentResult;
+        if (attempted.work !== null) written.push(attempted.work.id);
+        return attempted;
+      }
+      throw error;
+    },
+  );
   transition.catch(() => undefined);
 
   async function takeBack(): Promise<void> {
@@ -330,7 +346,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     try {
       await undoRevocation(
         userId,
-        { expect: { gen: result.consent.gen, rev: result.consent.rev }, previous: result.previous, workIds: written },
+        { expect: { gen: result.consent.gen, rev: result.consent.rev }, previous: result.previous, workIds: written, heldBy },
         {
           // Only while the works are still held: once the lock is free a
           // repeat may have performed them.
@@ -428,9 +444,17 @@ export function beginExplicitDeparture(): ExplicitDeparture {
             if (removable) removal = endpoint;
           } catch (error) {
             if (error instanceof StepEnded || !isLive(step)) throw error;
-            // The store refused the completing write: the revocation and the
-            // removal go on without it.
-            unjournaled = { endpoint, listed: listedSub };
+            if (error instanceof PushWriteUnconfirmedError) {
+              // Maybe landed: its works are known by the logout's lock (a
+              // take-back removes them by it), the revocation goes on with
+              // the work as it was built.
+              work = (error.attempted as RefineRevocationResult).work;
+              if (removable) removal = endpoint;
+            } else {
+              // The store refused the completing write: the revocation and
+              // the removal go on without it.
+              unjournaled = { endpoint, listed: listedSub };
+            }
           }
         }
       }
@@ -468,9 +492,14 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     // names, its removal journaled.
     if (revocation.endpoint !== undefined) {
       if (revocation.endpoint === previous.endpoint) {
-        const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint, heldBy, ownerUserId: userId }, guardOf(step));
-        written.push(local.id);
+        // The channel goes whether or not its removal can be journaled.
         removal = revocation.endpoint;
+        try {
+          const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint, heldBy, ownerUserId: userId }, guardOf(step));
+          written.push(local.id);
+        } catch (error) {
+          if (error instanceof StepEnded || !isLive(step)) throw error;
+        }
       }
       return;
     }
