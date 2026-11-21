@@ -749,6 +749,40 @@ describe('row 56 — the channel an enable created goes when a revocation came m
     expect(readConsent(A)).toMatchObject({ state: 'enabled', pending: null, endpoint: created?.endpoint });
   });
 
+  test('the label went into the work of a logout still live, which is then taken back: the registered channel stays', async () => {
+    const tab2 = await openTab(A);
+    tab2.lifecycle.startPushLifecycle();
+    await settle();
+    let tab1: { appearance: typeof import('../../auth/appearance'); departure: import('./departure').ExplicitDeparture } | null = null;
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      const answer = await model.subscribe(args);
+      // Tab 1: A clicks "Log out"; its confirmation is still on its way.
+      api.pushListDevices.mockImplementationOnce(() => new Promise(() => undefined));
+      vi.resetModules();
+      const appearance = await import('../../auth/appearance');
+      const departure = await import('./departure');
+      appearance.noteLogin(A);
+      tab1 = { appearance, departure: departure.beginExplicitDeparture() };
+      for (let i = 0; i < 200 && readConsent(A).state !== 'off'; i += 1) await new Promise((r) => setTimeout(r, 0));
+      return answer;
+    });
+
+    expect(await tab2.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
+    const created = browser.channel;
+    expect(created).not.toBeNull();
+
+    // A new session in tab 1 before its revocation was sent: superseded, taken back.
+    tab1!.appearance.noteLogin(A);
+    expect(await tab1!.departure.prepare()).toBe('superseded');
+    await settle();
+    for (let i = 0; i < 50; i += 1) await new Promise((r) => setTimeout(r, 0));
+    await settle();
+
+    expect(browser.channel).toEqual(created);
+    expect(readConsent(A).labels).toHaveLength(1);
+    tab1!.appearance.noteSignedOut();
+  });
+
   test('the appearance is replaced while the registration is answered, without a revocation: the channel stays for the next appearance', async () => {
     const tab = await openTab(A);
     api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {

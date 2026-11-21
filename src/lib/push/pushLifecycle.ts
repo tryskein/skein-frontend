@@ -609,6 +609,35 @@ function revokedSince(userId: string, label: string): boolean {
 }
 
 /**
+ * Removes the channel an operation created for `label` when a revocation
+ * that stands took that label (`revokedSince`). A label that went into the
+ * work of an explicit logout still live is not that yet — the logout may
+ * take it back: the removal is then decided again, under `skein.push.op`,
+ * once that logout ended.
+ */
+async function dropIfRevoked(userId: string, label: string, endpoint: string): Promise<void> {
+  if (!revokedSince(userId, label)) return;
+  // The journal first, then the locks (see repeatWork).
+  const works = readPushState().works;
+  const held = await heldLocksOrNull();
+  const holder = works.find(
+    (w): w is Extract<PushWork, { type: 'deviceRevoke' }> =>
+      w.type === 'deviceRevoke' &&
+      w.ownerUserId === userId &&
+      w.labels.includes(label) &&
+      w.heldBy !== undefined &&
+      (held === null || held.has(w.heldBy)),
+  );
+  if (holder === undefined) {
+    await dropCreatedChannel(endpoint, userId);
+    return;
+  }
+  repeatWhenFree(held === null ? null : (holder.heldBy ?? null), `drop:${endpoint}`, () =>
+    withPushOpLock(() => dropIfRevoked(userId, label, endpoint)),
+  );
+}
+
+/**
  * Passes `outcome` on; when it fails after the registration of a channel
  * the step created was sent and `revokedSince` says a revocation of this
  * device came meanwhile, the channel is removed: the revocation did not know
@@ -617,7 +646,8 @@ function revokedSince(userId: string, label: string): boolean {
  */
 async function compensatingCreated<T>(
   created: boolean,
-  revokedSince: () => boolean,
+  sent: () => boolean,
+  label: string,
   endpoint: string,
   userId: string,
   outcome: Promise<T>,
@@ -625,7 +655,7 @@ async function compensatingCreated<T>(
   try {
     return await outcome;
   } catch (error) {
-    if (created && revokedSince()) await dropCreatedChannel(endpoint, userId);
+    if (created && sent()) await dropIfRevoked(userId, label, endpoint);
     throw error;
   }
 }
@@ -743,7 +773,8 @@ async function register(
   let sent = false;
   const outcome = await compensatingCreated(
     created,
-    () => sent && revokedSince(userId, plan.label),
+    () => sent,
+    plan.label,
     endpoint,
     userId,
     undoingOnUserChanged(
@@ -792,7 +823,7 @@ async function register(
     // this decision created is nobody's once a revocation of this device came
     // meanwhile, which did not know it (revokedSince). Without one it stays
     // for the repeat, and a later appearance confirms it (row 4).
-    if (created && revokedSince(userId, plan.label)) await dropCreatedChannel(endpoint, userId);
+    if (created) await dropIfRevoked(userId, plan.label, endpoint);
   }
 }
 
@@ -1481,7 +1512,8 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
   const undoEnable = undoConsentWrite(userId, consent, written);
   const outcome = await compensatingCreated(
     created,
-    () => sent && revokedSince(userId, label),
+    () => sent,
+    label,
     channel.endpoint,
     userId,
     undoingOnUserChanged(
@@ -1566,7 +1598,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
     // On every way out — an answer, a refused write, an ended step: a channel
     // this enable created is nobody's once a revocation of this device came
     // meanwhile. Without one it stays for the repeat of an unknown answer.
-    if (created && revokedSince(userId, label)) await dropCreatedChannel(channel.endpoint, userId);
+    if (created) await dropIfRevoked(userId, label, channel.endpoint);
   }
 }
 
