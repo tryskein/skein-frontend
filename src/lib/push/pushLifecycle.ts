@@ -539,6 +539,18 @@ async function undoingOnUserChanged<T>(
 }
 
 /**
+ * Whether a revocation of this device that stands took `label` since it was
+ * sent: a revocation transition moves S whole into its work, and only that
+ * takes a label out of S. A transition taken back puts S back — the
+ * generation grows all the same, so it is the barrier for writes, not the
+ * proof of a revocation. A retired consent (the account was deleted) holds
+ * no label.
+ */
+function revokedSince(userId: string, label: string): boolean {
+  return !readConsent(userId).labels.includes(label);
+}
+
+/**
  * Passes `outcome` on; when it fails after the registration of a channel
  * the step created was sent and `revokedSince` says a revocation of this
  * device came meanwhile, the channel is removed: the revocation did not know
@@ -604,7 +616,7 @@ async function register(
   let sent = false;
   const outcome = await compensatingCreated(
     created,
-    () => sent && readConsent(userId).gen !== consent.gen,
+    () => sent && revokedSince(userId, plan.label),
     endpoint,
     undoingOnUserChanged(
       request(step, (signal) => {
@@ -650,8 +662,9 @@ async function register(
   } finally {
     // On every way out — an answer, a refused write, an ended step: a channel
     // this decision created is nobody's once a revocation of this device came
-    // meanwhile, which did not know it. Without one it stays for the repeat.
-    if (created && readConsent(userId).gen !== consent.gen) await removeChannelQuietly(endpoint, null);
+    // meanwhile, which did not know it (revokedSince). Without one it stays
+    // for the repeat, and a later appearance confirms it (row 4).
+    if (created && revokedSince(userId, plan.label)) await removeChannelQuietly(endpoint, null);
   }
 }
 
@@ -1334,7 +1347,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
   const undoEnable = undoConsentWrite(userId, consent, written);
   const outcome = await compensatingCreated(
     created,
-    () => sent && readConsent(userId).gen !== gen,
+    () => sent && revokedSince(userId, label),
     channel.endpoint,
     undoingOnUserChanged(
       request(step, (signal) => {
@@ -1418,7 +1431,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
     // On every way out — an answer, a refused write, an ended step: a channel
     // this enable created is nobody's once a revocation of this device came
     // meanwhile. Without one it stays for the repeat of an unknown answer.
-    if (created && readConsent(userId).gen !== gen) await removeChannelQuietly(channel.endpoint, null);
+    if (created && revokedSince(userId, label)) await removeChannelQuietly(channel.endpoint, null);
   }
 }
 

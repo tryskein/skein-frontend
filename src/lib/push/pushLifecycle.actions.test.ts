@@ -32,7 +32,7 @@ import {
 } from '../../test/pushHarness';
 import type { NotificationPermissionState } from './browserPush';
 import { PUSH_OP_LOCK, PUSH_STORE_LOCK } from './locks';
-import { PUSH_STATE_KEY, readConsent, readPushState, retireConsent, revokeConsent } from './pushState';
+import { PUSH_STATE_KEY, readConsent, readPushState, retireConsent, revokeConsent, undoRevocation } from './pushState';
 
 const api = vi.hoisted(() => ({
   getPushConfig: vi.fn(),
@@ -686,6 +686,30 @@ describe('row 56 — the channel an enable created goes when a revocation came m
     await openTab(A, true);
     expect(browser.created).toBe(1);
     expect(browser.channel).toBeNull();
+  });
+
+  test('a revocation transition taken back while the registration was on its way: the registered channel stays, the next appearance confirms it', async () => {
+    const tab = await openTab(A);
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      const answer = await model.subscribe(args);
+      // A logout in another tab wrote its transition and took it back (nothing was sent).
+      const transition = await revokeConsent(A, { endpoint: null, guard: 'unconfirmed' });
+      await undoRevocation(A, {
+        expect: { gen: transition.consent.gen, rev: transition.consent.rev },
+        previous: transition.previous,
+        workIds: transition.work === null ? [] : [transition.work.id],
+      });
+      return answer;
+    });
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
+    const created = browser.channel;
+    expect(created).not.toBeNull();
+    expect(readConsent(A)).toMatchObject({ state: 'enabled', endpoint: created?.endpoint });
+
+    await openTab(A, true);
+    expect(browser.channel).toEqual(created);
+    expect(readConsent(A)).toMatchObject({ state: 'enabled', pending: null, endpoint: created?.endpoint });
   });
 
   test('the appearance is replaced while the registration is answered, without a revocation: the channel stays for the next appearance', async () => {
