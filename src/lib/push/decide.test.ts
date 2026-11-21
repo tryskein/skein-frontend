@@ -138,6 +138,12 @@ describe('row 41 — rows 2–10 of the decision table', () => {
     ['row 10 (US-3): explicitly off, own channel not listed → remove the channel',
       input(consentOf('off'), channel(OWN), EMPTY_LIST),
       { row: 10, action: { type: 'removeChannel', endpoint: OWN } }],
+    ['row 7 while a running logout holds the own revocation → nothing: the revocation is that logout\'s',
+      input(consentOf('off'), channel(OWN), listed(device(OWN, LABEL)), { blocks: { ownRevokePending: true, foreignRemovalPending: false, ownRevokeHeld: true } }),
+      { row: 7, action: NOTHING }],
+    ['row 10 while a running logout holds the own revocation → nothing: the removal is that logout\'s',
+      input(consentOf('off'), channel(OWN), EMPTY_LIST, { blocks: { ownRevokePending: true, foreignRemovalPending: false, ownRevokeHeld: true } }),
+      { row: 10, action: NOTHING }],
   ])('%s', (_name, given, expected) => {
     expect(decide(given)).toEqual(expected);
   });

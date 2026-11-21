@@ -67,6 +67,12 @@ export interface DecisionBlocks {
   ownRevokePending: boolean;
   /** The removal of a previous user's channel in this browser is not finished. */
   foreignRemovalPending: boolean;
+  /**
+   * A revocation of this user's own device is still held by an explicit
+   * logout that may take it back (`pushState.ts#isHeld`): rows 7 and 10 do
+   * nothing — the revocation and the removal stay that logout's work.
+   */
+  ownRevokeHeld?: boolean;
 }
 
 export interface DecisionInput {
@@ -169,6 +175,7 @@ export function decide(input: DecisionInput): Decision {
   const own = consent.endpoint !== null && channel.endpoint === consent.endpoint;
 
   if (consent.state === 'off') {
+    if (blocks.ownRevokeHeld === true && (listed !== undefined || own)) return decision(listed !== undefined ? 7 : 10);
     if (listed !== undefined) {
       // One revocation request carries at most MAX_CONSENT_LABELS labels. The
       // listed subscription's label joins S when it fits; otherwise that

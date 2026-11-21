@@ -702,6 +702,53 @@ describe('row 56 — the channel an enable created goes when a revocation came m
   });
 });
 
+describe('row 7 against a logout in another tab that may still be taken back (rule 5, US-4)', () => {
+  test('tab 2 decides while tab 1 logs out: rows 7/10 wait; the logout is superseded; A\'s subscription and channel stay', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    // Tab 2: its decision holds skein.push.op from before the click and waits for the server's configuration.
+    const config = deferred<void>();
+    api.getPushConfig.mockImplementationOnce(async () => {
+      await config.promise;
+      return { publicKey: server.publicKey };
+    });
+    const tab2 = await openTab(A);
+    tab2.lifecycle.startPushLifecycle();
+    for (let i = 0; i < 200 && api.getPushConfig.mock.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(api.getPushConfig).toHaveBeenCalledTimes(1);
+
+    // Tab 1: A clicks "Log out"; the transition (off, the held revocation) is
+    // written, its confirmation is still on its way.
+    api.pushListDevices.mockImplementationOnce(() => new Promise(() => undefined));
+    vi.resetModules();
+    const tab1Appearance = await import('../../auth/appearance');
+    const tab1Departure = await import('./departure');
+    tab1Appearance.noteLogin(A);
+    const departure = tab1Departure.beginExplicitDeparture();
+    for (let i = 0; i < 200 && readConsent(A).state !== 'off'; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(readConsent(A).state).toBe('off');
+
+    // Tab 2 decides on the off consent: row 7 must not revoke or remove.
+    config.resolve();
+    for (let i = 0; i < 50; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    expect(browser.channel).toEqual(x);
+
+    // A new session in tab 1 before its revocation was sent: superseded, taken back.
+    tab1Appearance.noteLogin(A);
+    expect(await departure.prepare()).toBe('superseded');
+    await settle();
+
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    expect(server.subs.map((sub) => sub.endpoint)).toEqual([x.endpoint]);
+    expect(browser.channel).toEqual(x);
+    expect(readConsent(A)).toMatchObject({ state: 'enabled', label: LABEL_A, endpoint: x.endpoint });
+    tab1Appearance.noteSignedOut();
+  });
+});
+
 describe('a browser read under skein.push.op ends with the operation (Edge 13)', () => {
   test('the channel read of a decision does not answer: ending the operation frees the lock', async () => {
     browserApi.readChannel.mockImplementationOnce(

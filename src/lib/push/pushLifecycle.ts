@@ -916,6 +916,10 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
   const permission = notificationPermission();
   const consent = readConsent(userId);
   const works = readPushState().works;
+  const heldNow = await heldLockNames();
+  live(step);
+  const ownHeld = works.filter((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId && isHeld(w, heldNow));
+  for (const work of ownHeld) skipped.push(heldByOf(work));
   const decision = decide({
     consent,
     channel,
@@ -928,6 +932,7 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
     blocks: {
       ownRevokePending: works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId),
       foreignRemovalPending: works.some((w) => w.type === 'localUnsubscribe'),
+      ownRevokeHeld: ownHeld.length > 0,
     },
   });
 

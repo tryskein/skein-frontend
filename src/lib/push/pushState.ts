@@ -778,7 +778,11 @@ export async function refineRevocation(userId: string, args: RefineRevocationArg
     } else {
       work = appendWork(record, next);
     }
-    const journaled = record.works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === args.endpoint);
+    // A logout journals its own held removal, also beside an older one of
+    // the same endpoint: that one is not this logout's to hold or take back.
+    const journaled = record.works.some(
+      (w) => w.type === 'localUnsubscribe' && w.endpoint === args.endpoint && w.heldBy === args.heldBy,
+    );
     const localWork =
       args.localUnsubscribe && !journaled
         ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint: args.endpoint }, args.heldBy))

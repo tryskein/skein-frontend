@@ -757,6 +757,31 @@ describe('row 64 (b) — a refused logout takes its transition back before anyon
     expect(readPushState().works.filter((w) => w.type === 'localUnsubscribe')).toEqual([]);
   });
 
+  test('an appearance of U while the logout still holds its works: the revocation and the removal come once it ended, without another appearance', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    const departure = beginExplicitDeparture();
+    expect(await departure.prepare()).toBe('proceed');
+    // A reload before the logout ended: the document confirms A again.
+    startPushLifecycle();
+    noteLogin(A);
+    await flush();
+    expect(api.pushRevokeDevices).toHaveBeenCalledTimes(1);
+    expect(browser.channel).toEqual(a);
+
+    departure.cancel();
+    await settle(locks);
+    expect(api.pushRevokeDevices).toHaveBeenCalledTimes(2);
+    expect(server.subs).toEqual([]);
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works).toEqual([]);
+  });
+
   test.each([
     { shift: -3_600_000, case: 'back by an hour' },
     { shift: 3_600_000, case: 'forward by an hour' },
