@@ -908,6 +908,15 @@ async function runAppearance(token: Appearance): Promise<void> {
   }
 }
 
+/**
+ * Ends the push operations this tab runs for the current appearance: an
+ * explicit logout does so in the click, so its wait for `skein.push.op` is
+ * not a wait for this tab's own decision or action.
+ */
+export function abortPushOperations(): void {
+  abortRunning('the user is logging out');
+}
+
 function abortRunning(reason: string): void {
   for (const controller of running) controller.abort(new DOMException(reason, 'AbortError'));
   running.clear();

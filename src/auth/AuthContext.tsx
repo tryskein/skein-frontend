@@ -26,8 +26,8 @@ import { checkLogoutRedirect } from './logoutRedirect';
 import { toaster } from '../components/Toaster';
 import {
   type Appearance,
+  appearedSince,
   currentAppearance,
-  isCurrentAppearance,
   type MeReadReason,
   noteLogin,
   noteMeAnswer,
@@ -239,30 +239,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // is the one from the latest render — not the one captured before the config
   // query resolved.
   // The order of an explicit logout: the revocation of this device
-  // (`prepare`), `POST /api/auth/logout`, the removal of the push channel
-  // (`finish`), then `onSettled` writes `null` and follows the SSO/OIDC
-  // redirect — the channel is gone before the page is left.
+  // (`prepare`, started in the click), `POST /api/auth/logout` with the
+  // removal of the push channel beside it (`finish`), then `onSettled`
+  // writes `null` and follows the SSO/OIDC redirect — the channel is gone
+  // before the page is left.
   const logoutMutation = useMutation<LogoutOutcome, Error, LogoutVariables>({
     mutationFn: async ({ kind, departure, owner, asked }) => {
       const verdict = departure === null ? 'proceed' : await departure.prepare();
-      if (verdict === 'userChanged') {
-        // The page appears again with the user the server confirmed; their
-        // session is not ended.
-        await reloadMeAfterUserChanged();
-        return { kind: 'userChanged' };
+      // The logout request ends the session of whoever the cookie names now:
+      // it goes only while nothing says that is someone else — no "user
+      // changed" heard, no other appearance since the click (the request may
+      // have waited for the network, push or not).
+      const refusal =
+        verdict !== 'proceed'
+          ? verdict
+          : departure !== null
+            ? departure.refusal()
+            : kind !== 'accountDeleted' && asked !== null && appearedSince(asked)
+              ? 'superseded'
+              : null;
+      if (refusal !== null) {
+        departure?.cancel();
+        if (refusal === 'userChanged') {
+          // The page appears again with the user the server confirmed; their
+          // session is not ended.
+          await reloadMeAfterUserChanged();
+          return { kind: 'userChanged' };
+        }
+        return { kind: 'superseded' };
       }
-      if (verdict === 'superseded') return { kind: 'superseded' };
-      // The logout request ends the session of whoever the cookie names now;
-      // it goes only while the appearance it was asked in is still current
-      // (the request may have waited for the network, push or not).
-      if (kind !== 'accountDeleted' && asked !== null && !isCurrentAppearance(asked)) return { kind: 'superseded' };
       if (kind === 'accountDeleted' && (await departAfterAccountDeletion(owner)) === 'superseded') {
         return { kind: 'superseded' };
       }
+      const sent = logoutApi();
+      const removal = departure === null ? Promise.resolve() : departure.finish();
       try {
-        return { kind: 'loggedOut', response: await logoutApi() };
+        return { kind: 'loggedOut', response: await sent };
       } finally {
-        if (departure !== null) await departure.finish();
+        await removal;
       }
     },
     onSettled: async (outcome) => {

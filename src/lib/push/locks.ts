@@ -2,10 +2,11 @@
  * Web Locks of the browser push state, shared by every tab of the origin.
  *
  *   - `skein.push.op` serialises a whole push operation (an enable, a
- *     disable, the decision on a user's appearance), network included.
+ *     disable, the decision on a user's appearance, an explicit logout or
+ *     the logout after an account deletion), network included. A logout
+ *     waits for it only within its budget and goes on without it.
  *   - `skein.push.store` serialises the short read-modify-write of the push
- *     state record, without network, so an explicit logout never waits for
- *     another tab's network call.
+ *     state record, without network.
  *
  * Both are taken in exclusive mode. Without `navigator.locks` the push parts
  * of the page are inactive: there is no other way to keep two tabs from

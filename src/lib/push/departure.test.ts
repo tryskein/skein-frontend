@@ -30,8 +30,8 @@ import {
   settle,
   uninstallPushHarness,
 } from '../../test/pushHarness';
-import { PUSH_STORE_LOCK } from './locks';
-import { PUSH_STATE_KEY, readConsent, readPushState } from './pushState';
+import { PUSH_OP_LOCK, PUSH_STORE_LOCK } from './locks';
+import { type Consent, emptyConsent, PUSH_STATE_KEY, readConsent, readPushState } from './pushState';
 
 const api = vi.hoisted(() => ({
   getPushConfig: vi.fn(),
@@ -59,6 +59,18 @@ vi.mock('./browserPush', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./browserPush')>()),
   ...browserApi,
 }));
+
+/** `hang` makes the fingerprint of an endpoint never come. */
+const fingerprint = vi.hoisted(() => ({ hang: false }));
+
+vi.mock('./fingerprint', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./fingerprint')>();
+  return {
+    ...real,
+    endpointFingerprint: (endpoint: string) =>
+      fingerprint.hang ? new Promise<string>(() => undefined) : real.endpointFingerprint(endpoint),
+  };
+});
 
 import {
   beginExplicitDeparture,
@@ -118,9 +130,13 @@ function appearA(): void {
   noteLogin(A);
 }
 
+/** The consent as the decision table sees it: without its generation and revision. */
+const effective = (consent: Consent) => ({ ...consent, gen: 0, rev: 0 });
+
 beforeEach(() => {
   locks = new FakeLocks();
   installPushHarness(api, browserApi, locks);
+  fingerprint.hang = false;
 });
 
 afterEach(async () => {
@@ -172,25 +188,32 @@ describe('row 63 — the logout is held up by push for at most 2 s (INV-7, SC-00
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateAtDeadline);
   });
 
-  test('the wait for skein.push.store hangs: the logout goes on by 1.75 s; a lock granted later writes nothing', async () => {
+  test('the wait for skein.push.store hangs: the logout goes on by 1.5 s; the transition lands once the lock comes, no request after the deadline', async () => {
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
     api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
     const holder = deferred<void>();
     void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => holder.promise);
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
 
     const run = clickLogout();
     await flush();
-    await vi.advanceTimersByTimeAsync(DEPARTURE_PREPARE_MS - 1);
+    // Without the transition by the end of the confirmation nothing else can
+    // be written: the server part ends there.
+    await vi.advanceTimersByTimeAsync(DEPARTURE_CONFIRM_MS - 1);
     expect(run.done()).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await flush();
     expect(run.done()).toBe(true);
+    expect(await run.verdict).toBe('proceed');
 
+    // The local part of the revocation is not given up with the budget: the
+    // next appearance of U finishes the work it leaves.
     holder.resolve();
     await flush();
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1, labels: [] });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed' }),
+    ]);
     expect(api.pushRevokeDevices).not.toHaveBeenCalled();
   });
 
@@ -329,10 +352,15 @@ describe('row 64 — the three branches of prepare', () => {
     seed({ [A]: enabledConsent(LABEL_A, a, null), [B]: enabledConsent(LABEL_B, channel('b'), null) });
     appearA();
     server.caller = B;
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    const consentOfA = readConsent(A);
+    const consentOfB = readConsent(B);
 
     expect(await clickLogout().verdict).toBe('userChanged');
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    await settle(locks);
+    // The transition written in the click is taken back: only the generation moved on.
+    expect(effective(readConsent(A))).toEqual(effective(consentOfA));
+    expect(readConsent(B)).toEqual(consentOfB);
+    expect(readPushState().works).toEqual([]);
     expect(api.pushRevokeDevices).not.toHaveBeenCalled();
     expect(browserApi.removeChannel).not.toHaveBeenCalled();
   });
@@ -460,6 +488,8 @@ describe('row 64 (b) — "user changed" on the revocation after the list confirm
     api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'userChanged' }));
 
     expect(await clickLogout().verdict).toBe('userChanged');
+    // Taking the transition back follows the verdict.
+    await settle(locks);
     // The generation moves on (an enable started before stays refused, rule 8); the rest is as before.
     expect({ ...readConsent(A), rev: 0, gen: 0 }).toEqual({ ...consentBefore, rev: 0, gen: 0 });
     expect(readPushState().works).toEqual([]);
@@ -468,39 +498,44 @@ describe('row 64 (b) — "user changed" on the revocation after the list confirm
 });
 
 describe('row 65 — the appearance grows after the click', () => {
-  test('a new login before the nearest effect: no state write, no further request, no channel removal', async () => {
+  test('a new login after the click, before the revocation request: no request, no removal; the transition is taken back', async () => {
     const a = channel('a');
     browser.channel = a;
     addSub(A, a.endpoint, LABEL_A);
     seed({ [A]: enabledConsent(LABEL_A, a, null) });
     appearA();
+    const consentBefore = readConsent(A);
     api.pushListDevices.mockImplementationOnce(async (userId: string) => {
       const listed = await model.list(userId);
       noteLogin(A);
       return listed;
     });
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
 
     expect(await clickLogout().verdict).toBe('superseded');
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    await settle(locks);
+    expect(effective(readConsent(A))).toEqual(effective(consentBefore));
+    expect(readPushState().works).toEqual([]);
     expect(allPushCalls()).toBe(1);
     expect(browserApi.removeChannel).not.toHaveBeenCalled();
   });
 });
 
 describe('row 64 (b) — "user changed" that arrives as the step ends', () => {
-  test('is still "user changed": the logout does not go on', async () => {
+  test('a list answer after the confirmation ran out is still "user changed": the logout does not go on', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
-    api.pushListDevices.mockImplementationOnce(async () => {
-      noteLogin(A);
-      return { kind: 'userChanged' };
-    });
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    const list = deferred<PushOutcome<never>>();
+    api.pushListDevices.mockImplementationOnce(() => list.promise);
+    api.pushRevokeDevices.mockImplementationOnce(() => never());
 
-    expect(await clickLogout().verdict).toBe('userChanged');
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
-    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    const run = clickLogout();
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_CONFIRM_MS + 100);
+    list.resolve({ kind: 'userChanged' });
+    await flush();
+
+    expect(await run.verdict).toBe('userChanged');
   });
 });
 
@@ -522,6 +557,195 @@ describe('row 65 — the appearance grows while a write waits for skein.push.sto
 
     expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
     expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+  });
+});
+
+// ───────────────────────── The model of the explicit logout ─────────────────────────
+
+describe('row 64 — the local part of the revocation is written before anything that may end the logout', () => {
+  test('a 401 of another request signs the page out during the logout: U is still off with an unfinished revocation', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'sessionEnded' }));
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'sessionEnded' }));
+    const holder = deferred<void>();
+    void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => holder.promise);
+
+    const run = clickLogout();
+    // The 401 handler: no user is confirmed any more, nobody else appeared.
+    noteSignedOut();
+    holder.resolve();
+
+    expect(await run.verdict).toBe('proceed');
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1, labels: [] });
+    expect(readPushState().works).toEqual([
+      expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed' }),
+    ]);
+  });
+});
+
+describe('row 64 (b) — the verdict is fixed when "user changed" arrives', () => {
+  test('the undo waits for skein.push.store past 1.75 s: the verdict stays "user changed", the logout does not go', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    const consentBefore = readConsent(A);
+    const holder = deferred<void>();
+    api.pushRevokeDevices.mockImplementationOnce(async () => {
+      // Another tab takes the store lock and keeps it past the deadline.
+      void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => holder.promise);
+      return { kind: 'userChanged' };
+    });
+
+    const departure = beginExplicitDeparture();
+    expect(await departure.prepare()).toBe('userChanged');
+    await new Promise((r) => realSetTimeout(r, DEPARTURE_PREPARE_MS + 50));
+    expect(departure.refusal()).toBe('userChanged');
+
+    holder.resolve();
+    await settle(locks);
+    expect(effective(readConsent(A))).toEqual(effective(consentBefore));
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(a);
+  });
+
+  test('"user changed" after the verdict, before the logout request: the request must not go; the transition is taken back', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    const consentBefore = readConsent(A);
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+    const revocation = deferred<PushOutcome>();
+    api.pushRevokeDevices.mockImplementationOnce(() => revocation.promise);
+
+    const departure = beginExplicitDeparture();
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_PREPARE_MS);
+    expect(await departure.prepare()).toBe('proceed');
+    expect(departure.refusal()).toBeNull();
+
+    // The logout request waits for the network; the revocation answers now.
+    revocation.resolve({ kind: 'userChanged' });
+    await flush();
+    expect(departure.refusal()).toBe('userChanged');
+    departure.cancel();
+    vi.useRealTimers();
+    await settle(locks);
+    expect(effective(readConsent(A))).toEqual(effective(consentBefore));
+    expect(readPushState().works).toEqual([]);
+  });
+
+  test('(c) "user changed" on the revocation without a confirmation: the transition is taken back', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    const consentBefore = readConsent(A);
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'userChanged' }));
+
+    expect(await clickLogout().verdict).toBe('userChanged');
+    await settle(locks);
+    expect(effective(readConsent(A))).toEqual(effective(consentBefore));
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(a);
+  });
+});
+
+describe('row 64 (a) — the logout holds skein.push.op; it removes only the channel read under it and named by the confirmation', () => {
+  test('another tab made B\'s channel before the lock came to this logout: it is not removed, its endpoint is not revoked', async () => {
+    const a = channel('a');
+    const b = channel('b');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    // B's tab holds the op lock: its decision replaces the channel with B's.
+    const holder = deferred<void>();
+    void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      await holder.promise;
+      browser.channel = b;
+      const record = JSON.parse(localStorage.getItem(PUSH_STATE_KEY)!);
+      record.consents[B] = { ...emptyConsent(), ...enabledConsent(LABEL_B, b, null) };
+      localStorage.setItem(PUSH_STATE_KEY, JSON.stringify(record));
+    });
+
+    const run = clickLogout();
+    await flush();
+    holder.resolve();
+
+    expect(await run.verdict).toBe('proceed');
+    await flush();
+    expect(browser.channel).toEqual(b);
+    expect(browserApi.removeChannel).not.toHaveBeenCalled();
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
+  });
+
+  test('another tab waits for skein.push.op while the logout holds it, until the channel is removed', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+
+    const departure = beginExplicitDeparture();
+    expect(await departure.prepare()).toBe('proceed');
+    let otherRan = false;
+    const other = locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      otherRan = true;
+      expect(browser.channel).toBeNull();
+    });
+    await flush();
+    expect(otherRan).toBe(false);
+
+    await departure.finish();
+    await other;
+    expect(otherRan).toBe(true);
+  });
+
+  test('skein.push.op is not granted within 1.5 s: branch (c) without reading or removing the channel', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    const holder = deferred<void>();
+    void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, () => holder.promise);
+
+    const run = clickLogout();
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
+    await flush();
+
+    expect(await run.verdict).toBe('proceed');
+    expect(browserApi.readChannel).not.toHaveBeenCalled();
+    expect(browserApi.removeChannel).not.toHaveBeenCalled();
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1 });
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
+    holder.resolve();
+  });
+
+  test('the fingerprint of the endpoint does not come within the confirmation: the transition stands, the channel stays', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    fingerprint.hang = true;
+
+    const run = clickLogout();
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
+    await flush();
+
+    expect(await run.verdict).toBe('proceed');
+    expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1, labels: [] });
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
+    expect(browser.channel).toEqual(a);
   });
 });
 

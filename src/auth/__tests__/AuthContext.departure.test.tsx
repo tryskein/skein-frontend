@@ -277,6 +277,66 @@ describe('row 64 (c) — an explicit logout while offline longer than 2 s', () =
   });
 });
 
+describe('row 68b — the channel removal runs beside the logout request', () => {
+  test('the revocation does not answer and the logout request takes 1 s: the known channel is still removed within 2 s', async () => {
+    pushOnForA();
+    await mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    api.pushRevokeDevices.mockImplementation(() => new Promise(() => undefined));
+    auth.logoutApi.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ redirectTo: SIGN_OUT_URL }), 1000)),
+    );
+
+    void current().logout('explicit');
+    await flush();
+    await vi.advanceTimersByTimeAsync(1750);
+    await flush();
+    expect(auth.logoutApi).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    expect(browser.channel).toBeNull();
+    expect(assign).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(750);
+    await flush();
+    expect(assign).toHaveBeenCalledWith(SIGN_OUT_URL);
+  });
+});
+
+describe('row 64 (c) — another user appears before the logout request', () => {
+  test('without a confirmation, offline: B signs in on this page before the request goes — no POST /api/auth/logout', async () => {
+    pushOnForA();
+    const client = await mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    onlineManager.setOnline(false);
+    api.pushListDevices.mockImplementation(async () => ({ kind: 'lost' }));
+    api.pushRevokeDevices.mockImplementation(async () => ({ kind: 'lost' }));
+
+    let result: unknown;
+    const pending = current()
+      .logout('explicit')
+      .then((r) => {
+        result = r;
+      });
+    await flush();
+    await vi.advanceTimersByTimeAsync(2500);
+    await flush();
+    server.caller = B;
+    act(() => noteLogin(B));
+    onlineManager.setOnline(true);
+    await flush();
+    await vi.advanceTimersByTimeAsync(0);
+    await flush();
+    await pending;
+
+    expect(result).toBe('superseded');
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(client.getQueryData(ME_KEY)).not.toBeNull();
+    // A left explicitly and something of the revocation went out: A's consent stays off.
+    expect(readPushState().consents[A]).toMatchObject({ state: 'off' });
+  });
+});
+
 // ───────────────────────── Row 68a ─────────────────────────
 
 describe('row 68a — the server confirmed another user', () => {
@@ -285,7 +345,7 @@ describe('row 68a — the server confirmed another user', () => {
     browser.channel = channel('b');
     const client = await mount();
     client.setQueryData(['issues', 'session'], 'data of the session');
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    const consentOfB = readPushState().consents[B];
     // Another tab signed B in: the cookie is B's now.
     server.caller = B;
 
@@ -298,7 +358,9 @@ describe('row 68a — the server confirmed another user', () => {
     expect((client.getQueryData(ME_KEY) as User | null)?.id).toBe(B);
     // The logout removes the session's queries; here none was removed.
     expect(client.getQueryCache().find({ queryKey: ['issues', 'session'] })).toBeDefined();
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    await settle(locks);
+    expect(readPushState().consents[B]).toEqual(consentOfB);
+    expect(readPushState().works).toEqual([]);
     expect(browser.channel).toEqual(channel('b'));
     expect(pushCallsBesidesList()).toBe(0);
   });

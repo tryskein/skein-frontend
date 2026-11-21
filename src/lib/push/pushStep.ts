@@ -32,6 +32,11 @@ export interface PushStep {
    * current appearance.
    */
   holds?: () => boolean;
+  /**
+   * Hears "user changed" the moment an answer brings it, before the step
+   * ends with it — an explicit logout fixes its verdict there.
+   */
+  onUserChanged?: () => void;
 }
 
 /** Whether the step may still have effects. */
@@ -56,7 +61,10 @@ export async function request<T>(
 ): Promise<PushOutcome<T>> {
   live(step);
   const outcome = await send(step.signal);
-  if (outcome.kind === 'userChanged') throw new StepEnded('userChanged');
+  if (outcome.kind === 'userChanged') {
+    step.onUserChanged?.();
+    throw new StepEnded('userChanged');
+  }
   live(step);
   return outcome;
 }

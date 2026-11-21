@@ -53,6 +53,17 @@ export function isCurrentAppearance(token: Appearance): boolean {
   return current !== null && current.seq === token.seq && current.userId === token.userId;
 }
 
+/**
+ * Whether another appearance began after `token` — a login or an answer of
+ * `/me` that grew `seq`, also one already followed by a sign-out. Unlike
+ * {@link isCurrentAppearance}, a sign-out alone (a 401: no user confirmed,
+ * nobody else appeared) does not count: the fact that someone appeared since
+ * is never forgotten.
+ */
+export function appearedSince(token: Appearance): boolean {
+  return lastSeq !== token.seq;
+}
+
 /** Subscribes to changes of the appearance; returns the unsubscribe. */
 export function subscribeAppearance(listener: Listener): () => void {
   listeners.add(listener);

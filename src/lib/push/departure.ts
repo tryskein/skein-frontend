@@ -11,56 +11,91 @@
  *   - a consequence of an event (the deactivation of U) and the end of a
  *     session that is not a logout: push is not touched.
  *
- * Explicit logout, in two parts around `POST /api/auth/logout`:
- *   `prepare` — the list confirms U: (a) the server part of the revocation
- *     (`pushLifecycle#revokeConfirmedDevice`); (b) the server says the user
- *     changed: the push part stops and the caller does not log out, the page
- *     appears again with the confirmed user; (c) U could not be confirmed
- *     (lost, session ended, an answer without the contract v2 marker): the
- *     exception of rule 5 — U's consent becomes "explicitly off", `gen`
- *     grows, and with a label or a known channel endpoint a `deviceRevoke`
- *     work guarded `unconfirmed` is written and one revocation is tried;
- *   `finish` — the channel known at the confirmation is removed: in (a), or
- *     in (c) after `ok` of the revocation.
- * The budget starts in the click and bounds both parts: every wait for the
- * `skein.push.store` lock, every push request and the channel removal. A step
- * that ends after the budget, or after the appearance was replaced, sends no
- * request and writes nothing. The explicit logout never takes
- * `skein.push.op`: it does not wait for another tab's network.
+ * An explicit logout, from the click:
+ *   1. the local part of the revocation is written first — U's consent
+ *      becomes "explicitly off", `gen` grows, S moves into a `deviceRevoke`
+ *      work guarded `unconfirmed` (rule 5, the exception of an explicit
+ *      logout). Nothing that may end the logout cancels this write: not a
+ *      401 that signs the page out without another user appearing, not the
+ *      budget (a write that waits for `skein.push.store` past it still lands
+ *      and leaves the work to the next appearance of U). Only a refusal of
+ *      the logout cancels it, or takes it back once written;
+ *   2. `skein.push.op` is requested, like any push operation, and held until
+ *      the channel is removed or the budget ends: while it is held no other
+ *      tab creates or accepts a channel, and a channel made after it is
+ *      released belongs to whoever appeared since — this logout never
+ *      removes it. U's list is read meanwhile (the confirmation of U);
+ *   3. holding the lock, the channel is read. A channel the confirmation
+ *      names as U's (in U's list, or the endpoint of U's consent) completes
+ *      the work (its endpoint, the guard from the list, the label of its
+ *      subscription) and its removal is journaled; then the revocation is
+ *      sent. Without a confirmation (lost, session ended, no contract v2
+ *      marker) the work still gets the endpoint read and one revocation is
+ *      tried; the channel goes only after its `ok`. Without the lock within
+ *      {@link DEPARTURE_CONFIRM_MS} the channel is neither read nor removed;
+ *   4. the verdict — `proceed`, `userChanged`, `superseded` — is fixed the
+ *      moment its cause is known: "user changed" in an answer, another
+ *      appearance on this page, or the end of the server part (at the
+ *      latest {@link DEPARTURE_PREPARE_MS} after the click). Taking the
+ *      transition back after a refusal is a consequence of the verdict that
+ *      neither its duration nor its failure changes;
+ *   5. `POST /api/auth/logout` goes only after `proceed`, and only while no
+ *      "user changed" was heard and no other appearance began
+ *      ({@link ExplicitDeparture#refusal}); the removal of the channel runs
+ *      beside it, within the budget.
+ * Taken back (rule 5) is a transition nothing of which reached the server:
+ * its revocation request was not sent, or the server answered "user
+ * changed" before it revoked the labels.
  */
 
-import { type PushDevice, type PushOutcome, pushListDevices, pushRevokeDevices } from '../../api/push';
-import { type Appearance, currentAppearance, isCurrentAppearance } from '../../auth/appearance';
+import { type PushDevice, pushListDevices, pushRevokeDevices } from '../../api/push';
+import {
+  type Appearance,
+  appearedSince,
+  currentAppearance,
+  subscribeAppearance,
+} from '../../auth/appearance';
 import { browserPushSupported, type ChannelRead, readChannel } from './browserPush';
-import { removeLocalChannel, revokeConfirmedDevice } from './pushLifecycle';
+import { endpointFingerprint } from './fingerprint';
+import { withPushOpLock } from './locks';
+import {
+  abortPushOperations,
+  removeLocalChannel,
+  repeatOwnRevocation,
+  type RevocationProgress,
+} from './pushLifecycle';
 import {
   addPushWork,
+  type Consent,
   deleteConsent,
+  type PushWork,
   readConsent,
+  readPushState,
+  refineRevocation,
   removePushWork,
   revokeConsent,
+  type RevokeGuard,
   setConsentOffUnconfirmed,
+  undoRevocation,
 } from './pushState';
-import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
+import { guardOf, isLive, live, type PushStep, request } from './pushStep';
 
 /** How long the push parts may hold up an explicit logout. */
 export const DEPARTURE_BUDGET_MS = 2000;
 
 /**
- * The part of the budget for confirming the user and reading the channel.
- * The rest is kept for the revocation transition, which an explicit logout
- * writes also when the confirmation did not come in time (rule 5).
+ * The part of the budget for the lock, the confirmation of the user and the
+ * reading of the channel. What did not come by then counts as not read.
  */
 export const DEPARTURE_CONFIRM_MS = 1500;
 
 /**
  * The part of the budget for the whole server part (`prepare`). The rest is
- * kept for removing the known channel after the logout request, also when
+ * kept for removing the known channel beside the logout request, also when
  * the revocation request does not answer.
  */
 export const DEPARTURE_PREPARE_MS = 1750;
 
-/** What the logout does after `prepare`. */
 /**
  * What the logout does after `prepare`: `proceed` — log out; `userChanged` —
  * the server confirmed another user, do not log out; `superseded` — another
@@ -71,16 +106,34 @@ export type DepartureVerdict = 'proceed' | 'userChanged' | 'superseded';
 
 /** The push part of one explicit logout. */
 export interface ExplicitDeparture {
-  /** The server part of the revocation; `userChanged` — do not log out. */
+  /** The verdict of the server part (see the module comment). */
   prepare(): Promise<DepartureVerdict>;
-  /** The removal of the channel; call it after `POST /api/auth/logout`. */
+  /**
+   * Why the logout request must not go now, `null` when it may: "user
+   * changed" was heard (also after `proceed`), or another appearance began
+   * since the click. Ask right before sending it.
+   */
+  refusal(): Exclude<DepartureVerdict, 'proceed'> | null;
+  /**
+   * Removes the channel the confirmation named; call it right after sending
+   * `POST /api/auth/logout`, beside it. Settles within the budget.
+   */
   finish(): Promise<void>;
+  /** The logout request will not be sent: the push part ends here. */
+  cancel(): void;
 }
 
-const NO_PUSH: ExplicitDeparture = {
-  prepare: async () => 'proceed',
-  finish: async () => undefined,
-};
+type Refusal = Exclude<DepartureVerdict, 'proceed'>;
+
+/** The push part of a logout without push support: only the appearance is checked. */
+function withoutPush(token: Appearance | null): ExplicitDeparture {
+  return {
+    prepare: async () => 'proceed',
+    refusal: () => (token !== null && appearedSince(token) ? 'superseded' : null),
+    finish: async () => undefined,
+    cancel: () => undefined,
+  };
+}
 
 /** Resolves with `work`, or with `fallback` once `signal` is aborted. */
 function withinBudget<T>(work: Promise<T>, signal: AbortSignal, fallback: T): Promise<T> {
@@ -99,23 +152,6 @@ function withinBudget<T>(work: Promise<T>, signal: AbortSignal, fallback: T): Pr
       },
     );
   });
-}
-
-/**
- * A step of `token` (by default the current appearance) with a deadline of
- * {@link DEPARTURE_BUDGET_MS}.
- */
-function budgetedStep(token: Appearance | null = currentAppearance()): { step: PushStep; stop: () => void } | null {
-  if (token === null || !browserPushSupported()) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new DOMException('the push part of the logout ran out of time', 'TimeoutError')),
-    DEPARTURE_BUDGET_MS,
-  );
-  return {
-    step: { token, signal: controller.signal },
-    stop: () => clearTimeout(timer),
-  };
 }
 
 /**
@@ -140,157 +176,294 @@ function untilAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<{ value: 
   });
 }
 
-/** A step of `step`'s appearance that also ends after `ms`. */
-function shorterStep(step: PushStep, ms: number): { step: PushStep; stop: () => void } {
+/** A controller aborted after `ms`, or with `parent`; `stop` clears the timer. */
+function deadline(ms: number, parent?: AbortSignal): { signal: AbortSignal; stop: () => void } {
   const controller = new AbortController();
-  const end = () => controller.abort(new DOMException('the confirmation ran out of time', 'TimeoutError'));
+  const end = () => controller.abort(new DOMException('the push part of the logout ran out of time', 'TimeoutError'));
   const timer = setTimeout(end, ms);
-  if (step.signal.aborted) end();
-  else step.signal.addEventListener('abort', end, { once: true });
+  if (parent?.aborted) end();
+  else parent?.addEventListener('abort', end, { once: true });
   return {
-    step: { token: step.token, signal: controller.signal },
+    signal: controller.signal,
     stop: () => {
       clearTimeout(timer);
-      step.signal.removeEventListener('abort', end);
+      parent?.removeEventListener('abort', end);
     },
   };
 }
 
-/** What `finish` may remove after the server part of an explicit logout. */
-interface Removal {
-  /** The channels of this device may go: branch (a), or (c) after `ok`. */
-  allowed: boolean;
-  /** The channel endpoint known at the confirmation, or `null`. */
-  endpoint: string | null;
-}
-
-const NO_REMOVAL: Removal = { allowed: false, endpoint: null };
-
 /**
- * The server part of an explicit logout. Returns what `finish` removes.
- *
- * The list (the confirmation of U) and the channel are read within
- * {@link DEPARTURE_CONFIRM_MS}; whatever did not come by then counts as not
- * read, so the revocation transition of branch (c) still has the rest of the
- * budget.
+ * `skein.push.op` for the departure: `held` settles `true` once the lock is
+ * granted, `false` when `signal` ended the wait first; the lock is kept
+ * until `release`.
  */
-async function revokeOnLogout(step: PushStep, allowRemoval: (endpoint: string | null) => void): Promise<Removal> {
-  const userId = step.token.userId;
-  const confirmation = shorterStep(step, DEPARTURE_CONFIRM_MS);
-  let listed: { value: PushOutcome<PushDevice[]> } | undefined;
-  let channelRead: { value: ChannelRead } | undefined;
-  try {
-    [listed, channelRead] = await Promise.all([
-      untilAbort(
-        request(confirmation.step, (signal) => pushListDevices(userId, signal)),
-        confirmation.step.signal,
-      ),
-      untilAbort(readChannel(), confirmation.step.signal),
-    ]);
-  } finally {
-    confirmation.stop();
-  }
-  live(step);
-  const read: ChannelRead = channelRead?.value ?? { kind: 'unreadable' };
-  if (listed?.value.kind === 'ok') {
-    // (a) U is confirmed.
-    const revocation = await revokeConfirmedDevice(step, listed.value.value, read, allowRemoval);
-    return { allowed: true, endpoint: revocation.endpoint };
-  }
-  // (c) U could not be confirmed: the consent of U alone goes off.
-  const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
-  const { work } = await revokeConsent(userId, { endpoint, guard: 'unconfirmed' }, guardOf(step));
-  if (work === null || work.type !== 'deviceRevoke') return NO_REMOVAL;
-  const outcome = await request(step, (signal) =>
-    pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
-  );
-  if (outcome.kind !== 'ok') return NO_REMOVAL;
-  // `ok` confirms U, and the channel may go (its removal journaled, so a
-  // failed or cut-off one is repeated on the next page load). Without a
-  // list the label of the subscription at the endpoint is unknown, and a
-  // revocation by endpoint leaves a labelled one: the work stays until the
-  // owner's repeat checked the endpoint against the list.
-  if (endpoint !== null) {
-    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
-    return { allowed: true, endpoint };
-  }
-  await removePushWork(work.id, guardOf(step));
-  const off = readConsent(userId);
-  live(step);
-  if (off.state === 'off') {
-    await setConsentOffUnconfirmed(userId, { gen: off.gen, rev: off.rev }, false, guardOf(step));
-  }
-  return { allowed: true, endpoint };
+function holdOpLock(signal: AbortSignal): { held: Promise<boolean>; release: () => void } {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const held = new Promise<boolean>((resolve) => {
+    withPushOpLock(async () => {
+      resolve(true);
+      await released;
+    }, signal).catch(() => resolve(false));
+  });
+  return { held, release };
+}
+
+/** Whether the read channel is the one the confirmation names as U's. */
+async function confirmedChannel(
+  endpoint: string,
+  devices: PushDevice[] | null,
+  previous: Consent,
+): Promise<{ confirmed: boolean; listed?: PushDevice }> {
+  if (devices === null) return { confirmed: endpoint === previous.endpoint };
+  const hash = await endpointFingerprint(endpoint);
+  const listed = devices.find((d) => d.endpointHash === hash);
+  return { confirmed: listed !== undefined || endpoint === previous.endpoint, listed };
 }
 
 /**
- * Removes only the channel known at the confirmation (journaled). A channel
- * the browser has besides it is not this logout's to remove: another tab may
- * have accepted it for a user who appeared since. A channel created by an
- * operation that started before this revocation is removed by that operation
- * itself, when it finds its consent revoked (`pushLifecycle.ts#register`).
- */
-async function removeChannels(step: PushStep, confirmed: string | null): Promise<void> {
-  if (confirmed !== null) await removeLocalChannel(step, confirmed);
-}
-
-/**
- * Starts the push part of an explicit logout of the rendered user. Call it
- * in the click: the appearance is taken, the budget starts and the server
- * part of the revocation runs from here, not when the logout request is
- * sent — a logout request held back while offline must not hold back the
- * local revocation (rule 5: without a confirmation the consent still goes
- * off). Without a user or without push support the push part does nothing.
+ * Starts the push part of an explicit logout of the rendered user; call it
+ * in the click. Without a user or without push support only the appearance
+ * is checked before the logout request.
  */
 export function beginExplicitDeparture(): ExplicitDeparture {
-  const budgeted = budgetedStep();
-  if (budgeted === null) return NO_PUSH;
-  const { step, stop } = budgeted;
-  let removal: Removal = NO_REMOVAL;
-  const prepared = startPrepare();
-  function allowRemoval(endpoint: string | null): void {
-    removal = { allowed: true, endpoint };
-  }
-  return {
-    prepare: () => prepared,
-    async finish() {
-      try {
-        if (removal.allowed && isLive(step)) {
-          await withinBudget(removeChannels(step, removal.endpoint), step.signal, undefined);
-        }
-      } finally {
-        stop();
-      }
+  const token = currentAppearance();
+  if (token === null || !browserPushSupported()) return withoutPush(token);
+  const userId = token.userId;
+
+  // ── The verdict and the refusal ──
+  let verdict: DepartureVerdict | undefined;
+  let decide!: (v: DepartureVerdict) => void;
+  const decided = new Promise<DepartureVerdict>((resolve) => {
+    decide = resolve;
+  });
+  let userChangedHeard = false;
+  /** The logout request will not go: nothing more is written, the transition is taken back. */
+  let abandoned = false;
+  const progress: RevocationProgress = { sent: false, revoked: false };
+
+  const budget = deadline(DEPARTURE_BUDGET_MS);
+  const server = deadline(DEPARTURE_PREPARE_MS, budget.signal);
+  const lockWait = deadline(DEPARTURE_CONFIRM_MS, server.signal);
+  const opLock = holdOpLock(lockWait.signal);
+
+  const step: PushStep = {
+    token,
+    signal: server.signal,
+    holds: () => verdict === undefined && !abandoned && !appearedSince(token),
+    onUserChanged: () => {
+      userChangedHeard = true;
+      settle('userChanged');
     },
   };
 
-  function startPrepare(): Promise<DepartureVerdict> {
-    // The server part ends by DEPARTURE_PREPARE_MS, leaving time for the
-    // removal of the channel in `finish`.
-    const part = shorterStep(step, DEPARTURE_PREPARE_MS);
-    const work = revokeOnLogout(part.step, allowRemoval).then(
-      (result: Removal): DepartureVerdict => {
-        if (result.allowed) removal = result;
-        return 'proceed';
-      },
-      (error: unknown): DepartureVerdict => {
-        if (error instanceof StepEnded && error.reason === 'userChanged') {
-          // Nobody logs out: there is no `finish`, the budget ends here.
-          stop();
-          return 'userChanged';
-        }
-        return 'proceed';
-      },
-    );
-    return withinBudget(work, part.step.signal, 'proceed').then((verdict) => {
-      part.stop();
-      if (verdict !== 'proceed' || isCurrentAppearance(step.token)) return verdict;
-      // The page has another appearance by now: the logout was for one
-      // that is gone, and must not end the session that replaced it.
-      stop();
-      return 'superseded';
-    });
+  /** What `finish` removes: the endpoint the confirmation named, once its removal is journaled. */
+  let removal: string | null = null;
+  /** The works this departure wrote, for taking the transition back. */
+  const written: string[] = [];
+  /** The write completing the transition, once started. */
+  let refining: Promise<unknown> = Promise.resolve();
+  let ended = false;
+
+  function settle(v: DepartureVerdict): void {
+    if (verdict !== undefined) return;
+    verdict = v;
+    decide(v);
+    if (v !== 'proceed') abandon();
   }
+
+  function end(): void {
+    if (ended) return;
+    ended = true;
+    opLock.release();
+    unsubscribe();
+    budget.stop();
+    server.stop();
+    lockWait.stop();
+  }
+
+  function abandon(): void {
+    if (abandoned) return;
+    abandoned = true;
+    end();
+    void takeBack();
+  }
+
+  const unsubscribe = subscribeAppearance(() => {
+    if (appearedSince(token)) settle('superseded');
+  });
+  budget.signal.addEventListener('abort', end, { once: true });
+
+  // ── 1. The local part, before anything that may end the logout ──
+  abortPushOperations();
+  const transition = revokeConsent(userId, { endpoint: null, guard: 'unconfirmed' }, {
+    check: () => {
+      if (abandoned) throw new DOMException('the logout was refused', 'AbortError');
+    },
+  }).then((result) => {
+    if (result.work !== null) written.push(result.work.id);
+    return result;
+  });
+  transition.catch(() => undefined);
+
+  async function takeBack(): Promise<void> {
+    // Kept once the revocation reached the server: its request was sent
+    // and no "user changed" came back before the labels were revoked.
+    if (progress.sent && !(userChangedHeard && !progress.revoked)) return;
+    let result: Awaited<typeof transition>;
+    try {
+      result = await transition;
+    } catch {
+      return;
+    }
+    await refining.catch(() => undefined);
+    try {
+      await undoRevocation(userId, { expect: { gen: result.consent.gen, rev: result.consent.rev }, previous: result.previous, workIds: written });
+    } catch {
+      // The record moved on meanwhile; its newer state stays.
+    }
+  }
+
+  // ── 2–3. The lock, the confirmation, the channel, the revocation ──
+  const part = serverPart();
+  part.then(
+    () => settle('proceed'),
+    () => settle('proceed'),
+  );
+  server.signal.addEventListener('abort', () => settle('proceed'), { once: true });
+
+  async function serverPart(): Promise<void> {
+    const confirm = deadline(DEPARTURE_CONFIRM_MS, server.signal);
+    const confirmStep: PushStep = { ...step, signal: confirm.signal };
+    let devices: PushDevice[] | null = null;
+    let read: ChannelRead = { kind: 'unreadable' };
+    let previous: Consent;
+    let work: PushWork | null;
+    try {
+      const listing = untilAbort(
+        request(confirmStep, (signal) => pushListDevices(userId, signal)),
+        confirm.signal,
+      );
+      // The channel is read as soon as the lock is held, beside the list.
+      const channelRead = opLock.held.then((held): Promise<ChannelRead> =>
+        held ? readChannel() : Promise.resolve({ kind: 'unreadable' }),
+      );
+      const [listed, channel, done] = await Promise.all([
+        listing,
+        untilAbort(channelRead, confirm.signal),
+        untilAbort(transition, confirm.signal),
+      ]);
+      // The transition did not land in time: the store is held elsewhere,
+      // nothing more can be written; the transition itself still lands.
+      if (done === undefined) return;
+      previous = done.value.previous;
+      work = done.value.work;
+      if (listed?.value.kind === 'ok') devices = listed.value.value;
+      if (channel !== undefined) read = channel.value;
+      live(step);
+      if (read.kind === 'channel') {
+        const endpoint = read.channel.endpoint;
+        const named = await untilAbort(confirmedChannel(endpoint, devices, previous), confirm.signal);
+        live(step);
+        // A channel the confirmation does not name is not U's: another tab
+        // made it for someone else before the lock came to this logout.
+        if (named !== undefined && (named.value.confirmed || devices === null)) {
+          const listedSub = named.value.listed;
+          const guard: RevokeGuard =
+            devices === null ? 'unconfirmed' : listedSub === undefined ? 'absent' : { id: listedSub.id, version: listedSub.version };
+          const removable = named.value.confirmed && devices !== null;
+          const refined = refineRevocation(
+            userId,
+            {
+              workId: work?.id ?? null,
+              endpoint,
+              guard,
+              listed: listedSub === undefined ? undefined : { id: listedSub.id, label: listedSub.deviceLabel },
+              localUnsubscribe: removable,
+            },
+            guardOf(step),
+          );
+          refining = refined;
+          const result = await refined;
+          if (!written.includes(result.work.id)) written.push(result.work.id);
+          if (result.localWork !== null) written.push(result.localWork.id);
+          work = result.work;
+          if (removable) removal = endpoint;
+        }
+      }
+    } finally {
+      confirm.stop();
+    }
+
+    if (devices !== null) {
+      // (a) U is confirmed.
+      let done = work === null ? read.kind === 'none' : await repeatOwnRevocation(step, asRevocation(work), progress);
+      for (const earlier of readPushState().works) {
+        if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+        done = (await repeatOwnRevocation(step, earlier)) && done;
+      }
+      if (done) await clearOffUnconfirmed();
+      return;
+    }
+    // (c) U could not be confirmed: one revocation is tried.
+    if (work === null) return;
+    const revocation = asRevocation(work);
+    const outcome = await request(step, (signal) => {
+      progress.sent = true;
+      return pushRevokeDevices({ expectedUserId: userId, deviceLabels: revocation.labels, endpoint: revocation.endpoint }, signal);
+    });
+    if (outcome.kind !== 'ok') return;
+    progress.revoked = true;
+    // `ok` confirms U. Without a list the label of the subscription at the
+    // endpoint is unknown, and a revocation by endpoint leaves a labelled
+    // one: the work stays until the owner's repeat checked the endpoint
+    // against the list. The channel goes if it is the one U's consent
+    // names, its removal journaled.
+    if (revocation.endpoint !== undefined) {
+      if (revocation.endpoint === previous.endpoint) {
+        const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint }, guardOf(step));
+        written.push(local.id);
+        removal = revocation.endpoint;
+      }
+      return;
+    }
+    await removePushWork(revocation.id, guardOf(step));
+    await clearOffUnconfirmed();
+  }
+
+  async function clearOffUnconfirmed(): Promise<void> {
+    const off = readConsent(userId);
+    live(step);
+    if (off.state === 'off') await setConsentOffUnconfirmed(userId, { gen: off.gen, rev: off.rev }, false, guardOf(step));
+  }
+
+  return {
+    prepare: () => decided,
+    refusal: (): Refusal | null => {
+      if (userChangedHeard) return 'userChanged';
+      if (verdict !== undefined && verdict !== 'proceed') return verdict;
+      return appearedSince(token) ? 'superseded' : null;
+    },
+    async finish() {
+      try {
+        const endpoint = removal;
+        if (endpoint !== null && !abandoned && !ended) {
+          const local: PushStep = { token, signal: budget.signal, holds: () => !abandoned && !appearedSince(token) };
+          if (isLive(local)) await withinBudget(removeLocalChannel(local, endpoint), budget.signal, false);
+        }
+      } finally {
+        end();
+      }
+    },
+    cancel: abandon,
+  };
+}
+
+function asRevocation(work: PushWork): Extract<PushWork, { type: 'deviceRevoke' }> {
+  if (work.type !== 'deviceRevoke') throw new Error('not a revocation work');
+  return work;
 }
 
 /**
@@ -314,10 +487,10 @@ export async function departAfterAccountDeletion(owner: Appearance | null): Prom
     return token !== null && now !== null && (now.seq !== token.seq || now.userId !== token.userId);
   };
   if (replaced()) return 'superseded';
-  const budgeted = budgetedStep(token);
-  if (budgeted === null) return 'proceed';
-  const { stop } = budgeted;
-  const step: PushStep = { ...budgeted.step, holds: () => !replaced() };
+  if (token === null || !browserPushSupported()) return 'proceed';
+  const budget = deadline(DEPARTURE_BUDGET_MS);
+  const stop = budget.stop;
+  const step: PushStep = { token, signal: budget.signal, holds: () => !replaced() };
   const work = (async () => {
     const userId = step.token.userId;
     live(step);
