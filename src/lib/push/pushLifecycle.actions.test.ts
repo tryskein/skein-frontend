@@ -629,6 +629,52 @@ describe('row 61 — the revocation transition is decided on the record under sk
   });
 });
 
+describe('row 61 — the transition is taken back only while nothing of it reached the server (rule 5)', () => {
+  test('the appearance is replaced after the transition, before the revocation request: the transition is taken back', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    const tab = await openTab(A);
+    const consentBefore = readConsent(A);
+    let replaced = false;
+    locks.onRelease = (name) => {
+      if (name !== PUSH_STORE_LOCK || replaced) return;
+      // The transition is written: a new login of A replaces the appearance.
+      replaced = true;
+      tab.appearance.noteLogin(A);
+    };
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'superseded' });
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    expect({ ...readConsent(A), gen: 0, rev: 0 }).toEqual({ ...consentBefore, gen: 0, rev: 0 });
+    expect(readConsent(A).gen).toBe(consentBefore.gen + 1);
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toEqual(x);
+  });
+
+  test('"user changed" on the removal by id after the labels were revoked: off and the work stay; the owner finishes it', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    const sub = addSub(A, x.endpoint, LABEL_A);
+    const labels = Array.from({ length: 1000 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    seed({ [A]: { state: 'none', labels } });
+    const tab = await openTab(A);
+    api.pushRemoveDevice.mockImplementationOnce(async () => ({ kind: 'userChanged' }));
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'superseded' });
+    expect(readConsent(A)).toMatchObject({ state: 'off', labels: [] });
+    expect(readPushState().works).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'deviceRevoke', ownerUserId: A, removeSubscriptionId: sub.id })]),
+    );
+
+    // The owner appears again: the recorded removal by id goes.
+    await openTab(A, true);
+    expect(server.subs).toEqual([]);
+    expect(readPushState().works.filter((w) => w.type === 'deviceRevoke')).toEqual([]);
+  });
+});
+
 describe('row 61 — the manual retry of an unconfirmed disable (US-3)', () => {
   test('after a lost revocation and a removed channel, disabling again sends the recorded revocation', async () => {
     const x = channel('x');

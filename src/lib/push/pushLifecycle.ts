@@ -311,18 +311,43 @@ async function repeatWork(step: Step): Promise<void> {
 }
 
 /**
+ * How far the server part of a revocation got: `sent` — its revocation
+ * request went out; `revoked` — the server confirmed it. A transition is
+ * taken back only while nothing reached the server: before `sent`, or on
+ * "user changed" before `revoked` (rule 5). Once the labels are revoked,
+ * a later "user changed" (on the list or the removal by id) keeps the
+ * transition and its work, which the owner's next appearance finishes.
+ */
+export interface RevocationProgress {
+  sent: boolean;
+  revoked: boolean;
+}
+
+/** Whether a revocation that ended with `error` at `progress` is taken back. */
+export function revocationTakenBack(error: unknown, progress: RevocationProgress): boolean {
+  if (!progress.sent) return true;
+  return error instanceof StepEnded && error.reason === 'userChanged' && !progress.revoked;
+}
+
+/**
  * Sends the owner's revocation work as the step's user, its owner: the
  * labels and the endpoint in one request, then the removal by id it
  * records — or, for a work written without a confirmed list, of the
  * subscription the owner's list still shows at the endpoint. Only when all
  * of it is confirmed is the work finished; it then returns `true`.
  */
-async function repeatOwnRevocation(step: Step, work: Extract<PushWork, { type: 'deviceRevoke' }>): Promise<boolean> {
+export async function repeatOwnRevocation(
+  step: Step,
+  work: Extract<PushWork, { type: 'deviceRevoke' }>,
+  progress?: RevocationProgress,
+): Promise<boolean> {
   const userId = step.token.userId;
-  const outcome = await request(step, (signal) =>
-    pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),
-  );
+  const outcome = await request(step, (signal) => {
+    if (progress !== undefined) progress.sent = true;
+    return pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal);
+  });
   if (outcome.kind !== 'ok') return false;
+  if (progress !== undefined) progress.revoked = true;
   let removeId = work.removeSubscriptionId;
   if (work.guard === 'unconfirmed' && work.endpoint !== undefined) {
     // Written without a confirmed list (an explicit logout that could not
@@ -1304,9 +1329,9 @@ export async function revokeConfirmedDevice(
     },
     guardOf(step),
   );
-  // "User changed" on a request of this revocation: the server confirmed
-  // another user, nothing reached it, and the transition is taken back in
-  // one write (rule 5) — unless something wrote the consent since.
+  // Nothing of this revocation reached the server (see
+  // RevocationProgress): the transition is taken back in one write
+  // (rule 5) — unless something wrote the consent since.
   const undo = async () => {
     await undoRevocation(userId, {
       expect: snapshotOf(revokedConsent),
@@ -1317,20 +1342,32 @@ export async function revokeConfirmedDevice(
   // The transition is written (with the local removal journaled): the
   // channel may go now, whatever the revocation request answers.
   onTransition?.(endpoint);
+  const progress: RevocationProgress = { sent: false, revoked: false };
   let done: boolean;
-  if (work !== null && work.type === 'deviceRevoke') {
-    // The work records the removal by id too, so a repeat performs all of it.
-    done = await undoingOnUserChanged(repeatOwnRevocation(step, work), undo);
-  } else {
-    // No label and no channel: nothing new of this device is on the server,
-    // unless the channel could not be read (row 7 removes it once it is).
-    done = read.kind === 'none';
-  }
-  // Earlier unfinished revocations of this device by the same owner are
-  // sent now as well: a disable asked again is the manual retry of US-3.
-  for (const earlier of readPushState().works) {
-    if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
-    done = (await repeatOwnRevocation(step, earlier)) && done;
+  try {
+    if (work !== null && work.type === 'deviceRevoke') {
+      // The work records the removal by id too, so a repeat performs all of it.
+      done = await repeatOwnRevocation(step, work, progress);
+    } else {
+      // No label and no channel: nothing new of this device is on the server,
+      // unless the channel could not be read (row 7 removes it once it is).
+      done = read.kind === 'none';
+    }
+    // Earlier unfinished revocations of this device by the same owner are
+    // sent now as well: a disable asked again is the manual retry of US-3.
+    for (const earlier of readPushState().works) {
+      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+      done = (await repeatOwnRevocation(step, earlier)) && done;
+    }
+  } catch (error) {
+    if (revocationTakenBack(error, progress)) {
+      try {
+        await undo();
+      } catch {
+        // The record moved on meanwhile; its newer state stays.
+      }
+    }
+    throw error;
   }
   if (!done) return { confirmed: true, revoked: false, endpoint };
   const off = readConsent(userId);
