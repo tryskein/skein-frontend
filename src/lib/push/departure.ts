@@ -524,6 +524,8 @@ async function cleanUp(token: Appearance, signal: AbortSignal): Promise<void> {
   abortPushOperations();
   const lockWait = deadline(DEPARTURE_CONFIRM_MS, signal);
   const opLock = holdOpLock(lockWait.signal);
+  // The lock goes with the budget, also while a browser call still hangs.
+  signal.addEventListener('abort', opLock.release, { once: true });
   try {
     const held = await opLock.held;
     live(step);
@@ -546,6 +548,7 @@ async function cleanUp(token: Appearance, signal: AbortSignal): Promise<void> {
     await removeLocalChannel(step, endpoint);
   } finally {
     lockWait.stop();
+    signal.removeEventListener('abort', opLock.release);
     opLock.release();
   }
 }

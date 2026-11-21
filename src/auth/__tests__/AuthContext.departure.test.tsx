@@ -490,7 +490,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(browser.channel).toBeNull();
   });
 
-  test('accountDeleted with a hung channel read still deletes the consent', async () => {
+  test('accountDeleted with a hung channel read still deletes the consent, and frees skein.push.op with the budget', async () => {
     pushOnForA();
     await mount();
     browserApi.readChannel.mockImplementation(() => new Promise(() => undefined));
@@ -500,6 +500,11 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     });
 
     expect(readPushState().consents[A]).toBeUndefined();
+    let next = false;
+    await locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      next = true;
+    });
+    expect(next).toBe(true);
   });
 
   test('accountDeleted after a 401, while another tab signed B in with B\'s channel: B\'s channel stays, no logout request, the page appears as B', async () => {
