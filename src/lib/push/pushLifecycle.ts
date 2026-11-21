@@ -78,6 +78,7 @@ import {
   beginConsentLabel,
   type Consent,
   claimedByOther,
+  offNamingOthers,
   type ConsentSnapshot,
   DepartureInProgressError,
   noLiveDeparture,
@@ -283,13 +284,31 @@ async function removeWorks(step: Step, match: (work: PushWork) => boolean): Prom
 async function repeatLocalUnsubscribe(
   work: Extract<PushWork, { type: 'localUnsubscribe' }>,
   step: Step | null,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  onHeld: (lock: string | null) => void,
 ): Promise<void> {
   if (step !== null) live(step);
-  if (claimedByOther(work)) {
+  // The record first, then the locks (see repeatWork).
+  const record = readPushState();
+  if (claimedByOther(work, record)) {
     // Another user accepted this channel since: it is theirs now.
     await removePushWork(work.id, step === null ? undefined : guardOf(step));
     return;
+  }
+  const others = offNamingOthers(work, record);
+  if (others.length > 0) {
+    // Another user whose consent names this channel may be logging out:
+    // while that may still be taken back, the channel is theirs.
+    const held = await heldLocksOrNull();
+    const departing = held === null ? null : others.flatMap((id) => liveDeparturesOf(held, id));
+    if (departing === null) {
+      onHeld(null);
+      return;
+    }
+    if (departing.length > 0) {
+      for (const lock of departing) onHeld(lock);
+      return;
+    }
   }
   const result = await removeChannelQuietly(work.endpoint, step, signal);
   if (result === 'failed') return;
@@ -319,7 +338,7 @@ async function repeatWork(step: Step, onHeld: (lock: string | null) => void): Pr
     }
     switch (work.type) {
       case 'localUnsubscribe':
-        await repeatLocalUnsubscribe(work, step);
+        await repeatLocalUnsubscribe(work, step, undefined, onHeld);
         break;
       case 'foreignRemoval': {
         const outcome = await request(step, (signal) =>
@@ -1254,7 +1273,9 @@ async function repeatLocalUnsubscribesOnLoad(): Promise<void> {
           repeatWhenFree(held === null ? null : heldByOf(work), 'load', repeatLocalUnsubscribesOnLoad);
           continue;
         }
-        await repeatLocalUnsubscribe(work, null, controller.signal);
+        await repeatLocalUnsubscribe(work, null, controller.signal, (lock) =>
+          repeatWhenFree(lock, 'load', repeatLocalUnsubscribesOnLoad),
+        );
       }
     }, controller.signal);
   } catch {

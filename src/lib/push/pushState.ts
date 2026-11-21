@@ -141,6 +141,20 @@ export function claimedByOther(work: PushWork, record: PushStateRecord = readPus
   );
 }
 
+/**
+ * The other users whose consent is "explicitly off" and names the endpoint
+ * of a `localUnsubscribe` of a known owner: one of them may be logging out
+ * right now, and while that logout may still be taken back, its consent
+ * stands for an owned channel — the older removal waits for it.
+ */
+export function offNamingOthers(work: PushWork, record: PushStateRecord = readPushState()): string[] {
+  if (work.type !== 'localUnsubscribe' || work.ownerUserId === undefined) return [];
+  const owner = work.ownerUserId;
+  return Object.entries(record.consents)
+    .filter(([id, consent]) => id !== owner && consent.state === 'off' && consent.endpoint === work.endpoint)
+    .map(([id]) => id);
+}
+
 /** A work as the caller describes it; the id is assigned on write. */
 export type NewPushWork = PushWork extends infer W ? (W extends PushWork ? Omit<W, 'id'> : never) : never;
 

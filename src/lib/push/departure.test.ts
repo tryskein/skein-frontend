@@ -1233,6 +1233,33 @@ describe('row 69 — a journaled removal of the deleted owner\'s channel and ano
   });
 });
 
+describe('row 69 — a journaled removal and a logout of the channel\'s confirmed owner that may still be taken back', () => {
+  test('B confirmed X and starts a logout: an older removal of X waits for it; B\'s logout is taken back, X stays', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    seed({ [B]: enabledConsent(LABEL_B, x, null) }, [
+      { id: 'old', type: 'localUnsubscribe', endpoint: x.endpoint, ownerUserId: A },
+    ]);
+    server.caller = B;
+    noteLogin(B);
+    // B's logout: its transition writes off; its confirmation is on its way.
+    api.pushListDevices.mockImplementationOnce(() => never());
+    const departure = beginExplicitDeparture();
+    for (let i = 0; i < 200 && readConsent(B).state !== 'off'; i += 1) await flush();
+
+    // A page load in another tab of this browser repeats the old removal.
+    startPushLifecycle();
+    await flush();
+    expect(browser.channel).toEqual(x);
+
+    noteLogin(B);
+    expect(await departure.prepare()).toBe('superseded');
+    await settle(locks);
+    expect(readConsent(B)).toMatchObject({ state: 'enabled', endpoint: x.endpoint });
+    expect(browser.channel).toEqual(x);
+  });
+});
+
 describe('row 69 — a clean-up without skein.push.op journals nothing', () => {
   test('B accepts X after the clean-up of A gave up the lock: no work of A removes X later', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
