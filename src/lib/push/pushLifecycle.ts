@@ -796,8 +796,12 @@ async function readServerPush(step: Step): Promise<{ state: ServerPush; publicKe
   }
 }
 
-/** The appearance of `step.token.userId`, under `skein.push.op`. */
-async function decideOnAppearance(step: Step): Promise<void> {
+/**
+ * The appearance of `step.token.userId`, under `skein.push.op`. Returns
+ * what to publish again with a fresh read once the lock is released, `null`
+ * when the decision did not act.
+ */
+async function decideOnAppearance(step: Step): Promise<Partial<PushLifecycleState> | null> {
   const userId = step.token.userId;
   live(step);
   await repeatWork(step);
@@ -831,13 +835,13 @@ async function decideOnAppearance(step: Step): Promise<void> {
       devices: listed.kind === 'ok' ? listed.value : null,
       thisDeviceHash: ownEndpoint === null ? null : await endpointFingerprint(ownEndpoint),
     });
-    return;
+    return null;
   }
 
   const list = await request(step, (signal) => pushListDevices(userId, signal));
   if (list.kind !== 'ok') {
     publish(step, { decided: false, row: 1 });
-    return;
+    return null;
   }
 
   const server = await readServerPush(step);
@@ -872,33 +876,25 @@ async function decideOnAppearance(step: Step): Promise<void> {
   };
   await execute(ctx, decision.action);
   await settleOffUnconfirmed(ctx);
-  // What the settings show is read after the row: a row that acted may have
-  // replaced the channel (5 → 2) or changed the list.
-  // The list and this device are published as one read: when the list
-  // read after the row does not come, the list is shown as not read rather
-  // than as it was before the row.
-  let devices: PushDevice[] | null = list.value;
-  let channelNow: ChannelRead = read;
-  if (decision.action.type !== 'nothing') {
-    channelNow = await readChannel();
-    const relisted = await request(step, (signal) => pushListDevices(userId, signal));
-    devices = relisted.kind === 'ok' ? relisted.value : null;
-  }
-  const ownEndpoint = readConsent(userId).endpoint;
-  const thisDeviceHash =
-    channelNow.kind === 'channel'
-      ? await endpointFingerprint(channelNow.channel.endpoint)
-      : ownEndpoint !== null
-        ? await endpointFingerprint(ownEndpoint)
-        : null;
-  publish(step, {
+  const shown: Partial<PushLifecycleState> = {
     decided: true,
     row: decision.row,
     serverPush: server.state,
     permission,
-    devices,
-    thisDeviceHash,
-  });
+  };
+  // The list and this device as the decision read them, one pair. A row
+  // that acted may have replaced the channel (5 → 2) or changed the list:
+  // they are read again once the lock is released (publishFresh).
+  shownReads += 1;
+  const ownEndpoint = readConsent(userId).endpoint;
+  const thisDeviceHash =
+    read.kind === 'channel'
+      ? await endpointFingerprint(read.channel.endpoint)
+      : ownEndpoint !== null
+        ? await endpointFingerprint(ownEndpoint)
+        : null;
+  publish(step, { ...shown, devices: list.value, thisDeviceHash });
+  return decision.action.type === 'nothing' ? null : shown;
 }
 
 // ───────────────────────── Running ─────────────────────────
@@ -940,7 +936,8 @@ async function underOpLock<T>(token: Appearance, body: (step: Step) => Promise<T
 /** Runs the decision of `token`; returns when it ended, whatever the outcome. */
 async function runAppearance(token: Appearance): Promise<void> {
   try {
-    await underOpLock(token, decideOnAppearance);
+    const result = await underOpLock(token, decideOnAppearance);
+    if (result !== null && !endedEarly(result)) await publishFresh(token, result);
   } catch {
     // A storage failure or a consent that moved on ends the decision as it
     // stands; the next appearance decides again.
@@ -1067,22 +1064,35 @@ function failure(error: unknown): PushActionResult {
   return { kind: 'failed', reason: 'storage' };
 }
 
+/** Grows with every read of what the settings show; an older read does not publish over a newer one. */
+let shownReads = 0;
+
 /**
- * Publishes the list and this device as they are after an explicit action,
- * read again in the action's step. A list that does not come leaves the
- * shown one; nothing else is done.
+ * Publishes the list and this device as they are after a decision that
+ * acted or an explicit action — one read of the channel and of the list, in
+ * a step of `token` that does not hold `skein.push.op`, so a read that hangs
+ * holds up no push operation. A list that does not come is shown as not
+ * read (`null`), beside the device read with it; nothing else is done.
  */
-async function publishAfterAction(step: Step): Promise<void> {
-  const userId = step.token.userId;
+async function publishFresh(token: Appearance, patch: Partial<PushLifecycleState>): Promise<void> {
+  const ticket = (shownReads += 1);
+  const controller = new AbortController();
+  running.add(controller);
+  const step: Step = { token, signal: controller.signal };
   try {
+    live(step);
+    const userId = token.userId;
     const read = await readChannel();
     const listed = await request(step, (signal) => pushListDevices(userId, signal));
     const ownEndpoint = readConsent(userId).endpoint;
     const endpoint = read.kind === 'channel' ? read.channel.endpoint : ownEndpoint;
     const thisDeviceHash = endpoint === null ? null : await endpointFingerprint(endpoint);
-    publish(step, listed.kind === 'ok' ? { devices: listed.value, thisDeviceHash } : { thisDeviceHash });
-  } catch (error) {
-    if (error instanceof StepEnded) throw error;
+    if (ticket !== shownReads) return;
+    publish(step, { ...patch, devices: listed.kind === 'ok' ? listed.value : null, thisDeviceHash });
+  } catch {
+    // The step ended (another appearance, "user changed"): nothing is shown.
+  } finally {
+    running.delete(controller);
   }
 }
 
@@ -1105,7 +1115,7 @@ async function undoRegistration(step: Step, label: string, endpoint: string): Pr
  * consent generation read in the click handler: a revocation of this device
  * since then ends the enable before any label is written (rule 8).
  */
-async function enableUnderLock(step: Step, gen: number): Promise<PushActionResult> {
+async function enableUnderLock(step: Step, gen: number, refresh: () => void): Promise<PushActionResult> {
   const userId = step.token.userId;
   const devices = await confirmUser(step);
   if (devices === null) return { kind: 'failed', reason: 'unconfirmed' };
@@ -1265,11 +1275,11 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
         await undoRegistration(step, label, channel.endpoint);
         return { kind: 'failed', reason: 'storage' };
       }
-      await publishAfterAction(step);
+      refresh();
       return { kind: 'done' };
     case 'revoked':
       await goOffAfterRevoked(ctx, channel.endpoint);
-      await publishAfterAction(step);
+      refresh();
       return { kind: 'failed', reason: 'revoked' };
     case 'notFound':
     case 'refused':
@@ -1291,13 +1301,29 @@ async function enableUnderLock(step: Step, gen: number): Promise<PushActionResul
   }
 }
 
-async function finishAction(token: Appearance, body: (step: Step) => Promise<PushActionResult>): Promise<PushActionResult> {
+/**
+ * Runs an explicit action under `skein.push.op`. When the body asks for it
+ * (`refresh`), the list and this device are read again after the lock is
+ * released, before the result is returned.
+ */
+async function finishAction(
+  token: Appearance,
+  body: (step: Step, refresh: () => void) => Promise<PushActionResult>,
+): Promise<PushActionResult> {
+  let wanted = false;
+  let result: PushActionResult;
   try {
-    const result = await underOpLock(token, body);
-    return endedEarly(result) ? { kind: 'superseded' } : result;
+    const outcome = await underOpLock(token, (step) =>
+      body(step, () => {
+        wanted = true;
+      }),
+    );
+    result = endedEarly(outcome) ? { kind: 'superseded' } : outcome;
   } catch (error) {
-    return failure(error);
+    result = failure(error);
   }
+  if (wanted && result.kind !== 'superseded') await publishFresh(token, {});
+  return result;
 }
 
 /**
@@ -1314,7 +1340,7 @@ export function enablePush(): Promise<PushActionResult> {
   if (permission === 'denied') return Promise.resolve({ kind: 'denied' });
   const asked = permission === 'default' ? requestNotificationPermission() : Promise.resolve(permission);
   return asked.then(
-    (answer) => (answer === 'granted' ? finishAction(token, (step) => enableUnderLock(step, gen)) : { kind: 'denied' }),
+    (answer) => (answer === 'granted' ? finishAction(token, (step, refresh) => enableUnderLock(step, gen, refresh)) : { kind: 'denied' }),
     () => ({ kind: 'denied' }),
   );
 }
@@ -1450,11 +1476,11 @@ export async function removeLocalChannel(step: PushStep, endpoint: string): Prom
 export function disablePush(): Promise<PushActionResult> {
   const token = currentAppearance();
   if (token === null || !browserPushSupported()) return Promise.resolve({ kind: 'unavailable' });
-  return finishAction(token, async (step) => {
+  return finishAction(token, async (step, refresh) => {
     const server = await revokeDeviceOnServer(step);
     if (!server.confirmed) return { kind: 'failed', reason: 'unconfirmed' };
     if (server.endpoint !== null) await removeLocalChannel(step, server.endpoint);
-    await publishAfterAction(step);
+    refresh();
     return server.revoked ? { kind: 'done' } : { kind: 'failed', reason: 'unconfirmed' };
   });
 }
@@ -1467,12 +1493,12 @@ export function disablePush(): Promise<PushActionResult> {
 export function removeOtherDevice(id: string): Promise<PushActionResult> {
   const token = currentAppearance();
   if (token === null || !browserPushSupported()) return Promise.resolve({ kind: 'unavailable' });
-  return finishAction(token, async (step) => {
+  return finishAction(token, async (step, refresh) => {
     const outcome = await request(step, (signal) =>
       pushRemoveDevice({ expectedUserId: step.token.userId, id }, signal),
     );
     if (outcome.kind !== 'ok' && outcome.kind !== 'notFound') return { kind: 'failed', reason: 'unconfirmed' };
-    await publishAfterAction(step);
+    refresh();
     return { kind: 'done' };
   });
 }

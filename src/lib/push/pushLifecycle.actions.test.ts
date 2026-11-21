@@ -27,10 +27,11 @@ import {
   seed,
   server,
   settle as settleLocks,
+  sha256,
   uninstallPushHarness,
 } from '../../test/pushHarness';
 import type { NotificationPermissionState } from './browserPush';
-import { PUSH_STORE_LOCK } from './locks';
+import { PUSH_OP_LOCK, PUSH_STORE_LOCK } from './locks';
 import { PUSH_STATE_KEY, readConsent, readPushState, revokeConsent } from './pushState';
 
 const api = vi.hoisted(() => ({
@@ -669,6 +670,69 @@ describe('row 56 — the channel an enable created goes when a revocation came m
     expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
     expect(browser.channel).not.toBeNull();
     expect(readConsent(A)).toMatchObject({ state: 'enabled', endpoint: browser.channel?.endpoint });
+  });
+});
+
+describe('what the settings show after an action is read outside skein.push.op (US-3)', () => {
+  test('the list read after an enable hangs: the lock is free for the next operation; the list and the device come as one read', async () => {
+    const tab = await openTab(A);
+    const relist = deferred<void>();
+    api.pushListDevices
+      .mockImplementationOnce(model.list)
+      .mockImplementationOnce(async (userId: string) => {
+        await relist.promise;
+        return model.list(userId);
+      });
+
+    const enabling = tab.lifecycle.enablePush();
+    for (let i = 0; i < 200 && api.pushListDevices.mock.calls.length < 2; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(api.pushListDevices).toHaveBeenCalledTimes(2);
+    let nextRan = false;
+    await locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      nextRan = true;
+    });
+    expect(nextRan).toBe(true);
+
+    relist.resolve();
+    expect(await enabling).toEqual({ kind: 'done' });
+    const shown = tab.lifecycle.getPushLifecycleState();
+    expect(shown.devices).toHaveLength(1);
+    expect(shown.thisDeviceHash).toBe(shown.devices![0].endpointHash);
+  });
+
+  test('the list read after an enable is lost: the list is shown as not read, not the one from before', async () => {
+    const tab = await openTab(A, true);
+    expect(tab.lifecycle.getPushLifecycleState().devices).toEqual([]);
+    api.pushListDevices.mockImplementationOnce(model.list).mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'done' });
+    const shown = tab.lifecycle.getPushLifecycleState();
+    expect(shown.devices).toBeNull();
+    expect(shown.thisDeviceHash).not.toBeNull();
+  });
+
+  test('a decision that acted reads the list again without holding the lock', async () => {
+    const x = channel('x');
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    const relist = deferred<void>();
+    // Row 2: the consent's channel is gone; the decision creates one and registers it.
+    api.pushListDevices.mockImplementation(async (userId: string) => {
+      if (api.pushListDevices.mock.calls.length > 1) await relist.promise;
+      return model.list(userId);
+    });
+
+    const tab = await openTab(A, true);
+    expect(api.pushSubscribe).toHaveBeenCalledTimes(1);
+    expect(api.pushListDevices).toHaveBeenCalledTimes(2);
+    expect(locks.idle()).toBe(true);
+
+    relist.resolve();
+    await settle();
+    const shown = tab.lifecycle.getPushLifecycleState();
+    const hash = await sha256(browser.channel!.endpoint);
+    expect(shown.thisDeviceHash).toBe(hash);
+    expect(shown.devices?.map((d) => d.endpointHash)).toContain(hash);
   });
 });
 
