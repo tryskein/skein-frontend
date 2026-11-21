@@ -71,6 +71,7 @@ import {
   type Consent,
   endpointNamedByOther,
   isHeld,
+  MAX_CONSENT_LABELS,
   type PushWork,
   readConsent,
   readPushState,
@@ -366,16 +367,28 @@ export function beginExplicitDeparture(): ExplicitDeparture {
       const [listed, channel, done] = await Promise.all([
         listing,
         untilAbort(channelRead, confirm.signal),
-        untilAbort(transition, confirm.signal),
+        untilAbort(
+          transition.then(
+            (result) => ({ saved: result }),
+            () => ({ saved: null }),
+          ),
+          confirm.signal,
+        ),
       ]);
       // The transition did not land in time: the store is held elsewhere,
       // nothing more can be written; the transition itself still lands.
       if (done === undefined) return;
-      previous = done.value.previous;
-      work = done.value.work;
       if (listed?.value.kind === 'ok') devices = listed.value.value;
       if (channel !== undefined) read = channel.value;
       live(step);
+      if (done.value.saved === null) {
+        // The store refused the transition (a full quota, storage that cannot
+        // be written): the server part goes on from what the record holds.
+        await revokeUnsaved(devices, read, confirm.signal);
+        return;
+      }
+      previous = done.value.saved.previous;
+      work = done.value.saved.work;
       if (read.kind === 'channel') {
         const endpoint = read.channel.endpoint;
         const named = await untilAbort(confirmedChannel(endpoint, devices, previous), confirm.signal);
@@ -442,6 +455,31 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     }
     await removePushWork(revocation.id, guardOf(step));
     await clearOffUnconfirmed();
+  }
+
+  /**
+   * The server part when the transition could not be written: one
+   * revocation of the labels S holds and of the endpoint the confirmation
+   * names, and the removal of that channel by the usual rule — without a
+   * journal, so nothing of it is repeated once the page is left.
+   */
+  async function revokeUnsaved(devices: PushDevice[] | null, read: ChannelRead, signal: AbortSignal): Promise<void> {
+    const consent = readConsent(userId);
+    const labels = [...consent.labels];
+    let endpoint: string | undefined;
+    if (read.kind === 'channel') {
+      const named = await untilAbort(confirmedChannel(read.channel.endpoint, devices, consent), signal);
+      live(step);
+      if (named !== undefined && named.value.confirmed) {
+        endpoint = read.channel.endpoint;
+        const label = named.value.listed?.deviceLabel ?? null;
+        if (label !== null && !labels.includes(label) && labels.length < MAX_CONSENT_LABELS) labels.push(label);
+        if (devices !== null) removal = endpoint;
+      }
+    }
+    if (labels.length === 0 && endpoint === undefined) return;
+    const outcome = await sendRevocation(step, labels, endpoint, progress);
+    if (outcome.kind === 'ok' && endpoint !== undefined && endpoint === consent.endpoint) removal = endpoint;
   }
 
   async function clearOffUnconfirmed(): Promise<void> {

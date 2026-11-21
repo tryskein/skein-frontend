@@ -304,6 +304,32 @@ describe('row 68b — the channel removal runs beside the logout request', () =>
   });
 });
 
+describe('row 64 — the store refuses the transition (Edge 10 on a logout)', () => {
+  test('the labels of S and the confirmed endpoint are still revoked, the channel goes, the logout goes on', async () => {
+    pushOnForA();
+    await mount();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('the quota is full', 'QuotaExceededError');
+    });
+
+    try {
+      await act(async () => {
+        await current().logout('explicit');
+      });
+    } finally {
+      setItem.mockRestore();
+    }
+
+    expect(api.pushRevokeDevices).toHaveBeenCalledWith(
+      { expectedUserId: A, deviceLabels: [LABEL_A], endpoint: channel('a').endpoint },
+      expect.any(AbortSignal),
+    );
+    expect(server.subs).toEqual([]);
+    expect(browser.channel).toBeNull();
+    expect(auth.logoutApi).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('row 64 (c) — another user appears before the logout request', () => {
   test('without a confirmation, offline: B signs in on this page before the request goes — no POST /api/auth/logout', async () => {
     pushOnForA();
