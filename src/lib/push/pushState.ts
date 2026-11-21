@@ -65,6 +65,12 @@ export interface Consent {
   offUnconfirmed: boolean;
   /** Grows with every write of this consent. */
   rev: number;
+  /**
+   * The account was deleted (`retireConsent`): the consent stays "no mark"
+   * for good, and no write of it applies any more — those without a
+   * compare-and-set included.
+   */
+  retired: boolean;
 }
 
 /**
@@ -166,6 +172,7 @@ export function emptyConsent(): Consent {
     keysFingerprint: null,
     offUnconfirmed: false,
     rev: 0,
+    retired: false,
   };
 }
 
@@ -213,6 +220,7 @@ function parseConsent(v: unknown): Consent {
   c.keysFingerprint = stringOrNull(r.keysFingerprint);
   c.offUnconfirmed = r.offUnconfirmed === true;
   if (isCount(r.rev)) c.rev = r.rev;
+  c.retired = r.retired === true;
   return c;
 }
 
@@ -379,12 +387,17 @@ function consentFor(record: PushStateRecord, userId: string): Consent {
 }
 
 function checkExpectation(consent: Consent, expect: ConsentExpectation): void {
+  checkNotRetired(consent);
   if (consent.gen !== expect.gen) {
     throw new PushStateConflictError('the consent generation changed');
   }
   if (expect.rev !== undefined && consent.rev !== expect.rev) {
     throw new PushStateConflictError('the consent revision changed');
   }
+}
+
+function checkNotRetired(consent: Consent): void {
+  if (consent.retired) throw new PushStateConflictError('the account of this consent was deleted');
 }
 
 function store(record: PushStateRecord, userId: string, consent: Consent): Consent {
@@ -635,6 +648,12 @@ export interface RevokeConsentArgs {
   listed?: ListedSubscription;
   /** The works are held by the explicit logout writing them (see {@link isHeld}). */
   heldBy?: string;
+  /**
+   * The generation the caller's operation saw: the transition is refused
+   * when it changed (a late answer of an operation older than a revocation
+   * or a deletion). Without it the transition always applies.
+   */
+  expect?: ConsentExpectation;
 }
 
 /** Result of {@link revokeConsent}. */
@@ -684,6 +703,8 @@ export async function revokeConsent(
 ): Promise<RevokeConsentResult> {
   return commit((record) => {
     const consent = consentFor(record, userId);
+    if (args.expect !== undefined) checkExpectation(consent, args.expect);
+    else checkNotRetired(consent);
     const endpoint = args.endpoint !== null && args.endpoint !== '' ? args.endpoint : null;
     let work: PushWork | null = null;
     const { labels, removeSubscriptionId } = withListedLabel(consent.labels, args.listed);
@@ -859,16 +880,17 @@ export interface RetireConsentResult {
 
 /**
  * Deletes the consent of `userId` (the account was deleted): what remains is
- * "no mark" with a generation grown past every one an operation of that user
- * may have read, so no operation started before writes the consent again —
- * a deleted consent is never a fresh one with generation 0. Nothing is
+ * "no mark", retired, with a generation grown past every one an operation of
+ * that user may have read, so no operation started before writes the consent
+ * again — a deleted consent is never a fresh one with generation 0, and the
+ * writes without a compare-and-set (a revocation) are refused too. Nothing is
  * journaled: the channel is removed only by whoever holds `skein.push.op`
  * and knows it is this user's.
  */
 export async function retireConsent(userId: string, guard?: WriteGuard): Promise<RetireConsentResult> {
   return commit((record) => {
     const consent = consentFor(record, userId);
-    record.consents[userId] = { ...emptyConsent(), gen: consent.gen + 1, rev: consent.rev + 1 };
+    record.consents[userId] = { ...emptyConsent(), gen: consent.gen + 1, rev: consent.rev + 1, retired: true };
     return { endpoint: consent.endpoint };
   }, guard);
 }

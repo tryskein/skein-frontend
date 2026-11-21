@@ -487,7 +487,13 @@ async function goOffAfterRevoked(ctx: DecisionContext, endpoint: string): Promis
   const { step, userId } = ctx;
   const guard = await guardFromList(ctx.devices, endpoint);
   live(step);
-  const { work } = await revokeConsent(userId, { endpoint, guard, localUnsubscribe: true }, guardOf(step));
+  // Only for the consent the registration was sent for: a revocation or the
+  // deletion of the account since then keeps its own result.
+  const { work } = await revokeConsent(
+    userId,
+    { endpoint, guard, localUnsubscribe: true, expect: { gen: ctx.consent.gen } },
+    guardOf(step),
+  );
   if (work !== null && work.type === 'deviceRevoke') {
     const outcome = await request(step, (signal) =>
       pushRevokeDevices({ expectedUserId: userId, deviceLabels: work.labels, endpoint: work.endpoint }, signal),

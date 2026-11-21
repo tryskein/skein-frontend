@@ -32,7 +32,7 @@ import {
 } from '../../test/pushHarness';
 import type { NotificationPermissionState } from './browserPush';
 import { PUSH_OP_LOCK, PUSH_STORE_LOCK } from './locks';
-import { PUSH_STATE_KEY, readConsent, readPushState, revokeConsent } from './pushState';
+import { PUSH_STATE_KEY, readConsent, readPushState, retireConsent, revokeConsent } from './pushState';
 
 const api = vi.hoisted(() => ({
   getPushConfig: vi.fn(),
@@ -699,6 +699,31 @@ describe('row 56 — the channel an enable created goes when a revocation came m
     expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'superseded' });
     expect(browser.channel).not.toBeNull();
     expect(readConsent(A)).toMatchObject({ state: 'enabled', endpoint: browser.channel?.endpoint });
+  });
+});
+
+describe('row 69 — a late answer after the deletion of the account', () => {
+  test('a "revoked" formed before the deletion and delivered after it: the deleted consent stays deleted, nothing is journaled', async () => {
+    const tab = await openTab(A);
+    api.pushSubscribe.mockImplementationOnce(async () => {
+      // Another tab finished the deletion of A's account meanwhile.
+      await retireConsent(A);
+      return { kind: 'revoked' };
+    });
+
+    await tab.lifecycle.enablePush();
+    expect(readConsent(A)).toMatchObject({ state: 'none', labels: [], endpoint: null, retired: true });
+    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toBeNull();
+  });
+
+  test('a stale explicit logout of the deleted account writes nothing over it', async () => {
+    await openTab(A);
+    await retireConsent(A);
+    const before = localStorage.getItem(PUSH_STATE_KEY);
+
+    await expect(revokeConsent(A, { endpoint: channel('x').endpoint, guard: 'unconfirmed' })).rejects.toThrow();
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(before);
   });
 });
 
