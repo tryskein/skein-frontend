@@ -20,7 +20,7 @@
  */
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -75,7 +75,19 @@ function answer(status: number, body?: unknown): Response {
   });
 }
 
+/** Requests of the page still waiting for their answer. */
+let inFlight = 0;
+
 async function serve(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  inFlight += 1;
+  try {
+    return await answerOf(input, init);
+  } finally {
+    inFlight -= 1;
+  }
+}
+
+async function answerOf(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost');
   const method = (init?.method ?? 'GET').toUpperCase();
   const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
@@ -98,6 +110,12 @@ async function serve(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
       subs = subs.filter((s) => s.id !== body?.id);
       return answer(204);
     default:
+      // The removal of a subscription by id of the page before contract v2,
+      // modelled so that page reaches the end of its action too.
+      if (method === 'DELETE' && url.pathname.startsWith('/api/v1/push/subscriptions/')) {
+        const id = decodeURIComponent(url.pathname.slice('/api/v1/push/subscriptions/'.length));
+        subs = subs.filter((s) => s.id !== id);
+      }
       return answer(204);
   }
 }
@@ -198,11 +216,16 @@ function renderSettings(): void {
   );
 }
 
-/** Lets the page's asynchronous work run. */
-async function quiet(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 50; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
-  });
+/**
+ * The end of the mount: the device list is shown with this device, the page
+ * has read the push configuration of the server (the last read of the
+ * decision on the appearance, and the read before a registration), and no
+ * request of the page waits for its answer.
+ */
+async function mounted(): Promise<void> {
+  await waitFor(() => expect(screen.getByText(i18n.t('push:devices.thisDevice'))).toBeTruthy());
+  await waitFor(() => expect(calls.some((c) => c.path === '/api/v1/push/config')).toBe(true));
+  await waitFor(() => expect(inFlight).toBe(0));
 }
 
 function unsubscribeButtonOf(row: string): HTMLElement {
@@ -214,6 +237,7 @@ let thisHash = '';
 beforeEach(async () => {
   thisHash = await sha256(ENDPOINT);
   calls.length = 0;
+  inFlight = 0;
   subs = [
     { id: 'sub-this', endpointHash: thisHash, ua: FIREFOX, createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: LABEL, version: 1 },
     { id: 'sub-other', endpointHash: 'other-hash', ua: SAFARI, createdAt: '2026-06-01T09:00:00Z', lastSeenAt: '2026-06-01T09:00:00Z', deviceLabel: OTHER_LABEL, version: 1 },
@@ -245,8 +269,7 @@ const deletions = () => calls.filter((c) => c.method === 'DELETE');
 describe('row 78 — the settings mounted with permission granted and a live channel', () => {
   test('register nothing', async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByText(i18n.t('push:devices.thisDevice'))).toBeTruthy());
-    await quiet();
+    await mounted();
 
     expect(registrations()).toEqual([]);
     expect(live).not.toBeNull();
@@ -256,27 +279,26 @@ describe('row 78 — the settings mounted with permission granted and a live cha
 describe('row 79 — unsubscribing devices in the settings (US-3)', () => {
   test('this device: its label and endpoint are revoked, then its channel is removed; nothing is deleted without a revocation', async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByText(i18n.t('push:devices.thisDevice'))).toBeTruthy());
-    await quiet();
+    await mounted();
     const row = within(screen.getByText(i18n.t('push:devices.thisDevice')).closest('li')!);
 
     fireEvent.click(row.getByRole('button', { name: /Unsubscribe/ }));
-    await quiet();
+    // The end of the action: the channel of this browser is gone.
+    await waitFor(() => expect(live).toBeNull());
 
     const revocations = calls.filter((c) => c.method === 'POST' && c.path === '/api/v1/push/device-revocations');
     expect(revocations).toHaveLength(1);
     expect(revocations[0].body).toMatchObject({ expectedUserId: A, deviceLabels: [LABEL], endpoint: ENDPOINT });
     expect(deletions()).toEqual([]);
-    expect(live).toBeNull();
   });
 
   test('another device: it is removed by id', async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByText(i18n.t('push:devices.thisDevice'))).toBeTruthy());
-    await quiet();
+    await mounted();
 
     fireEvent.click(unsubscribeButtonOf('Safari 17 · macOS'));
-    await quiet();
+    // The end of the action: the device is no longer listed.
+    await waitFor(() => expect(screen.queryByText('Safari 17 · macOS')).toBeNull());
 
     const removals = calls.filter((c) => c.method === 'POST' && c.path === '/api/v1/push/device-removals');
     expect(removals).toHaveLength(1);
