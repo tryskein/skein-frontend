@@ -646,33 +646,52 @@ function undoWithCreatedChannel(undoConsent: () => Promise<void>, endpoint: stri
   };
 }
 
-/** How long removing a channel an operation created waits for the browser before it journals the removal instead. */
+/**
+ * How long removing a channel an operation created waits for the browser —
+ * the whole removal, the unsubscription included — before it journals the
+ * removal instead; and, apart from that, how long it waits to journal it.
+ */
 export const COMPENSATION_WAIT_MS = 1500;
+
+/** Resolves with `work`, or with `late` after `ms`. */
+function orAfter<T, L>(work: Promise<T>, ms: number, late: L): Promise<T | L> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(late), ms);
+    void work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(late);
+      },
+    );
+  });
+}
 
 /**
  * Removes a channel the operation created and nobody accepted. The browser
  * is waited for at most {@link COMPENSATION_WAIT_MS} — the operation may hold
  * `skein.push.op`; when it fails or does not answer, the removal is
  * journaled for the repeats (`localUnsubscribe` of `ownerUserId`, which no
- * repeat performs once another user has confirmed that channel).
+ * repeat performs once another user has confirmed that channel), waiting for
+ * the store at most as long again. An unsubscription still running that
+ * lands later leaves the repeat a channel that is gone already.
  */
 async function dropCreatedChannel(endpoint: string, ownerUserId: string): Promise<void> {
   const bound = new AbortController();
-  const timer = setTimeout(
-    () => bound.abort(new DOMException('the browser did not answer', 'TimeoutError')),
-    COMPENSATION_WAIT_MS,
-  );
-  let result: 'removed' | 'notCurrent' | 'failed';
+  const result = await orAfter(removeChannelQuietly(endpoint, null, bound.signal), COMPENSATION_WAIT_MS, 'late' as const);
+  bound.abort(new DOMException('the browser did not answer', 'TimeoutError'));
+  if (result === 'removed' || result === 'notCurrent') return;
+  const journal = new AbortController();
+  const timer = setTimeout(() => journal.abort(new DOMException('the store did not answer', 'TimeoutError')), COMPENSATION_WAIT_MS);
   try {
-    result = await removeChannelQuietly(endpoint, null, bound.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (result !== 'failed') return;
-  try {
-    await addPushWork({ type: 'localUnsubscribe', endpoint, ownerUserId });
+    await addPushWork({ type: 'localUnsubscribe', endpoint, ownerUserId }, { signal: journal.signal });
   } catch {
     // The store failed too: the channel stays to the decision table (row 5).
+  } finally {
+    clearTimeout(timer);
   }
 }
 
