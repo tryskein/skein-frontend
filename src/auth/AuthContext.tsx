@@ -273,7 +273,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // The server ended every session of the deleted account; the request
         // only clears its cookie, so it goes only when the cookie is known
         // to hold no session — never on someone else's.
-        const deletion = await departAfterAccountDeletion(owner, async () => (await meApi())?.id ?? null);
+        const deletion = await departAfterAccountDeletion(owner, async () => {
+          const signedIn: unknown = await meApi();
+          if (signedIn === null) return { kind: 'none' };
+          const id = typeof signedIn === 'object' && signedIn !== null ? (signedIn as { id?: unknown }).id : undefined;
+          if (typeof id === 'string' && id !== '') return { kind: 'user', id };
+          // An answer that names nobody is no proof that no session is left.
+          throw new Error('the answer of /me names no user');
+        });
         if (deletion === 'superseded') return { kind: 'superseded' };
         if (deletion === 'userChanged') {
           await reloadMeAfterUserChanged();

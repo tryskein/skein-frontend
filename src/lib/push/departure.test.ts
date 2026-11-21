@@ -915,7 +915,7 @@ describe('row 69 — the deletion of the account invalidates the owner\'s operat
       );
     });
 
-    const deletion = departAfterAccountDeletion(null, async () => null);
+    const deletion = departAfterAccountDeletion(null, async () => ({ kind: 'none' }));
     await flush();
     await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
     expect(await deletion).toBe('proceed');
@@ -944,7 +944,7 @@ describe('row 69 — a clean-up without skein.push.op journals nothing', () => {
       localStorage.setItem(PUSH_STATE_KEY, JSON.stringify(record));
     });
 
-    const deletion = departAfterAccountDeletion(null, async () => null);
+    const deletion = departAfterAccountDeletion(null, async () => ({ kind: 'none' }));
     await flush();
     await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
     await deletion;

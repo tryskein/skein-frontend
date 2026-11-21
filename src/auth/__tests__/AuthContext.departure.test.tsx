@@ -597,6 +597,31 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     await waitFor(() => expect((client.getQueryData(ME_KEY) as User | null)?.id).toBe(B));
   });
 
+  test('accountDeleted: the cookie is read after the clean-up, and an answer naming nobody is no 401', async () => {
+    pushOnForA();
+    const client = await mount();
+    const events: string[] = [];
+    const removeChannel = browserApi.removeChannel.getMockImplementation()!;
+    browserApi.removeChannel.mockImplementation(async (...args: Parameters<typeof removeChannel>) => {
+      events.push('removeChannel');
+      return removeChannel(...args);
+    });
+    auth.meApi.mockImplementation(async () => {
+      events.push('me');
+      return {};
+    });
+
+    let result: unknown;
+    await act(async () => {
+      result = await current().logout('accountDeleted', current().appearance);
+    });
+
+    expect(events).toEqual(['removeChannel', 'me']);
+    expect(result).toBe('loggedOut');
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(client.getQueryData(ME_KEY)).toBeNull();
+  });
+
   test('accountDeleted: who the cookie names does not come within the budget — no logout request, the page is signed out', async () => {
     pushOnForA();
     const client = await mount();

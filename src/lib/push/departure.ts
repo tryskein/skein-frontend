@@ -559,11 +559,15 @@ export type DeletionVerdict = 'proceed' | 'userChanged' | 'superseded' | 'unknow
  * `owner` is the appearance in which the deletion was asked for. The clean-up
  * is the owner's also when the page has no user any more (a 401 of the
  * deleted session came first). `whoIsSignedIn` answers whose session the
- * cookie holds (`null`: none).
+ * cookie holds; it is asked after the clean-up (within
+ * {@link DEPARTURE_PREPARE_MS}), in the rest of the budget.
  */
+/** Whose session the cookie holds: none (a 401), or this user's. Anything else is thrown. */
+export type SignedIn = { kind: 'none' } | { kind: 'user'; id: string };
+
 export async function departAfterAccountDeletion(
   owner: Appearance | null,
-  whoIsSignedIn: () => Promise<string | null>,
+  whoIsSignedIn: () => Promise<SignedIn>,
 ): Promise<DeletionVerdict> {
   const token = owner ?? currentAppearance();
   const pushed = token !== null && browserPushSupported();
@@ -576,12 +580,19 @@ export async function departAfterAccountDeletion(
       await withinBudget(retired, budget.signal, undefined);
       return 'superseded';
     }
-    const session = untilAbort(whoIsSignedIn(), budget.signal).catch(() => undefined);
-    const local = pushed ? cleanUp(token, budget.signal, retired) : Promise.resolve();
-    const [cookie] = await Promise.all([session, withinBudget(local, budget.signal, undefined)]);
+    // The clean-up first, within its part of the budget; the cookie is read
+    // after it, right before the logout request, in the rest of the budget.
+    const part = deadline(DEPARTURE_PREPARE_MS, budget.signal);
+    try {
+      if (pushed) await withinBudget(cleanUp(token, part.signal, retired), part.signal, undefined);
+    } finally {
+      part.stop();
+    }
+    if (token !== null && appearedSince(token)) return 'superseded';
+    const cookie = await untilAbort(whoIsSignedIn(), budget.signal).catch(() => undefined);
     if (token !== null && appearedSince(token)) return 'superseded';
     if (cookie === undefined) return 'unknown';
-    return cookie.value === null ? 'proceed' : 'userChanged';
+    return cookie.value.kind === 'none' ? 'proceed' : 'userChanged';
   } finally {
     budget.stop();
   }
