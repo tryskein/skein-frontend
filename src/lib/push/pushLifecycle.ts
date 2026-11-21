@@ -223,9 +223,15 @@ function snapshotOf(consent: Consent): ConsentSnapshot {
  * repeats on page load and the removal of a channel the step itself just
  * created — nothing is checked.
  */
-async function removeChannelQuietly(endpoint: string, step: Step | null): Promise<'removed' | 'notCurrent' | 'failed'> {
+async function removeChannelQuietly(
+  endpoint: string,
+  step: Step | null,
+  signal?: AbortSignal,
+): Promise<'removed' | 'notCurrent' | 'failed'> {
   try {
-    return await removeChannel(endpoint, step === null ? undefined : () => live(step));
+    return step === null
+      ? await removeChannel(endpoint, undefined, signal)
+      : await removeChannel(endpoint, () => live(step), step.signal);
   } catch (error) {
     if (error instanceof StepEnded) throw error;
     return 'failed';
@@ -271,9 +277,13 @@ async function removeWorks(step: Step, match: (work: PushWork) => boolean): Prom
  * endpoint is still the work's; a channel that is no longer current finishes
  * the work as well. A browser failure keeps it.
  */
-async function repeatLocalUnsubscribe(work: Extract<PushWork, { type: 'localUnsubscribe' }>, step: Step | null): Promise<void> {
+async function repeatLocalUnsubscribe(
+  work: Extract<PushWork, { type: 'localUnsubscribe' }>,
+  step: Step | null,
+  signal?: AbortSignal,
+): Promise<void> {
   if (step !== null) live(step);
-  const result = await removeChannelQuietly(work.endpoint, step);
+  const result = await removeChannelQuietly(work.endpoint, step, signal);
   if (result === 'failed') return;
   if (step !== null) live(step);
   await removePushWork(work.id, step === null ? undefined : guardOf(step));
@@ -834,7 +844,7 @@ async function decideOnAppearance(step: Step): Promise<Partial<PushLifecycleStat
   live(step);
   await repeatWork(step);
 
-  const read = await readChannel();
+  const read = await readChannel(step.signal);
   live(step);
   let channel: DecisionChannel;
   let browserChannel: BrowserChannel | null = null;
@@ -998,14 +1008,21 @@ function onAppearanceChange(): void {
 
 /** Repeats the unfinished local channel removals of this browser (page load, no user needed). */
 async function repeatLocalUnsubscribesOnLoad(): Promise<void> {
+  // Ended like the operations of an appearance (an explicit logout aborts
+  // them): a browser that does not answer does not keep the lock.
+  const controller = new AbortController();
+  running.add(controller);
   try {
     await withPushOpLock(async () => {
       for (const work of readPushState().works) {
-        if (work.type === 'localUnsubscribe' && !isHeld(work)) await repeatLocalUnsubscribe(work, null);
+        if (controller.signal.aborted) return;
+        if (work.type === 'localUnsubscribe' && !isHeld(work)) await repeatLocalUnsubscribe(work, null, controller.signal);
       }
-    });
+    }, controller.signal);
   } catch {
-    // Storage or locks failed: the work stays for the next load.
+    // Storage or locks failed, or the repeat was ended: the work stays for the next load.
+  } finally {
+    running.delete(controller);
   }
 }
 
@@ -1110,7 +1127,7 @@ async function publishFresh(token: Appearance, patch: Partial<PushLifecycleState
   try {
     live(step);
     const userId = token.userId;
-    const read = await readChannel();
+    const read = await readChannel(step.signal);
     const listed = await request(step, (signal) => pushListDevices(userId, signal));
     const ownEndpoint = readConsent(userId).endpoint;
     const endpoint = read.kind === 'channel' ? read.channel.endpoint : ownEndpoint;
@@ -1155,7 +1172,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
   let consent = readConsent(userId);
   if (consent.gen !== gen) return { kind: 'superseded' };
 
-  const read = await readChannel();
+  const read = await readChannel(step.signal);
   live(step);
   if (read.kind === 'unreadable') return { kind: 'failed', reason: 'channel' };
   let current: BrowserChannel | null = read.kind === 'channel' ? read.channel : null;
@@ -1414,7 +1431,7 @@ export async function revokeConfirmedDevice(
   onTransition?: (endpoint: string | null) => void,
 ): Promise<ServerRevocation> {
   const userId = step.token.userId;
-  const read = channelRead ?? (await readChannel());
+  const read = channelRead ?? (await readChannel(step.signal));
   live(step);
   const endpoint = read.kind === 'channel' ? read.channel.endpoint : null;
   const hash = endpoint === null ? null : await endpointFingerprint(endpoint);

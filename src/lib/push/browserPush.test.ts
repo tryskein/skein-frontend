@@ -62,6 +62,14 @@ describe('row 47b — support', () => {
 });
 
 describe('row 47b — reading the channel', () => {
+  test('a browser that does not answer: the read is unreadable once the caller\'s signal aborts', async () => {
+    install(CAPABILITIES, registrationWith(() => new Promise(() => undefined)));
+    const controller = new AbortController();
+    const read = readChannel(controller.signal);
+    controller.abort(new DOMException('the step ended', 'AbortError'));
+    expect(await read).toEqual({ kind: 'unreadable' });
+  });
+
   test('a null subscription is none', async () => {
     install(CAPABILITIES, registrationWith(async () => null));
     expect(await readChannel()).toEqual({ kind: 'none' });

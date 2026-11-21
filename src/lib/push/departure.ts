@@ -372,7 +372,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
       );
       // The channel is read as soon as the lock is held, beside the list.
       const channelRead = opLock.held.then((held): Promise<ChannelRead> =>
-        held && isLive(step) ? readChannel() : Promise.resolve({ kind: 'unreadable' }),
+        held && isLive(step) ? readChannel(confirm.signal) : Promise.resolve({ kind: 'unreadable' }),
       );
       const [listed, channel, done] = await Promise.all([
         listing,
@@ -590,7 +590,7 @@ async function cleanUp(token: Appearance, signal: AbortSignal): Promise<void> {
     live(step);
     const { journaled } = await retireConsent(userId, guardOf(step));
     if (!held) return;
-    const read = await readChannel();
+    const read = await readChannel(signal);
     live(step);
     if (read.kind === 'unreadable') return;
     if (read.kind === 'none') {

@@ -673,6 +673,24 @@ describe('row 56 — the channel an enable created goes when a revocation came m
   });
 });
 
+describe('a browser read under skein.push.op ends with the operation (Edge 13)', () => {
+  test('the channel read of a decision does not answer: ending the operation frees the lock', async () => {
+    browserApi.readChannel.mockImplementationOnce(
+      (signal?: AbortSignal) =>
+        new Promise((resolve) => signal?.addEventListener('abort', () => resolve({ kind: 'unreadable' }), { once: true })),
+    );
+    const tab = await openTab(A);
+    tab.lifecycle.startPushLifecycle();
+    for (let i = 0; i < 200 && browserApi.readChannel.mock.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(browserApi.readChannel.mock.calls[0][0]).toBeInstanceOf(AbortSignal);
+    expect(locks.idle()).toBe(false);
+
+    tab.lifecycle.abortPushOperations();
+    await settle();
+    expect(locks.idle()).toBe(true);
+  });
+});
+
 describe('what the settings show after an action is read outside skein.push.op (US-3)', () => {
   test('the list read after an enable hangs: the lock is free for the next operation; the list and the device come as one read', async () => {
     const tab = await openTab(A);

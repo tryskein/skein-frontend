@@ -69,19 +69,25 @@ function channelOf(subscription: PushSubscription): BrowserChannel | null {
   return { endpoint: subscription.endpoint, keys: { p256dh: toBase64Url(p256dh), auth: toBase64Url(auth) } };
 }
 
-async function currentSubscription(): Promise<PushSubscription | null> {
-  const registration = await navigator.serviceWorker.getRegistration(SW_SCOPE);
+/**
+ * The current subscription. The browser's answers are awaited until `signal`
+ * aborts (they cannot be cancelled): a caller holding `skein.push.op` must
+ * not wait for a browser that does not answer longer than its step lives.
+ */
+async function currentSubscription(signal?: AbortSignal): Promise<PushSubscription | null> {
+  const registration = await untilAborted(navigator.serviceWorker.getRegistration(SW_SCOPE), signal);
   if (!registration) return null;
-  return registration.pushManager.getSubscription();
+  return untilAborted(registration.pushManager.getSubscription(), signal);
 }
 
 /**
  * Reads the current channel: `none` when the browser has none, `unreadable`
- * when the browser failed to answer or returned a channel without keys.
+ * when the browser failed to answer, returned a channel without keys, or did
+ * not answer before `signal` aborted.
  */
-export async function readChannel(): Promise<ChannelRead> {
+export async function readChannel(signal?: AbortSignal): Promise<ChannelRead> {
   try {
-    const subscription = await currentSubscription();
+    const subscription = await currentSubscription(signal);
     if (subscription === null) return { kind: 'none' };
     const channel = channelOf(subscription);
     return channel === null ? { kind: 'unreadable' } : { kind: 'channel', channel };
@@ -153,10 +159,15 @@ export async function createChannel(
  * when it was unsubscribed, `notCurrent` when the current channel is another
  * one or there is none. Rejects when the browser fails. `precondition` runs
  * right before the unsubscription, after the subscription was read, and
- * throws to stop without it.
+ * throws to stop without it. `signal` bounds the wait for the subscription;
+ * the unsubscription itself, once started, is not cut off.
  */
-export async function removeChannel(endpoint: string, precondition?: () => void): Promise<'removed' | 'notCurrent'> {
-  const subscription = await currentSubscription();
+export async function removeChannel(
+  endpoint: string,
+  precondition?: () => void,
+  signal?: AbortSignal,
+): Promise<'removed' | 'notCurrent'> {
+  const subscription = await currentSubscription(signal);
   if (subscription === null || subscription.endpoint !== endpoint) return 'notCurrent';
   precondition?.();
   const ok = await subscription.unsubscribe();
