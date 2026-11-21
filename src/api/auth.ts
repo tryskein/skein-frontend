@@ -298,11 +298,6 @@ export async function confirmEmail(token: string): Promise<void> {
 }
 
 /**
- * GET /api/auth/me. Returns null when the user is not authenticated
- * instead of throwing — the AuthProvider keeps `null` as a stable
- * "logged out" state.
- */
-/**
  * Whose session the cookie holds, as `GET /api/auth/me` answers on the wire:
  * `none` only for the status 401; `user` only for 200 with a JSON object
  * carrying a non-empty string `id`; anything else — 204, 200 with `null` or
@@ -331,6 +326,11 @@ export async function checkSessionApi(): Promise<SessionCheck> {
   return typeof id === 'string' && id !== '' ? { kind: 'user', id } : { kind: 'unknown' };
 }
 
+/**
+ * GET /api/auth/me. Returns null when the user is not authenticated
+ * instead of throwing — the AuthProvider keeps `null` as a stable
+ * "logged out" state.
+ */
 export async function meApi(): Promise<User | null> {
   try {
     return await apiJson<User>('/api/auth/me');
