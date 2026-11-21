@@ -394,8 +394,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
         const named = await untilAbort(confirmedChannel(endpoint, devices, previous), confirm.signal);
         live(step);
         // A channel the confirmation does not name is not U's: another tab
-        // made it for someone else before the lock came to this logout.
-        if (named !== undefined && (named.value.confirmed || devices === null)) {
+        // made it for someone else before the lock came to this logout. Its
+        // endpoint goes neither into U's work nor into a request.
+        if (named !== undefined && named.value.confirmed) {
           const listedSub = named.value.listed;
           const guard: RevokeGuard =
             devices === null ? 'unconfirmed' : listedSub === undefined ? 'absent' : { id: listedSub.id, version: listedSub.version };

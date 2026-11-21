@@ -309,15 +309,29 @@ describe('row 63a — branch (c): the body of the logout without a confirmation'
     expect(api.pushRevokeDevices).not.toHaveBeenCalled();
   });
 
-  test('(2) empty S, channel read: exactly one revocation with this endpoint and no labels', async () => {
+  test('(2) empty S, a channel U\'s consent does not name: no work, no request with its endpoint (row 7 removes it later)', async () => {
     const a = channel('a');
     browser.channel = a;
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    expect(await clickLogout().verdict).toBe('proceed');
+    expect(readPushState().works).toEqual([]);
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+  });
+
+  test('(2a) the channel read is another one than U\'s consent names: the revocation carries U\'s labels only', async () => {
+    browser.channel = channel('b');
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
     appearA();
     api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
     api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
 
     await clickLogout().verdict;
-    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [], endpoint: a.endpoint }]);
+    expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
+    expect(readPushState().works).toEqual([expect.objectContaining({ type: 'deviceRevoke', labels: [LABEL_A] })]);
+    expect(readPushState().works[0]).not.toHaveProperty('endpoint');
+    expect(browser.channel).toEqual(channel('b'));
   });
 
   test('(3) |S| = 1000: exactly one revocation with all 1000 labels', async () => {
@@ -416,8 +430,9 @@ describe('row 64 — the three branches of prepare', () => {
   test('(c) ok of a revocation by endpoint whose subscription carries an unknown label: the next appearance of U removes it', async () => {
     const a = channel('a');
     browser.channel = a;
-    // The consent that held the label was lost: empty S, a labelled subscription.
+    // An earlier disable kept the endpoint but S lost the label: empty S, a labelled subscription.
     addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: { state: 'off', gen: 1, endpoint: a.endpoint, offUnconfirmed: true } });
     appearA();
     api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
 
