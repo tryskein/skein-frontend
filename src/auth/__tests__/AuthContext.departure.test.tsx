@@ -32,6 +32,7 @@ import {
   settle,
   uninstallPushHarness,
 } from '../../test/pushHarness';
+import { PUSH_OP_LOCK } from '../../lib/push/locks';
 import { PUSH_STATE_KEY, readPushState } from '../../lib/push/pushState';
 
 const auth = vi.hoisted(() => ({
@@ -423,6 +424,8 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     pushOnForA();
     seed({ [A]: enabledConsent(LABEL_A, channel('a'), null), [B]: enabledConsent(LABEL_B, channel('b'), null) });
     await mount();
+    // The deletion ended every session of the account (skein-api: after the 204 the next request gets 401).
+    auth.meApi.mockImplementation(async () => null);
 
     await act(async () => {
       await current().logout('accountDeleted');
@@ -475,6 +478,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     pushOnForA();
     await mount();
     const owner = current().appearance;
+    auth.meApi.mockImplementation(async () => null);
     // The 401 handler: no user is confirmed any more, nobody else appeared.
     act(() => noteSignedOut());
 
@@ -496,6 +500,79 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     });
 
     expect(readPushState().consents[A]).toBeUndefined();
+  });
+
+  test('accountDeleted after a 401, while another tab signed B in with B\'s channel: B\'s channel stays, no logout request, the page appears as B', async () => {
+    pushOnForA();
+    const client = await mount();
+    const owner = current().appearance;
+    act(() => noteSignedOut());
+    // Another tab: B signed in, and its decision made the channel B's.
+    const b = channel('b');
+    browser.channel = b;
+    server.caller = B;
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null), [B]: enabledConsent(LABEL_B, b, null) });
+
+    let result: unknown;
+    await act(async () => {
+      result = await current().logout('accountDeleted', owner);
+    });
+
+    expect(result).toBe('userChanged');
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(browser.channel).toEqual(b);
+    expect(browserApi.removeChannel).not.toHaveBeenCalled();
+    expect(readPushState().consents[A]).toBeUndefined();
+    expect(readPushState().consents[B]).toBeDefined();
+    expect(readPushState().works).toEqual([]);
+    await waitFor(() => expect((client.getQueryData(ME_KEY) as User | null)?.id).toBe(B));
+  });
+
+  test('accountDeleted: who the cookie names does not come within the budget — no logout request, the page is signed out', async () => {
+    pushOnForA();
+    const client = await mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    auth.meApi.mockImplementation(() => new Promise(() => undefined));
+
+    let result: unknown;
+    const pending = current()
+      .logout('accountDeleted', current().appearance)
+      .then((r) => {
+        result = r;
+      });
+    await flush();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    await pending;
+
+    expect(result).toBe('loggedOut');
+    expect(auth.logoutApi).not.toHaveBeenCalled();
+    expect(client.getQueryData(ME_KEY)).toBeNull();
+    expect(readPushState().consents[A]).toBeUndefined();
+  });
+
+  test('accountDeleted waits for an operation of the owner another tab runs: the channel it made is removed, its consent does not come back', async () => {
+    pushOnForA();
+    await mount();
+    const owner = current().appearance;
+    auth.meApi.mockImplementation(async () => null);
+    // Another tab of A: an enable holds skein.push.op and makes a new channel.
+    const c = channel('c');
+    const holder = new Promise<void>((resolve) => realSetTimeout(resolve, 50));
+    void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      await holder;
+      browser.channel = c;
+      seed({ [A]: { ...enabledConsent(LABEL_A, c, null), pending: { label: LABEL_A, kind: 'enable' } } });
+    });
+
+    await act(async () => {
+      await current().logout('accountDeleted', owner);
+    });
+
+    expect(readPushState().consents[A]).toBeUndefined();
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works).toEqual([]);
+    expect(auth.logoutApi).toHaveBeenCalledTimes(1);
   });
 
   test('consequence changes neither the consent nor the channel', async () => {

@@ -799,10 +799,36 @@ export async function setConsentOffUnconfirmed(
   }, guard);
 }
 
-/** Deletes the consent of `userId` (the account was deleted). */
-export async function deleteConsent(userId: string, guard?: WriteGuard): Promise<void> {
-  await commit((record) => {
+/** Whether a consent of another user than `userId` names `endpoint`: the channel is that user's. */
+function namedByOther(record: PushStateRecord, userId: string, endpoint: string): boolean {
+  return Object.entries(record.consents).some(([id, consent]) => id !== userId && consent.endpoint === endpoint);
+}
+
+/** Whether a consent of another user than `userId` names `endpoint` (see {@link retireConsent}). */
+export function endpointNamedByOther(userId: string, endpoint: string): boolean {
+  return namedByOther(readPushState(), userId, endpoint);
+}
+
+/** Result of {@link retireConsent}. */
+export interface RetireConsentResult {
+  /** The `localUnsubscribe` work written for the consent's endpoint, `null` when none was. */
+  journaled: PushWork | null;
+}
+
+/**
+ * Deletes the consent of `userId` (the account was deleted) and, in the
+ * same write, journals the removal of the channel its endpoint names —
+ * unless another user's consent names that endpoint or its removal is
+ * journaled already — so a removal that does not happen now is repeated on
+ * the next page load.
+ */
+export async function retireConsent(userId: string, guard?: WriteGuard): Promise<RetireConsentResult> {
+  return commit((record) => {
+    const endpoint = record.consents[userId]?.endpoint ?? null;
     delete record.consents[userId];
+    if (endpoint === null || namedByOther(record, userId, endpoint)) return { journaled: null };
+    if (record.works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) return { journaled: null };
+    return { journaled: appendWork(record, { type: 'localUnsubscribe', endpoint }) };
   }, guard);
 }
 

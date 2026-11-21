@@ -288,8 +288,11 @@ describe('row 251 — "Account": deletion only with registration open', () => {
     expect(screen.getByRole('link', { name: i18n.t('account:deletedPage.signIn') }).getAttribute('href')).toBe('/login');
   });
 
-  test('#6 — deleted, but another user appeared meanwhile: their session stays, no "Account deleted" page', async () => {
-    api.logout.mockImplementationOnce(async () => 'superseded');
+  test.each([
+    { result: 'superseded', case: 'another user appeared meanwhile' },
+    { result: 'userChanged', case: 'the cookie is another user\'s' },
+  ])('#6 — deleted, but $case: their session stays, no "Account deleted" page', async ({ result }) => {
+    api.logout.mockImplementationOnce(async () => result);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     const { AccountDeletedPage } = await import('../../AccountDeletedPage');
     render(

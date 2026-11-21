@@ -46,13 +46,14 @@ export function AccountDeletionDialog({ onClose }: { onClose: () => void }) {
       try {
         // The server has revoked the session already; the logout clears
         // what the tab still holds.
-        replaced = (await logout('accountDeleted', owner)) === 'superseded';
+        const result = await logout('accountDeleted', owner);
+        replaced = result === 'superseded' || result === 'userChanged';
       } catch {
         // A failed logout call changes nothing here: the local state is
         // cleared in its `onSettled` either way.
       }
-      // Another user appeared meanwhile: their session goes on, without
-      // the page of a deleted account.
+      // Another user appeared meanwhile, or the cookie is another user's:
+      // their session goes on, without the page of a deleted account.
       if (!replaced) navigate('/account-deleted', { replace: true });
     },
   });

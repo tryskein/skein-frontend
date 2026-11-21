@@ -67,12 +67,13 @@ import {
 import {
   addPushWork,
   type Consent,
-  deleteConsent,
+  endpointNamedByOther,
   type PushWork,
   readConsent,
   readPushState,
   refineRevocation,
   removePushWork,
+  retireConsent,
   revokeConsent,
   type RevokeGuard,
   setConsentOffUnconfirmed,
@@ -467,44 +468,84 @@ function asRevocation(work: PushWork): Extract<PushWork, { type: 'deviceRevoke' 
 }
 
 /**
- * The push part of the logout after the deletion of one's own account: the
- * consent of the user is deleted from the push state first, then the channel
- * this browser has is removed (also a subscription the user never accepted,
- * or a channel the consent no longer names), without a server call, within
- * {@link DEPARTURE_BUDGET_MS}. The removal is journaled, so a failed one is
- * repeated on the next page load.
+ * How the logout after an account deletion goes on: `proceed` — send the
+ * logout request (only the cookie of the deleted session is cleared);
+ * `userChanged` — the cookie is another user's, no request; `superseded` —
+ * another appearance replaced the owner's on this page; `unknown` — who the
+ * cookie names did not come within the budget, no request either (the
+ * deleted account is signed out on the server already, and the request
+ * might end someone else's session).
+ */
+export type DeletionVerdict = 'proceed' | 'userChanged' | 'superseded' | 'unknown';
+
+/**
+ * The push part of the logout after the deletion of one's own account, and
+ * the check of whose session the cookie holds now; both within
+ * {@link DEPARTURE_BUDGET_MS}.
+ *
+ * Holding `skein.push.op` (waited for at most {@link DEPARTURE_CONFIRM_MS}):
+ * the owner's operations of any tab that started before have ended, and
+ * those that start after it fail their confirmation (the account is gone).
+ * The consent of the owner is deleted, the removal of the channel its
+ * endpoint names journaled, then the channel this browser has is read and
+ * removed — also a subscription the user never accepted, or a channel the
+ * consent no longer names — unless another user's consent names it. Without
+ * the lock the consent is still deleted with that journal, and the channel
+ * is neither read nor removed. No server call.
  *
  * `owner` is the appearance in which the deletion was asked for. The clean-up
  * is the owner's also when the page has no user any more (a 401 of the
- * deleted session came first); only another appearance replacing the owner's
- * stops it, with the result `superseded` — the logout must not touch the
- * session that appeared since.
+ * deleted session came first); only another appearance on this page stops
+ * it. `whoIsSignedIn` answers whose session the cookie holds (`null`: none).
  */
-export async function departAfterAccountDeletion(owner: Appearance | null): Promise<'proceed' | 'superseded'> {
+export async function departAfterAccountDeletion(
+  owner: Appearance | null,
+  whoIsSignedIn: () => Promise<string | null>,
+): Promise<DeletionVerdict> {
   const token = owner ?? currentAppearance();
-  const replaced = () => {
-    const now = currentAppearance();
-    return token !== null && now !== null && (now.seq !== token.seq || now.userId !== token.userId);
-  };
-  if (replaced()) return 'superseded';
-  if (token === null || !browserPushSupported()) return 'proceed';
+  if (token !== null && appearedSince(token)) return 'superseded';
   const budget = deadline(DEPARTURE_BUDGET_MS);
-  const stop = budget.stop;
-  const step: PushStep = { token, signal: budget.signal, holds: () => !replaced() };
-  const work = (async () => {
-    const userId = step.token.userId;
-    live(step);
-    await deleteConsent(userId, guardOf(step));
-    const read = await readChannel();
-    if (read.kind !== 'channel') return;
-    const endpoint = read.channel.endpoint;
-    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
-    await removeLocalChannel(step, endpoint);
-  })();
   try {
-    await withinBudget(work, step.signal, undefined);
+    const session = untilAbort(whoIsSignedIn(), budget.signal).catch(() => undefined);
+    const local = token !== null && browserPushSupported() ? cleanUp(token, budget.signal) : Promise.resolve();
+    const [cookie] = await Promise.all([session, withinBudget(local, budget.signal, undefined)]);
+    if (token !== null && appearedSince(token)) return 'superseded';
+    if (cookie === undefined) return 'unknown';
+    return cookie.value === null ? 'proceed' : 'userChanged';
   } finally {
-    stop();
+    budget.stop();
   }
-  return replaced() ? 'superseded' : 'proceed';
+}
+
+/** The local clean-up of {@link departAfterAccountDeletion}. */
+async function cleanUp(token: Appearance, signal: AbortSignal): Promise<void> {
+  const userId = token.userId;
+  const step: PushStep = { token, signal, holds: () => !appearedSince(token) };
+  abortPushOperations();
+  const lockWait = deadline(DEPARTURE_CONFIRM_MS, signal);
+  const opLock = holdOpLock(lockWait.signal);
+  try {
+    const held = await opLock.held;
+    live(step);
+    const { journaled } = await retireConsent(userId, guardOf(step));
+    if (!held) return;
+    const read = await readChannel();
+    live(step);
+    if (read.kind === 'unreadable') return;
+    if (read.kind === 'none') {
+      // The channel the consent named is gone already.
+      if (journaled !== null) await removePushWork(journaled.id, guardOf(step));
+      return;
+    }
+    const endpoint = read.channel.endpoint;
+    if (endpoint !== journaled?.endpoint) {
+      if (journaled !== null) await removePushWork(journaled.id, guardOf(step));
+      if (endpointNamedByOther(userId, endpoint)) return;
+      await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
+    }
+    await removeLocalChannel(step, endpoint);
+  } finally {
+    lockWait.stop();
+    opLock.release();
+  }
 }

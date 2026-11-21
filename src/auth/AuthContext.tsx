@@ -137,7 +137,8 @@ interface LogoutVariables {
 export type LogoutResult = 'loggedOut' | 'userChanged' | 'superseded';
 
 type LogoutOutcome =
-  | { kind: 'loggedOut'; response: LogoutResponse }
+  /** The session is over; `response` is absent when no logout request was sent. */
+  | { kind: 'loggedOut'; response?: LogoutResponse }
   /** The server confirmed another user: nobody was logged out. */
   | { kind: 'userChanged' }
   /** Another appearance replaced the one the logout was for: nobody was logged out. */
@@ -268,8 +269,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         return { kind: 'superseded' };
       }
-      if (kind === 'accountDeleted' && (await departAfterAccountDeletion(owner)) === 'superseded') {
-        return { kind: 'superseded' };
+      if (kind === 'accountDeleted') {
+        // The server ended every session of the deleted account; the request
+        // only clears its cookie, so it goes only when the cookie is known
+        // to hold no session — never on someone else's.
+        const deletion = await departAfterAccountDeletion(owner, async () => (await meApi())?.id ?? null);
+        if (deletion === 'superseded') return { kind: 'superseded' };
+        if (deletion === 'userChanged') {
+          await reloadMeAfterUserChanged();
+          return { kind: 'userChanged' };
+        }
+        if (deletion === 'unknown') return { kind: 'loggedOut' };
       }
       const sent = logoutApi();
       const removal = departure === null ? Promise.resolve() : departure.finish();
