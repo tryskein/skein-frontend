@@ -82,6 +82,7 @@ vi.mock('../../lib/push/browserPush', async (importOriginal) => ({
 
 import { AuthProvider, ME_KEY, useAuth } from '../AuthContext';
 import { createAppQueryClient } from '../../lib/appQueryClient';
+import { getPushLifecycleState, startPushLifecycle, stopPushLifecycle } from '../../lib/push/pushLifecycle';
 import { currentAppearance, noteLogin, noteSignedOut } from '../appearance';
 
 const SIGN_OUT_URL = 'https://sso.example.net/oauth2/sign_out';
@@ -148,6 +149,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  stopPushLifecycle();
   onlineManager.setOnline(true);
   vi.useRealTimers();
   cleanup();
@@ -474,11 +476,17 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(auth.logoutApi).toHaveBeenCalledTimes(1);
   });
 
-  test('accountDeleted removes the channel this browser has, also one without a consent (US-9)', async () => {
+  test('accountDeleted removes a channel without a consent that the owner\'s list showed before the deletion (US-9)', async () => {
     const a = channel('a');
     browser.channel = a;
     addSub(A, a.endpoint, null);
+    // Push is off on the server: the decision of A only reads its list.
+    server.publicKey = '';
+    startPushLifecycle();
     await mount();
+    await settle(locks);
+    expect(getPushLifecycleState().devices).toHaveLength(1);
+    auth.meApi.mockImplementation(async () => null);
 
     await act(async () => {
       await current().logout('accountDeleted', current().appearance);
@@ -487,6 +495,25 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(browser.channel).toBeNull();
     expect(readPushState().works).toEqual([]);
     expect(pushCallsBesidesList()).toBe(0);
+  });
+
+  test('accountDeleted leaves a channel nothing shows to be the owner\'s: the next confirmed user decides on it (US-6)', async () => {
+    // A channel of someone else from before, without a consent; A's list was not read.
+    const old = channel('old');
+    browser.channel = old;
+    pushOnForA();
+    browser.channel = old;
+    await mount();
+    auth.meApi.mockImplementation(async () => null);
+
+    await act(async () => {
+      await current().logout('accountDeleted', current().appearance);
+    });
+
+    expect(browser.channel).toEqual(old);
+    expect(browserApi.removeChannel).not.toHaveBeenCalled();
+    expect(readPushState().works).toEqual([]);
+    expectRetired(A);
   });
 
   test('accountDeleted of an appearance another one replaced meanwhile: A\'s consent goes, B and the session are untouched', async () => {

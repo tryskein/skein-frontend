@@ -60,6 +60,7 @@ import { endpointFingerprint } from './fingerprint';
 import { withPushOpLock } from './locks';
 import {
   abortPushOperations,
+  getPushLifecycleState,
   removeLocalChannel,
   repeatOwnRevocation,
   revocationProgress,
@@ -550,7 +551,8 @@ export type DeletionVerdict = 'proceed' | 'userChanged' | 'superseded' | 'unknow
  *
  * Holding `skein.push.op` (waited for at most {@link DEPARTURE_CONFIRM_MS}),
  * the channel this browser has is read and removed, its removal journaled,
- * unless another user's consent names it. Without the lock, or with another
+ * when it is known to be the owner's ({@link ownedByOwner}) and no other
+ * user's consent names it. Without the lock, or with another
  * appearance on this page, the channel is neither read nor removed. No
  * server call.
  *
@@ -585,6 +587,20 @@ export async function departAfterAccountDeletion(
   }
 }
 
+/**
+ * Whether the channel at `endpoint` is known to be the deleted owner's: its
+ * consent named it, or the owner's list, as the decision of the owner's
+ * appearance read it before the deletion, has its subscription.
+ */
+async function ownedByOwner(token: Appearance, endpoint: string, consentEndpoint: string | null): Promise<boolean> {
+  if (endpoint === consentEndpoint) return true;
+  const shown = getPushLifecycleState();
+  const devices = shown.appearance?.userId === token.userId && shown.appearance.seq === token.seq ? shown.devices : null;
+  if (devices === null) return false;
+  const hash = await endpointFingerprint(endpoint);
+  return devices.some((d) => d.endpointHash === hash);
+}
+
 /** The removal of the channel by {@link departAfterAccountDeletion}. */
 async function cleanUp(token: Appearance, signal: AbortSignal, retired: Promise<RetireConsentResult>): Promise<void> {
   const userId = token.userId;
@@ -603,6 +619,12 @@ async function cleanUp(token: Appearance, signal: AbortSignal, retired: Promise<
     if (read.kind !== 'channel') return;
     const endpoint = read.channel.endpoint;
     if (endpointNamedByOther(userId, endpoint)) return;
+    const retiredEndpoint = (await retired.catch(() => null))?.endpoint ?? null;
+    const owned = await untilAbort(ownedByOwner(token, endpoint, retiredEndpoint), signal);
+    live(step);
+    // A channel not known to be the owner's is left to the decision table of
+    // the next confirmed user (US-6).
+    if (owned?.value !== true) return;
     await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
     await removeLocalChannel(step, endpoint);
   } finally {
