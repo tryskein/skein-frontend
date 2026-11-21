@@ -31,7 +31,7 @@ import {
   uninstallPushHarness,
 } from '../../test/pushHarness';
 import { PUSH_OP_LOCK, PUSH_STORE_LOCK } from './locks';
-import { type Consent, emptyConsent, PUSH_STATE_KEY, readConsent, readPushState } from './pushState';
+import { beginConsentLabel, type Consent, emptyConsent, PUSH_STATE_KEY, readConsent, readPushState } from './pushState';
 
 const api = vi.hoisted(() => ({
   getPushConfig: vi.fn(),
@@ -74,6 +74,7 @@ vi.mock('./fingerprint', async (importOriginal) => {
 
 import {
   beginExplicitDeparture,
+  departAfterAccountDeletion,
   DEPARTURE_BUDGET_MS,
   DEPARTURE_CONFIRM_MS,
   DEPARTURE_PREPARE_MS,
@@ -895,6 +896,69 @@ describe('row 64 (a) — the logout holds skein.push.op; it removes only the cha
     expect(readConsent(A)).toMatchObject({ state: 'off', gen: 1, labels: [] });
     expect(revocationBodies()).toEqual([{ expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined }]);
     expect(browser.channel).toEqual(a);
+  });
+});
+
+// ───────────────────────── Row 69 ─────────────────────────
+
+describe('row 69 — the deletion of the account invalidates the owner\'s operations started before', () => {
+  test('a first enable (gen 0) holds skein.push.op past the clean-up\'s wait: its later label is refused, the consent stays deleted', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    appearA();
+    const holder = deferred<void>();
+    let written: string | null = null;
+    void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      await holder.promise;
+      written = await beginConsentLabel(A, { expect: { gen: 0 }, kind: 'enable', endpoint: channel('x').endpoint, keysFingerprint: null }).then(
+        () => 'written',
+        (error: Error) => error.name,
+      );
+    });
+
+    const deletion = departAfterAccountDeletion(null, async () => null);
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
+    expect(await deletion).toBe('proceed');
+    holder.resolve();
+    await flush();
+
+    expect(written).toBe('PushStateConflictError');
+    expect(readConsent(A)).toMatchObject({ state: 'none', labels: [], gen: 1 });
+    expect(browserApi.readChannel).not.toHaveBeenCalled();
+  });
+});
+
+describe('row 69 — a clean-up without skein.push.op journals nothing', () => {
+  test('B accepts X after the clean-up of A gave up the lock: no work of A removes X later', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const x = channel('x');
+    browser.channel = x;
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    appearA();
+    // B's decision holds the op lock past the clean-up's wait, then accepts X.
+    const holder = deferred<void>();
+    void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      await holder.promise;
+      const record = JSON.parse(localStorage.getItem(PUSH_STATE_KEY)!);
+      record.consents[B] = { ...emptyConsent(), ...enabledConsent(LABEL_B, x, null) };
+      localStorage.setItem(PUSH_STATE_KEY, JSON.stringify(record));
+    });
+
+    const deletion = departAfterAccountDeletion(null, async () => null);
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
+    await deletion;
+    holder.resolve();
+    await flush();
+    expect(readPushState().works).toEqual([]);
+
+    // The next page load, without a user.
+    vi.useRealTimers();
+    noteSignedOut();
+    startPushLifecycle();
+    await settle(locks);
+    expect(browser.channel).toEqual(x);
+    expect(browserApi.removeChannel).not.toHaveBeenCalled();
   });
 });
 

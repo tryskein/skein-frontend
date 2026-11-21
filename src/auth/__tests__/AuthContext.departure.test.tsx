@@ -33,7 +33,7 @@ import {
   uninstallPushHarness,
 } from '../../test/pushHarness';
 import { PUSH_OP_LOCK } from '../../lib/push/locks';
-import { PUSH_STATE_KEY, readPushState } from '../../lib/push/pushState';
+import { PUSH_STATE_KEY, readConsent, readPushState, recordUnconfirmedChannel } from '../../lib/push/pushState';
 
 const auth = vi.hoisted(() => ({
   meApi: vi.fn(),
@@ -157,6 +157,15 @@ afterEach(async () => {
   Object.defineProperty(window, 'location', { configurable: true, writable: true, value: originalLocation });
   uninstallPushHarness();
 });
+
+/**
+ * The consent of the deleted user is gone: "no mark", with a generation
+ * past every one an earlier operation of that user read.
+ */
+function expectRetired(userId: string): void {
+  expect(readConsent(userId)).toMatchObject({ state: 'none', labels: [], label: null, pending: null, endpoint: null });
+  expect(readConsent(userId).gen).toBeGreaterThan(0);
+}
 
 /** A with push on this device: the consent, the channel and the subscription. */
 function pushOnForA(): void {
@@ -457,7 +466,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
       await current().logout('accountDeleted');
     });
 
-    expect(readPushState().consents[A]).toBeUndefined();
+    expectRetired(A);
     expect(readPushState().consents[B]).toBeDefined();
     expect(browser.channel).toBeNull();
     expect(pushCallsBesidesList()).toBe(0);
@@ -480,12 +489,12 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(pushCallsBesidesList()).toBe(0);
   });
 
-  test('accountDeleted of an appearance another one replaced meanwhile touches neither B nor the session', async () => {
-    seed({ [B]: enabledConsent(LABEL_B, channel('b'), null) });
+  test('accountDeleted of an appearance another one replaced meanwhile: A\'s consent goes, B and the session are untouched', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null), [B]: enabledConsent(LABEL_B, channel('b'), null) });
     browser.channel = channel('b');
     const client = await mount();
     const owner = current().appearance;
-    const stateBefore = localStorage.getItem(PUSH_STATE_KEY);
+    const consentOfB = readConsent(B);
     // B appeared while the deletion request of A was on its way.
     server.caller = B;
     act(() => noteLogin(B));
@@ -496,7 +505,9 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
 
     expect(auth.logoutApi).not.toHaveBeenCalled();
     expect(client.getQueryData(ME_KEY)).not.toBeNull();
-    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(stateBefore);
+    expectRetired(A);
+    expect(readConsent(B)).toEqual(consentOfB);
+    expect(readPushState().works).toEqual([]);
     expect(browser.channel).toEqual(channel('b'));
   });
 
@@ -512,7 +523,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
       await current().logout('accountDeleted', owner);
     });
 
-    expect(readPushState().consents[A]).toBeUndefined();
+    expectRetired(A);
     expect(browser.channel).toBeNull();
   });
 
@@ -525,7 +536,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
       await current().logout('accountDeleted', current().appearance);
     });
 
-    expect(readPushState().consents[A]).toBeUndefined();
+    expectRetired(A);
     let next = false;
     await locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
       next = true;
@@ -553,7 +564,7 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(auth.logoutApi).not.toHaveBeenCalled();
     expect(browser.channel).toEqual(b);
     expect(browserApi.removeChannel).not.toHaveBeenCalled();
-    expect(readPushState().consents[A]).toBeUndefined();
+    expectRetired(A);
     expect(readPushState().consents[B]).toBeDefined();
     expect(readPushState().works).toEqual([]);
     await waitFor(() => expect((client.getQueryData(ME_KEY) as User | null)?.id).toBe(B));
@@ -579,30 +590,39 @@ describe('row 69 — accountDeleted, consequence and the 401 handler (INV-3, US-
     expect(result).toBe('loggedOut');
     expect(auth.logoutApi).not.toHaveBeenCalled();
     expect(client.getQueryData(ME_KEY)).toBeNull();
-    expect(readPushState().consents[A]).toBeUndefined();
+    expectRetired(A);
   });
 
-  test('accountDeleted waits for an operation of the owner another tab runs: the channel it made is removed, its consent does not come back', async () => {
+  test('accountDeleted while another tab runs an operation of the owner: that operation cannot write the consent again', async () => {
     pushOnForA();
     await mount();
     const owner = current().appearance;
     auth.meApi.mockImplementation(async () => null);
-    // Another tab of A: an enable holds skein.push.op and makes a new channel.
-    const c = channel('c');
+    const consentRead = readConsent(A);
+    // Another tab of A: an enable that read the consent before the deletion
+    // holds skein.push.op and writes its new channel after it.
+    let written: string | null = null;
     const holder = new Promise<void>((resolve) => realSetTimeout(resolve, 50));
     void locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
       await holder;
-      browser.channel = c;
-      seed({ [A]: { ...enabledConsent(LABEL_A, c, null), pending: { label: LABEL_A, kind: 'enable' } } });
+      written = await recordUnconfirmedChannel(A, {
+        expect: { gen: consentRead.gen, rev: consentRead.rev },
+        label: LABEL_A,
+        endpoint: channel('c').endpoint,
+        keysFingerprint: null,
+        kind: 'enable',
+      }).then(
+        () => 'written',
+        (error: Error) => error.name,
+      );
     });
 
     await act(async () => {
       await current().logout('accountDeleted', owner);
     });
 
-    expect(readPushState().consents[A]).toBeUndefined();
-    expect(browser.channel).toBeNull();
-    expect(readPushState().works).toEqual([]);
+    expect(written).toBe('PushStateConflictError');
+    expectRetired(A);
     expect(auth.logoutApi).toHaveBeenCalledTimes(1);
   });
 

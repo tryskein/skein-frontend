@@ -854,24 +854,23 @@ export function endpointNamedByOther(userId: string, endpoint: string): boolean 
 
 /** Result of {@link retireConsent}. */
 export interface RetireConsentResult {
-  /** The `localUnsubscribe` work written for the consent's endpoint, `null` when none was. */
-  journaled: PushWork | null;
+  /** The endpoint the deleted consent named, `null` when none. */
+  endpoint: string | null;
 }
 
 /**
- * Deletes the consent of `userId` (the account was deleted) and, in the
- * same write, journals the removal of the channel its endpoint names —
- * unless another user's consent names that endpoint or its removal is
- * journaled already — so a removal that does not happen now is repeated on
- * the next page load.
+ * Deletes the consent of `userId` (the account was deleted): what remains is
+ * "no mark" with a generation grown past every one an operation of that user
+ * may have read, so no operation started before writes the consent again —
+ * a deleted consent is never a fresh one with generation 0. Nothing is
+ * journaled: the channel is removed only by whoever holds `skein.push.op`
+ * and knows it is this user's.
  */
 export async function retireConsent(userId: string, guard?: WriteGuard): Promise<RetireConsentResult> {
   return commit((record) => {
-    const endpoint = record.consents[userId]?.endpoint ?? null;
-    delete record.consents[userId];
-    if (endpoint === null || namedByOther(record, userId, endpoint)) return { journaled: null };
-    if (record.works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === endpoint)) return { journaled: null };
-    return { journaled: appendWork(record, { type: 'localUnsubscribe', endpoint }) };
+    const consent = consentFor(record, userId);
+    record.consents[userId] = { ...emptyConsent(), gen: consent.gen + 1, rev: consent.rev + 1 };
+    return { endpoint: consent.endpoint };
   }, guard);
 }
 

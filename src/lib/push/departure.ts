@@ -78,6 +78,7 @@ import {
   refineRevocation,
   removePushWork,
   retireConsent,
+  type RetireConsentResult,
   revokeConsent,
   type RevokeGuard,
   setConsentOffUnconfirmed,
@@ -542,31 +543,39 @@ export type DeletionVerdict = 'proceed' | 'userChanged' | 'superseded' | 'unknow
  * the check of whose session the cookie holds now; both within
  * {@link DEPARTURE_BUDGET_MS}.
  *
- * Holding `skein.push.op` (waited for at most {@link DEPARTURE_CONFIRM_MS}):
- * the owner's operations of any tab that started before have ended, and
- * those that start after it fail their confirmation (the account is gone).
- * The consent of the owner is deleted, the removal of the channel its
- * endpoint names journaled, then the channel this browser has is read and
- * removed — also a subscription the user never accepted, or a channel the
- * consent no longer names — unless another user's consent names it. Without
- * the lock the consent is still deleted with that journal, and the channel
- * is neither read nor removed. No server call.
+ * The data of the deleted account go whatever becomes of this logout: the
+ * owner's consent is deleted first, its generation grown, so that no
+ * operation of the owner started before writes it again (also when another
+ * appearance replaced the owner's meanwhile, and also past the budget).
+ *
+ * Holding `skein.push.op` (waited for at most {@link DEPARTURE_CONFIRM_MS}),
+ * the channel this browser has is read and removed, its removal journaled,
+ * unless another user's consent names it. Without the lock, or with another
+ * appearance on this page, the channel is neither read nor removed. No
+ * server call.
  *
  * `owner` is the appearance in which the deletion was asked for. The clean-up
  * is the owner's also when the page has no user any more (a 401 of the
- * deleted session came first); only another appearance on this page stops
- * it. `whoIsSignedIn` answers whose session the cookie holds (`null`: none).
+ * deleted session came first). `whoIsSignedIn` answers whose session the
+ * cookie holds (`null`: none).
  */
 export async function departAfterAccountDeletion(
   owner: Appearance | null,
   whoIsSignedIn: () => Promise<string | null>,
 ): Promise<DeletionVerdict> {
   const token = owner ?? currentAppearance();
-  if (token !== null && appearedSince(token)) return 'superseded';
+  const pushed = token !== null && browserPushSupported();
+  // Not bounded by the budget or by this page's appearance: see above.
+  const retired = pushed ? retireConsent(token.userId) : Promise.resolve({ endpoint: null });
+  retired.catch(() => undefined);
   const budget = deadline(DEPARTURE_BUDGET_MS);
   try {
+    if (token !== null && appearedSince(token)) {
+      await withinBudget(retired, budget.signal, undefined);
+      return 'superseded';
+    }
     const session = untilAbort(whoIsSignedIn(), budget.signal).catch(() => undefined);
-    const local = token !== null && browserPushSupported() ? cleanUp(token, budget.signal) : Promise.resolve();
+    const local = pushed ? cleanUp(token, budget.signal, retired) : Promise.resolve();
     const [cookie] = await Promise.all([session, withinBudget(local, budget.signal, undefined)]);
     if (token !== null && appearedSince(token)) return 'superseded';
     if (cookie === undefined) return 'unknown';
@@ -576,8 +585,8 @@ export async function departAfterAccountDeletion(
   }
 }
 
-/** The local clean-up of {@link departAfterAccountDeletion}. */
-async function cleanUp(token: Appearance, signal: AbortSignal): Promise<void> {
+/** The removal of the channel by {@link departAfterAccountDeletion}. */
+async function cleanUp(token: Appearance, signal: AbortSignal, retired: Promise<RetireConsentResult>): Promise<void> {
   const userId = token.userId;
   const step: PushStep = { token, signal, holds: () => !appearedSince(token) };
   abortPushOperations();
@@ -586,24 +595,15 @@ async function cleanUp(token: Appearance, signal: AbortSignal): Promise<void> {
   // The lock goes with the budget, also while a browser call still hangs.
   signal.addEventListener('abort', opLock.release, { once: true });
   try {
-    const held = await opLock.held;
-    live(step);
-    const { journaled } = await retireConsent(userId, guardOf(step));
+    const [held] = await Promise.all([opLock.held, retired.catch(() => null)]);
     if (!held) return;
+    live(step);
     const read = await readChannel(signal);
     live(step);
-    if (read.kind === 'unreadable') return;
-    if (read.kind === 'none') {
-      // The channel the consent named is gone already.
-      if (journaled !== null) await removePushWork(journaled.id, guardOf(step));
-      return;
-    }
+    if (read.kind !== 'channel') return;
     const endpoint = read.channel.endpoint;
-    if (endpoint !== journaled?.endpoint) {
-      if (journaled !== null) await removePushWork(journaled.id, guardOf(step));
-      if (endpointNamedByOther(userId, endpoint)) return;
-      await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
-    }
+    if (endpointNamedByOther(userId, endpoint)) return;
+    await addPushWork({ type: 'localUnsubscribe', endpoint }, guardOf(step));
     await removeLocalChannel(step, endpoint);
   } finally {
     lockWait.stop();
