@@ -124,6 +124,15 @@ function clickLogout(): { done: () => boolean; verdict: Promise<DepartureVerdict
   return { done: () => finished, verdict };
 }
 
+/**
+ * Lets the hold of the logout's works end (pushState.ts#isHeld): the next
+ * appearance or page load comes later than the logout's budget.
+ */
+function afterTheHold(): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + DEPARTURE_BUDGET_MS + 1);
+}
+
 /** U = A has appeared. */
 function appearA(): void {
   server.caller = A;
@@ -419,6 +428,7 @@ describe('row 64 — the three branches of prepare', () => {
     ]);
 
     noteSignedOut();
+    afterTheHold();
     startPushLifecycle();
     appearA();
     await settle(locks);
@@ -446,6 +456,7 @@ describe('row 64 (c) — after ok the removal of the channel is journaled', () =
 
     noteSignedOut();
     browser.removeFails = false;
+    afterTheHold();
     startPushLifecycle();
     await settle(locks);
 
@@ -684,6 +695,80 @@ describe('row 64 (b) — the verdict is fixed when "user changed" arrives', () =
   });
 });
 
+describe('row 64 (b) — a refused logout takes its transition back before anyone performs it', () => {
+  test('the take-back waits for skein.push.store: the op lock is still the logout\'s until the transition is back', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    const consentBefore = readConsent(A);
+    const holder = deferred<void>();
+    api.pushRevokeDevices.mockImplementationOnce(async () => {
+      void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => holder.promise);
+      return { kind: 'userChanged' };
+    });
+
+    expect(await clickLogout().verdict).toBe('userChanged');
+    // Another tab of A asks for the op lock to repeat the journal.
+    let seen: Consent | null = null;
+    let worksSeen: unknown[] = [];
+    const other = locks.request(PUSH_OP_LOCK, { mode: 'exclusive' }, async () => {
+      seen = readConsent(A);
+      worksSeen = readPushState().works;
+    });
+    await flush();
+    expect(seen).toBeNull();
+
+    holder.resolve();
+    await other;
+    expect(effective(seen!)).toEqual(effective(consentBefore));
+    expect(worksSeen).toEqual([]);
+  });
+
+  test('a work an explicit logout still holds is not repeated by an appearance; once the hold ends it is', async () => {
+    const heldUntil = Date.now() + 60_000;
+    seed({ [A]: { state: 'off', gen: 1 } }, [
+      { id: 'w', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed', heldUntil },
+    ]);
+    startPushLifecycle();
+    appearA();
+    await settle(locks);
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+
+    seed({ [A]: { state: 'off', gen: 1 } }, [
+      { id: 'w', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed', heldUntil: Date.now() - 1 },
+    ]);
+    noteLogin(A);
+    await settle(locks);
+    expect(api.pushRevokeDevices).toHaveBeenCalledWith(
+      { expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined },
+      expect.any(AbortSignal),
+    );
+    expect(readPushState().works).toEqual([]);
+  });
+
+  test('a take-back after the hold ended changes nothing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    api.pushListDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+    const revocation = deferred<PushOutcome>();
+    api.pushRevokeDevices.mockImplementationOnce(() => revocation.promise);
+
+    const departure = beginExplicitDeparture();
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS + 10);
+    revocation.resolve({ kind: 'userChanged' });
+    await flush();
+    departure.cancel();
+    await flush();
+
+    expect(readConsent(A)).toMatchObject({ state: 'off', labels: [] });
+    expect(readPushState().works).toEqual([expect.objectContaining({ type: 'deviceRevoke', labels: [LABEL_A] })]);
+  });
+});
+
 describe('row 64 (a) — the logout holds skein.push.op; it removes only the channel read under it and named by the confirmation', () => {
   test('another tab made B\'s channel before the lock came to this logout: it is not removed, its endpoint is not revoked', async () => {
     const a = channel('a');
@@ -796,6 +881,7 @@ describe('row 66 — after branch (c) the next appearance of U repeats the revoc
     api.pushRemoveChannel.mockClear();
 
     noteSignedOut();
+    afterTheHold();
     startPushLifecycle();
     server.caller = B;
     noteLogin(B);

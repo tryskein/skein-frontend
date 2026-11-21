@@ -70,6 +70,7 @@ import {
   addPushWork,
   type Consent,
   endpointNamedByOther,
+  isHeld,
   type PushWork,
   readConsent,
   readPushState,
@@ -248,6 +249,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   const progress = revocationProgress();
 
   const budget = deadline(DEPARTURE_BUDGET_MS);
+  // Until the budget ends the works of this logout are its own: no repeat
+  // performs them, so taking them back cannot come after their effect.
+  const heldUntil = Date.now() + DEPARTURE_BUDGET_MS;
   const server = deadline(DEPARTURE_PREPARE_MS, budget.signal);
   const lockWait = deadline(DEPARTURE_CONFIRM_MS, server.signal);
   const opLock = holdOpLock(lockWait.signal);
@@ -290,8 +294,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   function abandon(): void {
     if (abandoned) return;
     abandoned = true;
-    end();
-    void takeBack();
+    // The lock is kept until the transition is taken back (within the
+    // budget): the next tab does not see works about to go.
+    void takeBack().finally(end);
   }
 
   const unsubscribe = subscribeAppearance(() => {
@@ -301,7 +306,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
 
   // ── 1. The local part, before anything that may end the logout ──
   abortPushOperations();
-  const transition = revokeConsent(userId, { endpoint: null, guard: 'unconfirmed' }, {
+  const transition = revokeConsent(userId, { endpoint: null, guard: 'unconfirmed', heldUntil }, {
     check: () => {
       if (abandoned) throw new DOMException('the logout was refused', 'AbortError');
     },
@@ -323,7 +328,12 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     }
     await refining.catch(() => undefined);
     try {
-      await undoRevocation(userId, { expect: { gen: result.consent.gen, rev: result.consent.rev }, previous: result.previous, workIds: written });
+      await undoRevocation(userId, {
+        expect: { gen: result.consent.gen, rev: result.consent.rev },
+        previous: result.previous,
+        workIds: written,
+        before: heldUntil,
+      });
     } catch {
       // The record moved on meanwhile; its newer state stays.
     }
@@ -385,6 +395,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
               guard,
               listed: listedSub === undefined ? undefined : { id: listedSub.id, label: listedSub.deviceLabel },
               localUnsubscribe: removable,
+              heldUntil,
             },
             guardOf(step),
           );
@@ -404,7 +415,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
       // (a) U is confirmed.
       let done = work === null ? read.kind === 'none' : await repeatOwnRevocation(step, asRevocation(work), progress);
       for (const earlier of readPushState().works) {
-        if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+        if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier)) continue;
         done = (await repeatOwnRevocation(step, earlier)) && done;
       }
       if (done) await clearOffUnconfirmed();
@@ -423,7 +434,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     // names, its removal journaled.
     if (revocation.endpoint !== undefined) {
       if (revocation.endpoint === previous.endpoint) {
-        const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint }, guardOf(step));
+        const local = await addPushWork({ type: 'localUnsubscribe', endpoint: revocation.endpoint, heldUntil }, guardOf(step));
         written.push(local.id);
         removal = revocation.endpoint;
       }

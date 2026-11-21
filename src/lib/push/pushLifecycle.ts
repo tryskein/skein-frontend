@@ -79,6 +79,7 @@ import {
   type Consent,
   type ConsentSnapshot,
   confirmConsent,
+  isHeld,
   MAX_CONSENT_LABELS,
   PushLabelLimitError,
   PushStateConflictError,
@@ -282,6 +283,8 @@ async function repeatLocalUnsubscribe(work: Extract<PushWork, { type: 'localUnsu
 async function repeatWork(step: Step): Promise<void> {
   const userId = step.token.userId;
   for (const work of readPushState().works) {
+    // An explicit logout still running may take it back (pushState.ts#isHeld).
+    if (isHeld(work)) continue;
     switch (work.type) {
       case 'localUnsubscribe':
         await repeatLocalUnsubscribe(work, step);
@@ -998,7 +1001,7 @@ async function repeatLocalUnsubscribesOnLoad(): Promise<void> {
   try {
     await withPushOpLock(async () => {
       for (const work of readPushState().works) {
-        if (work.type === 'localUnsubscribe') await repeatLocalUnsubscribe(work, null);
+        if (work.type === 'localUnsubscribe' && !isHeld(work)) await repeatLocalUnsubscribe(work, null);
       }
     });
   } catch {
@@ -1458,7 +1461,7 @@ export async function revokeConfirmedDevice(
     // Earlier unfinished revocations of this device by the same owner are
     // sent now as well: a disable asked again is the manual retry of US-3.
     for (const earlier of readPushState().works) {
-      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id) continue;
+      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier)) continue;
       done = (await repeatOwnRevocation(step, earlier)) && done;
     }
   } catch (error) {
