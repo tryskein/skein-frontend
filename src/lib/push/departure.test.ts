@@ -125,15 +125,6 @@ function clickLogout(): { done: () => boolean; verdict: Promise<DepartureVerdict
   return { done: () => finished, verdict };
 }
 
-/**
- * Lets the hold of the logout's works end (pushState.ts#isHeld): the next
- * appearance or page load comes later than the logout's budget.
- */
-function afterTheHold(): void {
-  vi.useFakeTimers({ toFake: ['Date'] });
-  vi.setSystemTime(Date.now() + DEPARTURE_BUDGET_MS + 1);
-}
-
 /** U = A has appeared. */
 function appearA(): void {
   server.caller = A;
@@ -444,7 +435,6 @@ describe('row 64 — the three branches of prepare', () => {
     ]);
 
     noteSignedOut();
-    afterTheHold();
     startPushLifecycle();
     appearA();
     await settle(locks);
@@ -472,7 +462,6 @@ describe('row 64 (c) — after ok the removal of the channel is journaled', () =
 
     noteSignedOut();
     browser.removeFails = false;
-    afterTheHold();
     startPushLifecycle();
     await settle(locks);
 
@@ -742,26 +731,56 @@ describe('row 64 (b) — a refused logout takes its transition back before anyon
     expect(worksSeen).toEqual([]);
   });
 
-  test('a work an explicit logout still holds is not repeated by an appearance; once the hold ends it is', async () => {
-    const heldUntil = Date.now() + 60_000;
-    seed({ [A]: { state: 'off', gen: 1 } }, [
-      { id: 'w', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed', heldUntil },
-    ]);
-    startPushLifecycle();
+  test('a page load while the logout still holds its works: the channel goes once the logout ended, without a new appearance', async () => {
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
     appearA();
-    await settle(locks);
-    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
 
-    seed({ [A]: { state: 'off', gen: 1 } }, [
-      { id: 'w', type: 'deviceRevoke', ownerUserId: A, labels: [LABEL_A], guard: 'unconfirmed', heldUntil: Date.now() - 1 },
-    ]);
-    noteLogin(A);
+    // The logout prepared and wrote its works; its budget is still running.
+    const departure = beginExplicitDeparture();
+    expect(await departure.prepare()).toBe('proceed');
+    expect(readPushState().works.map((w) => w.type).sort()).toEqual(['deviceRevoke', 'localUnsubscribe']);
+
+    // The next document of this browser loads without a user.
+    noteSignedOut();
+    startPushLifecycle();
+    await flush();
+    expect(browser.channel).toEqual(a);
+
+    // The logout ends; nobody appears.
+    departure.cancel();
     await settle(locks);
-    expect(api.pushRevokeDevices).toHaveBeenCalledWith(
-      { expectedUserId: A, deviceLabels: [LABEL_A], endpoint: undefined },
-      expect.any(AbortSignal),
-    );
-    expect(readPushState().works).toEqual([]);
+    expect(browser.channel).toBeNull();
+    expect(readPushState().works.filter((w) => w.type === 'localUnsubscribe')).toEqual([]);
+  });
+
+  test.each([
+    { shift: -3_600_000, case: 'back by an hour' },
+    { shift: 3_600_000, case: 'forward by an hour' },
+  ])('the clock goes $case during the logout: its works stay its own until it ended, then are repeated', async ({ shift }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const a = channel('a');
+    browser.channel = a;
+    addSub(A, a.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, a, null) });
+    appearA();
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    const departure = beginExplicitDeparture();
+    await flush();
+    expect(await departure.prepare()).toBe('proceed');
+    vi.setSystemTime(Date.now() + shift);
+    noteSignedOut();
+    startPushLifecycle();
+    await flush();
+    expect(browser.channel).toEqual(a);
+
+    await vi.advanceTimersByTimeAsync(DEPARTURE_BUDGET_MS);
+    await flush();
+    expect(browser.channel).toBeNull();
   });
 
   test('a take-back after the hold ended changes nothing', async () => {
@@ -979,7 +998,6 @@ describe('row 66 — after branch (c) the next appearance of U repeats the revoc
     api.pushRemoveChannel.mockClear();
 
     noteSignedOut();
-    afterTheHold();
     startPushLifecycle();
     server.caller = B;
     noteLogin(B);

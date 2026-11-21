@@ -143,6 +143,10 @@ function subscription(): PushSubscription {
 /** Exclusive Web Locks, as the browser grants them. */
 class Locks {
   private readonly tails = new Map<string, Promise<void>>();
+  private readonly held = new Set<string>();
+  async query(): Promise<{ held: Array<{ name: string; mode: string }>; pending: [] }> {
+    return { held: [...this.held].map((name) => ({ name, mode: 'exclusive' })), pending: [] };
+  }
   async request(name: string, options: LockOptions, callback: () => unknown): Promise<unknown> {
     const before = this.tails.get(name) ?? Promise.resolve();
     let release!: () => void;
@@ -160,8 +164,10 @@ class Locks {
         signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
         void before.then(resolve);
       });
+      this.held.add(name);
       return await callback();
     } finally {
+      this.held.delete(name);
       release();
     }
   }

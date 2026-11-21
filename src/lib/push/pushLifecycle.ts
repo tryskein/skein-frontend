@@ -70,7 +70,7 @@ import {
 } from './browserPush';
 import { decide, type DecisionAction, type DecisionChannel, type DecisionRow, type RegisterPlan } from './decide';
 import { endpointFingerprint, keysFingerprint } from './fingerprint';
-import { withPushOpLock } from './locks';
+import { afterLockReleased, heldLockNames, withPushOpLock } from './locks';
 import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 import {
   abandonConsentLabel,
@@ -289,12 +289,21 @@ async function repeatLocalUnsubscribe(
   await removePushWork(work.id, step === null ? undefined : guardOf(step));
 }
 
-/** Rule 6: the unfinished work of the browser, as user `step.token.userId`. */
-async function repeatWork(step: Step): Promise<void> {
+/**
+ * Rule 6: the unfinished work of the browser, as user `step.token.userId`.
+ * Returns the locks of the explicit logouts whose works it skipped (still
+ * theirs, `pushState.ts#isHeld`): the caller repeats once they are free.
+ */
+async function repeatWork(step: Step): Promise<string[]> {
   const userId = step.token.userId;
+  const held = await heldLockNames();
+  live(step);
+  const skipped = new Set<string>();
   for (const work of readPushState().works) {
-    // An explicit logout still running may take it back (pushState.ts#isHeld).
-    if (isHeld(work)) continue;
+    if (isHeld(work, held)) {
+      skipped.add(heldByOf(work));
+      continue;
+    }
     switch (work.type) {
       case 'localUnsubscribe':
         await repeatLocalUnsubscribe(work, step);
@@ -322,6 +331,25 @@ async function repeatWork(step: Step): Promise<void> {
         break;
     }
   }
+  return [...skipped];
+}
+
+/** The lock a held work is held by. */
+function heldByOf(work: PushWork): string {
+  return work.type === 'foreignRemoval' ? '' : (work.heldBy ?? '');
+}
+
+/**
+ * Runs `repeat` again once every lock in `names` is free — the explicit
+ * logouts that held the works a repeat skipped have ended — and only while
+ * the controller still runs. One wait per skipping repeat.
+ */
+function repeatAfterHolds(names: string[], repeat: () => Promise<void>): void {
+  if (names.length === 0) return;
+  void Promise.all(names.map((name) => afterLockReleased(name))).then(() => {
+    if (stopAppearance !== null) return repeat();
+    return undefined;
+  });
 }
 
 /**
@@ -840,10 +868,10 @@ async function readServerPush(step: Step): Promise<{ state: ServerPush; publicKe
  * what to publish again with a fresh read once the lock is released, `null`
  * when the decision did not act.
  */
-async function decideOnAppearance(step: Step): Promise<Partial<PushLifecycleState> | null> {
+async function decideOnAppearance(step: Step): Promise<DecisionResult> {
   const userId = step.token.userId;
   live(step);
-  await repeatWork(step);
+  const skipped = await repeatWork(step);
 
   const read = await readChannel(step.signal);
   live(step);
@@ -874,13 +902,13 @@ async function decideOnAppearance(step: Step): Promise<Partial<PushLifecycleStat
       devices: listed.kind === 'ok' ? listed.value : null,
       thisDeviceHash: ownEndpoint === null ? null : await endpointFingerprint(ownEndpoint),
     });
-    return null;
+    return { shown: null, skipped };
   }
 
   const list = await request(step, (signal) => pushListDevices(userId, signal));
   if (list.kind !== 'ok') {
     publish(step, { decided: false, row: 1 });
-    return null;
+    return { shown: null, skipped };
   }
 
   const server = await readServerPush(step);
@@ -933,7 +961,17 @@ async function decideOnAppearance(step: Step): Promise<Partial<PushLifecycleStat
         ? await endpointFingerprint(ownEndpoint)
         : null;
   publish(step, { ...shown, devices: list.value, thisDeviceHash });
-  return decision.action.type === 'nothing' ? null : shown;
+  return { shown: decision.action.type === 'nothing' ? null : shown, skipped };
+}
+
+/**
+ * What a decision leaves for after its lock: what to publish again with a
+ * fresh read (`null` when it did not act), and the locks of the explicit
+ * logouts whose works it skipped.
+ */
+interface DecisionResult {
+  shown: Partial<PushLifecycleState> | null;
+  skipped: string[];
 }
 
 // ───────────────────────── Running ─────────────────────────
@@ -976,7 +1014,13 @@ async function underOpLock<T>(token: Appearance, body: (step: Step) => Promise<T
 async function runAppearance(token: Appearance): Promise<void> {
   try {
     const result = await underOpLock(token, decideOnAppearance);
-    if (result !== null && !endedEarly(result)) await publishFresh(token, result);
+    if (endedEarly(result)) return;
+    if (result.shown !== null) await publishFresh(token, result.shown);
+    // The works an explicit logout still held are repeated once it ended,
+    // with a fresh read under the lock, while this appearance is current.
+    repeatAfterHolds(result.skipped, async () => {
+      if (isCurrentAppearance(token)) await runAppearance(token);
+    });
   } catch {
     // A storage failure or a consent that moved on ends the decision as it
     // stands; the next appearance decides again.
@@ -1013,13 +1057,19 @@ async function repeatLocalUnsubscribesOnLoad(): Promise<void> {
   // them): a browser that does not answer does not keep the lock.
   const controller = new AbortController();
   running.add(controller);
+  const skipped = new Set<string>();
   try {
     await withPushOpLock(async () => {
+      const held = await heldLockNames();
       for (const work of readPushState().works) {
         if (controller.signal.aborted) return;
-        if (work.type === 'localUnsubscribe' && !isHeld(work)) await repeatLocalUnsubscribe(work, null, controller.signal);
+        if (work.type !== 'localUnsubscribe') continue;
+        if (isHeld(work, held)) skipped.add(heldByOf(work));
+        else await repeatLocalUnsubscribe(work, null, controller.signal);
       }
     }, controller.signal);
+    // Works a running logout still held: repeated once it ended.
+    repeatAfterHolds([...skipped], repeatLocalUnsubscribesOnLoad);
   } catch {
     // Storage or locks failed, or the repeat was ended: the work stays for the next load.
   } finally {
@@ -1511,8 +1561,9 @@ export async function revokeConfirmedDevice(
     }
     // Earlier unfinished revocations of this device by the same owner are
     // sent now as well: a disable asked again is the manual retry of US-3.
+    const held = await heldLockNames();
     for (const earlier of readPushState().works) {
-      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier)) continue;
+      if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier, held)) continue;
       done = (await repeatOwnRevocation(step, earlier)) && done;
     }
   } catch (error) {

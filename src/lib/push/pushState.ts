@@ -77,7 +77,7 @@ export type RevokeGuard = { id: string; version: number } | 'absent' | 'unconfir
 
 export type PushWork =
   /** Unsubscribe the browser channel with this endpoint, if it is still current. */
-  | { id: string; type: 'localUnsubscribe'; endpoint: string; heldUntil?: number }
+  | { id: string; type: 'localUnsubscribe'; endpoint: string; heldBy?: string }
   /** Remove the channel with this endpoint on the server, for any user. */
   | { id: string; type: 'foreignRemoval'; endpoint: string }
   /** Revoke the owner's device labels (and unlabelled endpoint). */
@@ -95,17 +95,19 @@ export type PushWork =
        */
       removeSubscriptionId?: string;
       /** See {@link isHeld}. */
-      heldUntil?: number;
+      heldBy?: string;
     };
 
 /**
- * Whether `work` is still held by the explicit logout that wrote it: until
- * `heldUntil` (epoch ms, the end of that logout's budget) the logout may
- * still take it back, so no repeat performs it. After that it is an
- * ordinary unfinished work — also when the tab closed meanwhile.
+ * Whether `work` is still held by the explicit logout that wrote it: while
+ * the logout holds the lock named `heldBy` (`locks.ts#DEPARTURE_LOCK_PREFIX`)
+ * it may still take the work back, so no repeat performs it — a repeat that
+ * skips it waits for that lock and repeats then. `held` is the set of lock
+ * names held right now (`locks.ts#heldLockNames`). Once the lock is free —
+ * the logout ended, or its tab went — it is an ordinary unfinished work.
  */
-export function isHeld(work: PushWork, now: number = Date.now()): boolean {
-  return work.type !== 'foreignRemoval' && work.heldUntil !== undefined && now < work.heldUntil;
+export function isHeld(work: PushWork, held: ReadonlySet<string>): boolean {
+  return work.type !== 'foreignRemoval' && work.heldBy !== undefined && held.has(work.heldBy);
 }
 
 /** A work as the caller describes it; the id is assigned on write. */
@@ -223,7 +225,7 @@ function parseWork(v: unknown): PushWork | undefined {
   }
   if (w.type === 'localUnsubscribe' && isString(w.endpoint)) {
     const work: PushWork = { id: w.id, type: w.type, endpoint: w.endpoint };
-    if (isCount(w.heldUntil)) work.heldUntil = w.heldUntil;
+    if (isString(w.heldBy)) work.heldBy = w.heldBy;
     return work;
   }
   if (w.type === 'deviceRevoke' && isString(w.ownerUserId) && Array.isArray(w.labels)) {
@@ -238,7 +240,7 @@ function parseWork(v: unknown): PushWork | undefined {
     };
     if (isString(w.endpoint)) work.endpoint = w.endpoint;
     if (isString(w.removeSubscriptionId) && w.removeSubscriptionId !== '') work.removeSubscriptionId = w.removeSubscriptionId;
-    if (isCount(w.heldUntil)) work.heldUntil = w.heldUntil;
+    if (isString(w.heldBy)) work.heldBy = w.heldBy;
     return work;
   }
   return undefined;
@@ -632,7 +634,7 @@ export interface RevokeConsentArgs {
   /** The subscription the owner's list shows at `endpoint` (see {@link withListedLabel}). */
   listed?: ListedSubscription;
   /** The works are held by the explicit logout writing them (see {@link isHeld}). */
-  heldUntil?: number;
+  heldBy?: string;
 }
 
 /** Result of {@link revokeConsent}. */
@@ -694,14 +696,14 @@ export async function revokeConsent(
       };
       if (endpoint !== null) newWork.endpoint = endpoint;
       if (removeSubscriptionId !== undefined) newWork.removeSubscriptionId = removeSubscriptionId;
-      if (args.heldUntil !== undefined) newWork.heldUntil = args.heldUntil;
+      if (args.heldBy !== undefined) newWork.heldBy = args.heldBy;
       work = appendWork(record, newWork);
     } else if (parseGuard(args.guard) === undefined) {
       throw new InvalidPushWorkError('deviceRevoke needs a guard');
     }
     const localWork =
       args.localUnsubscribe === true && endpoint !== null
-        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint }, args.heldUntil))
+        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint }, args.heldBy))
         : null;
     const next = store(record, userId, {
       ...consent,
@@ -717,8 +719,8 @@ export async function revokeConsent(
   }, guard);
 }
 
-function withHeld<W extends NewPushWork>(work: W, heldUntil: number | undefined): W {
-  return heldUntil === undefined ? work : { ...work, heldUntil };
+function withHeld<W extends NewPushWork>(work: W, heldBy: string | undefined): W {
+  return heldBy === undefined ? work : { ...work, heldBy };
 }
 
 /** Arguments of {@link refineRevocation}. */
@@ -734,7 +736,7 @@ export interface RefineRevocationArgs {
   /** Also journal the removal of the channel (`localUnsubscribe`). */
   localUnsubscribe: boolean;
   /** The works are held by the explicit logout writing them (see {@link isHeld}). */
-  heldUntil?: number;
+  heldBy?: string;
 }
 
 /** Result of {@link refineRevocation}. */
@@ -766,8 +768,8 @@ export async function refineRevocation(userId: string, args: RefineRevocationArg
     );
     const next: NewPushWork = { type: 'deviceRevoke', ownerUserId: userId, labels, guard: args.guard, endpoint: args.endpoint };
     if (removeSubscriptionId !== undefined) next.removeSubscriptionId = removeSubscriptionId;
-    const heldUntil = existing?.type === 'deviceRevoke' ? existing.heldUntil : args.heldUntil;
-    if (heldUntil !== undefined) next.heldUntil = heldUntil;
+    const heldBy = existing?.type === 'deviceRevoke' ? existing.heldBy : args.heldBy;
+    if (heldBy !== undefined) next.heldBy = heldBy;
     let work: PushWork;
     if (existing !== undefined) {
       validateWork(next);
@@ -779,7 +781,7 @@ export async function refineRevocation(userId: string, args: RefineRevocationArg
     const journaled = record.works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === args.endpoint);
     const localWork =
       args.localUnsubscribe && !journaled
-        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint: args.endpoint }, args.heldUntil))
+        ? appendWork(record, withHeld({ type: 'localUnsubscribe', endpoint: args.endpoint }, args.heldBy))
         : null;
     return { work, localWork };
   }, guard);
@@ -793,11 +795,6 @@ export interface UndoRevocationArgs {
   previous: Consent;
   /** The works the revocation wrote. */
   workIds: string[];
-  /**
-   * The end of the hold on those works (see {@link isHeld}): past it a
-   * repeat may have performed them, and nothing is taken back.
-   */
-  before?: number;
 }
 
 /**
@@ -806,16 +803,14 @@ export interface UndoRevocationArgs {
  * consent is put back as it was (the generation keeps its growth, so an
  * action started before the transition stays refused) and the works of the
  * transition go. Refused with {@link PushStateConflictError}, changing
- * nothing, when the consent was written since `expect`, a work of the
- * transition is gone (performed), or its hold ended.
+ * nothing, when the consent was written since `expect` or a work of the
+ * transition is gone (performed). The caller checks that it still holds the
+ * works (`guard.check`) right before the write.
  */
 export async function undoRevocation(userId: string, args: UndoRevocationArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
     const consent = consentFor(record, userId);
     checkExpectation(consent, args.expect);
-    if (args.before !== undefined && Date.now() >= args.before) {
-      throw new PushStateConflictError('the hold on the revocation ended');
-    }
     if (!args.workIds.every((id) => record.works.some((w) => w.id === id))) {
       throw new PushStateConflictError('a work of the revocation was finished meanwhile');
     }

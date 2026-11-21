@@ -75,6 +75,11 @@ export class FakeLocks {
     }
   }
 
+  /** The held locks, as `navigator.locks.query()` answers. */
+  async query(): Promise<LockManagerSnapshot> {
+    return { held: [...this.held].map((name) => ({ name, mode: 'exclusive' as LockMode })), pending: [] };
+  }
+
   idle(): boolean {
     return this.held.size === 0 && [...this.queues.values()].every((q) => q.length === 0);
   }
