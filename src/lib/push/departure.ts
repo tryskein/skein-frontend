@@ -274,12 +274,31 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     verdict = v;
     decide(v);
     if (v !== 'proceed') abandon();
+    else releaseIfFinal();
+  }
+
+  /** The logout no longer holds its works: past this nothing of it is taken back. */
+  let released = false;
+  function releaseWorks(): void {
+    if (released) return;
+    released = true;
+    marker.release();
+  }
+
+  /**
+   * Frees the logout's lock as soon as its verdict is final and nothing of
+   * it can be taken back any more — its own revocation was sent and
+   * answered other than "user changed" — rather than at the budget's end:
+   * a timer of a tab in the background may be late.
+   */
+  function releaseIfFinal(): void {
+    if (verdict !== undefined && !revocationTakenBack(progress) && progress.answered) releaseWorks();
   }
 
   function end(): void {
     if (ended) return;
     ended = true;
-    marker.release();
+    releaseWorks();
     opLock.release();
     unsubscribe();
     budget.stop();
@@ -351,7 +370,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
           // Only while the works are still held: once the lock is free a
           // repeat may have performed them.
           check: () => {
-            if (ended) throw new DOMException('the hold on the works ended', 'AbortError');
+            if (released) throw new DOMException('the hold on the works ended', 'AbortError');
           },
         },
       );
@@ -469,7 +488,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
 
     if (devices !== null) {
       // (a) U is confirmed.
-      let done = work === null ? read.kind === 'none' : await repeatOwnRevocation(step, asRevocation(work), progress);
+      let done = work === null ? read.kind === 'none' : await repeatOwnRevocation(step, asRevocation(work), progress).finally(releaseIfFinal);
       const works = readPushState().works;
       const held = await heldLockNames().catch(() => null);
       for (const earlier of works) {
@@ -484,7 +503,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     // (c) U could not be confirmed: one revocation is tried.
     if (work === null) return;
     const revocation = asRevocation(work);
-    const outcome = await sendRevocation(step, revocation.labels, revocation.endpoint, progress);
+    const outcome = await sendRevocation(step, revocation.labels, revocation.endpoint, progress).finally(releaseIfFinal);
     if (outcome.kind !== 'ok') return;
     progress.revoked = true;
     // `ok` confirms U. Without a list the label of the subscription at the
@@ -552,7 +571,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     const plan = withListedLabel(labels, listed === undefined ? undefined : { id: listed.id, label: listed.deviceLabel });
     if (endpoint !== undefined && devices !== null) removal = endpoint;
     if (plan.labels.length === 0 && endpoint === undefined) return;
-    const outcome = await sendRevocation(step, plan.labels, endpoint, progress);
+    const outcome = await sendRevocation(step, plan.labels, endpoint, progress).finally(releaseIfFinal);
     if (outcome.kind !== 'ok') return;
     progress.revoked = true;
     if (plan.removeSubscriptionId !== undefined) {

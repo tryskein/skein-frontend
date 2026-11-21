@@ -417,13 +417,15 @@ function repeatWhenFree(lock: string | null, key: string, repeat: () => Promise<
  */
 export interface RevocationProgress {
   sent: boolean;
+  /** The answer of the revocation request came, whatever it was. */
+  answered: boolean;
   revoked: boolean;
   refused: boolean;
 }
 
 /** A progress before anything was sent. */
 export function revocationProgress(): RevocationProgress {
-  return { sent: false, revoked: false, refused: false };
+  return { sent: false, answered: false, revoked: false, refused: false };
 }
 
 /** Whether a revocation at `progress` is taken back. */
@@ -446,7 +448,10 @@ export async function sendRevocation(
     if (progress !== undefined) progress.sent = true;
     const outcome = await pushRevokeDevices({ expectedUserId: userId, deviceLabels: labels, endpoint }, signal);
     // Recorded as the answer arrives, before the step hears it.
-    if (progress !== undefined && outcome.kind === 'userChanged') progress.refused = true;
+    if (progress !== undefined) {
+      progress.answered = true;
+      if (outcome.kind === 'userChanged') progress.refused = true;
+    }
     return outcome;
   });
 }

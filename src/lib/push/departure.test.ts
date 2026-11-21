@@ -1033,6 +1033,38 @@ describe('row 64 — a write of the journal the store refuses does not stop the 
   });
 });
 
+describe('row 63 — the lock of a logout goes as soon as nothing of it can be taken back', () => {
+  const departureLocks = async () =>
+    (await locks.query()).held!.map((l) => l.name!).filter((name) => name.startsWith('skein.push.departure.'));
+
+  test('the revocation was sent and answered (lost): at the verdict the lock is free, before the budget\'s end', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    api.pushRevokeDevices.mockImplementationOnce(async () => ({ kind: 'lost' }));
+
+    const departure = beginExplicitDeparture();
+    expect(await departure.prepare()).toBe('proceed');
+    // Before the budget's end, without finish: only the release itself runs.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(await departureLocks()).toEqual([]);
+  });
+
+  test('nothing was sent yet at the verdict: the lock stays until the logout ended', async () => {
+    seed({ [A]: enabledConsent(LABEL_A, channel('a'), null) });
+    appearA();
+    api.pushRevokeDevices.mockImplementationOnce(() => never());
+
+    const departure = beginExplicitDeparture();
+    await flush();
+    expect((await departureLocks()).length).toBe(1);
+    departure.cancel();
+    await settle(locks);
+    expect(await departureLocks()).toEqual([]);
+  });
+});
+
 describe('row 66 — the repeat of works a logout held is arranged at the first skip, per lock, without fail-open', () => {
   const M1 = 'skein.push.departure.' + A + '.m1';
   const M2 = 'skein.push.departure.' + A + '.m2';
