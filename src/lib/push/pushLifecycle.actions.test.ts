@@ -581,6 +581,54 @@ describe('row 61 — the removal by id of a full S is recorded with the revocati
   });
 });
 
+describe('row 61 — the revocation transition is decided on the record under skein.push.store', () => {
+  test('S filled up while the transition waited for the lock: the subscription outside S is removed by id', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    const sub = addSub(A, x.endpoint, LABEL_A);
+    const labels = Array.from({ length: 999 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    seed({ [A]: { state: 'none', labels } });
+    const tab = await openTab(A);
+
+    const holder = deferred<void>();
+    void locks.request(PUSH_STORE_LOCK, { mode: 'exclusive' }, () => holder.promise);
+    const disabling = tab.lifecycle.disablePush();
+    const waits = () => locks.requests.filter((name) => name === PUSH_STORE_LOCK).length >= 2;
+    for (let i = 0; i < 200 && !waits(); i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(waits()).toBe(true);
+    // Another tab wrote one more label meanwhile: S holds 1000 now.
+    seed({ [A]: { state: 'none', labels: [...labels, 'ffffffff-0000-4000-8000-000000000999'] } });
+    holder.resolve();
+
+    expect(await disabling).toEqual({ kind: 'done' });
+    expect(revocationBodies()[0].deviceLabels).toHaveLength(1000);
+    expect(revocationBodies()[0].deviceLabels).not.toContain(LABEL_A);
+    expect(api.pushRemoveDevice).toHaveBeenCalledWith({ expectedUserId: A, id: sub.id }, expect.any(AbortSignal));
+    expect(server.subs).toEqual([]);
+  });
+
+  test('"user changed" after the consent was written meanwhile: the undo changes nothing, the works stay', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    const tab = await openTab(A);
+    let written = '';
+    api.pushRevokeDevices.mockImplementationOnce(async () => {
+      // Another write of A's consent lands between the transition and the answer.
+      const record = JSON.parse(localStorage.getItem(PUSH_STATE_KEY)!);
+      record.consents[A].rev += 1;
+      written = JSON.stringify(record);
+      localStorage.setItem(PUSH_STATE_KEY, written);
+      return { kind: 'userChanged' };
+    });
+
+    expect(await tab.lifecycle.disablePush()).toEqual({ kind: 'superseded' });
+    expect(localStorage.getItem(PUSH_STATE_KEY)).toBe(written);
+    expect(readPushState().works.map((w) => w.type).sort()).toEqual(['deviceRevoke', 'localUnsubscribe']);
+  });
+});
+
 describe('row 61 — the manual retry of an unconfirmed disable (US-3)', () => {
   test('after a lost revocation and a removed channel, disabling again sends the recorded revocation', async () => {
     const x = channel('x');

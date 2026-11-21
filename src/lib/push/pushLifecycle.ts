@@ -89,6 +89,7 @@ import {
   removePushWork,
   restoreConsent,
   revokeConsent,
+  undoRevocation,
   type RevokeGuard,
   setConsentOffUnconfirmed,
   updateConsentChannel,
@@ -1289,33 +1290,29 @@ export async function revokeConfirmedDevice(
   const hash = endpoint === null ? null : await endpointFingerprint(endpoint);
   const listed = hash === null ? undefined : devices.find((d) => d.endpointHash === hash);
   const guard: RevokeGuard = listed === undefined ? 'absent' : { id: listed.id, version: listed.version };
-  // The current channel's subscription may carry a label S does not have
-  // (an accept whose state was lost): it is revoked too — in the same
-  // request while S has room, else by removing that subscription by id,
-  // which also revokes its label.
-  const serverLabel = listed?.deviceLabel ?? null;
-  const before = readConsent(userId);
-  const labelsNow = before.labels;
-  const missing = serverLabel !== null && !labelsNow.includes(serverLabel);
-  const removeById = missing && labelsNow.length >= MAX_CONSENT_LABELS ? listed?.id : undefined;
   live(step);
-  const { consent: revokedConsent, work, localWork } = await revokeConsent(
+  // The label of the current channel's subscription joins the revocation,
+  // or that subscription is removed by id when S is full — decided on the
+  // record under the store lock (`pushState.ts#withListedLabel`).
+  const { consent: revokedConsent, previous, work, localWork } = await revokeConsent(
     userId,
     {
       endpoint,
       guard,
       localUnsubscribe: true,
-      alsoLabels: missing && removeById === undefined ? [serverLabel] : [],
-      removeSubscriptionId: removeById,
+      listed: listed === undefined ? undefined : { id: listed.id, label: listed.deviceLabel },
     },
     guardOf(step),
   );
   // "User changed" on a request of this revocation: the server confirmed
-  // another user, nothing reached it, and the transition is taken back
-  // (rule 5) — unless something wrote the consent since.
+  // another user, nothing reached it, and the transition is taken back in
+  // one write (rule 5) — unless something wrote the consent since.
   const undo = async () => {
-    await restoreConsent(userId, { expect: snapshotOf(revokedConsent), previous: before });
-    for (const w of [work, localWork]) if (w !== null) await removePushWork(w.id);
+    await undoRevocation(userId, {
+      expect: snapshotOf(revokedConsent),
+      previous,
+      workIds: [work, localWork].flatMap((w) => (w === null ? [] : [w.id])),
+    });
   };
   // The transition is written (with the local removal journaled): the
   // channel may go now, whatever the revocation request answers.

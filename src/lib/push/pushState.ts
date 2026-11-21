@@ -591,6 +591,15 @@ export async function restoreConsent(userId: string, args: RestoreConsentArgs, g
   }, guard);
 }
 
+/**
+ * The owner's subscription at the revoked endpoint as the owner's confirmed
+ * list showed it, with its device label (`null` without one).
+ */
+export interface ListedSubscription {
+  id: string;
+  label: string | null;
+}
+
 /** Arguments of {@link revokeConsent}. */
 export interface RevokeConsentArgs {
   /** Endpoint of this browser's channel, when known. */
@@ -602,23 +611,38 @@ export interface RevokeConsentArgs {
    * that follows the revocation.
    */
   localUnsubscribe?: boolean;
-  /**
-   * Labels the server holds for this device that S does not (the label of
-   * the current channel's subscription); they join the revocation work as
-   * far as it has room, so a repeat revokes them too.
-   */
-  alsoLabels?: string[];
-  /** A subscription to remove by id after the revocation (see {@link PushWork}). */
-  removeSubscriptionId?: string;
+  /** The subscription the owner's list shows at `endpoint` (see {@link withListedLabel}). */
+  listed?: ListedSubscription;
 }
 
 /** Result of {@link revokeConsent}. */
 export interface RevokeConsentResult {
+  /** The consent as the transition wrote it. */
   consent: Consent;
+  /** The consent as it was right before the transition, read under the lock. */
+  previous: Consent;
   /** The revocation work, or `null` when there is neither a label nor an endpoint. */
   work: PushWork | null;
   /** The `localUnsubscribe` work, when one was asked for and there is an endpoint. */
   localWork: PushWork | null;
+}
+
+/**
+ * The labels and the removal by id of a revocation work once `listed`, the
+ * subscription the owner's list shows at the endpoint, is known: a label S
+ * does not have (an accept whose state was lost) joins the labels while
+ * they have room; with a full S that subscription is removed by id instead,
+ * which also revokes its label. Decided on the record under the store lock,
+ * so a label written meanwhile counts.
+ */
+function withListedLabel(labels: string[], listed: ListedSubscription | undefined): { labels: string[]; removeSubscriptionId?: string } {
+  const next = [...labels];
+  if (listed === undefined || listed.label === null || next.includes(listed.label)) return { labels: next };
+  if (next.length < MAX_CONSENT_LABELS) {
+    next.push(listed.label);
+    return { labels: next };
+  }
+  return { labels: next, removeSubscriptionId: listed.id };
 }
 
 /**
@@ -640,10 +664,7 @@ export async function revokeConsent(
     const consent = consentFor(record, userId);
     const endpoint = args.endpoint !== null && args.endpoint !== '' ? args.endpoint : null;
     let work: PushWork | null = null;
-    const labels = [...consent.labels];
-    for (const label of args.alsoLabels ?? []) {
-      if (labels.length < MAX_CONSENT_LABELS && !labels.includes(label)) labels.push(label);
-    }
+    const { labels, removeSubscriptionId } = withListedLabel(consent.labels, args.listed);
     if (labels.length > 0 || endpoint !== null) {
       const newWork: NewPushWork = {
         type: 'deviceRevoke',
@@ -652,7 +673,7 @@ export async function revokeConsent(
         guard: args.guard,
       };
       if (endpoint !== null) newWork.endpoint = endpoint;
-      if (args.removeSubscriptionId !== undefined) newWork.removeSubscriptionId = args.removeSubscriptionId;
+      if (removeSubscriptionId !== undefined) newWork.removeSubscriptionId = removeSubscriptionId;
       work = appendWork(record, newWork);
     } else if (parseGuard(args.guard) === undefined) {
       throw new InvalidPushWorkError('deviceRevoke needs a guard');
@@ -671,7 +692,92 @@ export async function revokeConsent(
       endpoint: endpoint ?? consent.endpoint,
       offUnconfirmed: true,
     });
-    return { consent: next, work, localWork };
+    return { consent: next, previous: consent, work, localWork };
+  }, guard);
+}
+
+/** Arguments of {@link refineRevocation}. */
+export interface RefineRevocationArgs {
+  /** The revocation work the transition wrote; `null` when it wrote none. */
+  workId: string | null;
+  /** The endpoint of this browser's channel, read at the confirmation. */
+  endpoint: string;
+  /** The guard from the owner's confirmed list, or `unconfirmed`. */
+  guard: RevokeGuard;
+  /** The subscription the owner's list shows at `endpoint`. */
+  listed?: ListedSubscription;
+  /** Also journal the removal of the channel (`localUnsubscribe`). */
+  localUnsubscribe: boolean;
+}
+
+/** Result of {@link refineRevocation}. */
+export interface RefineRevocationResult {
+  /** The revocation work as it stands now. */
+  work: PushWork;
+  /** The `localUnsubscribe` work this write added, `null` when one was there or none was asked for. */
+  localWork: PushWork | null;
+}
+
+/**
+ * Completes a revocation transition written before the channel was read
+ * (an explicit logout writes it in the click): the work gets the channel's
+ * endpoint and the guard, and the label of the subscription listed there
+ * (see {@link withListedLabel}); the removal of the channel is journaled
+ * when asked. The work keeps its id; without one (S was empty and no
+ * endpoint was known) a new work is written. One write, the consent is not
+ * touched.
+ */
+export async function refineRevocation(userId: string, args: RefineRevocationArgs, guard?: WriteGuard): Promise<RefineRevocationResult> {
+  return commit((record) => {
+    const index = record.works.findIndex(
+      (w) => w.id === args.workId && w.type === 'deviceRevoke' && w.ownerUserId === userId,
+    );
+    const existing = index >= 0 ? record.works[index] : undefined;
+    const { labels, removeSubscriptionId } = withListedLabel(
+      existing !== undefined && existing.type === 'deviceRevoke' ? existing.labels : [],
+      args.listed,
+    );
+    const next: NewPushWork = { type: 'deviceRevoke', ownerUserId: userId, labels, guard: args.guard, endpoint: args.endpoint };
+    if (removeSubscriptionId !== undefined) next.removeSubscriptionId = removeSubscriptionId;
+    let work: PushWork;
+    if (existing !== undefined) {
+      validateWork(next);
+      work = { ...next, id: existing.id } as PushWork;
+      record.works[index] = work;
+    } else {
+      work = appendWork(record, next);
+    }
+    const journaled = record.works.some((w) => w.type === 'localUnsubscribe' && w.endpoint === args.endpoint);
+    const localWork =
+      args.localUnsubscribe && !journaled ? appendWork(record, { type: 'localUnsubscribe', endpoint: args.endpoint }) : null;
+    return { work, localWork };
+  }, guard);
+}
+
+/** Arguments of {@link undoRevocation}. */
+export interface UndoRevocationArgs {
+  /** The consent as the caller last wrote it; any later write keeps its result. */
+  expect: ConsentSnapshot;
+  /** The consent right before the revocation transition. */
+  previous: Consent;
+  /** The works the revocation wrote. */
+  workIds: string[];
+}
+
+/**
+ * Takes a revocation transition back in one write — the server confirmed
+ * another user, or the revocation ended before its request was sent: the
+ * consent is put back as it was (the generation keeps its growth, so an
+ * action started before the transition stays refused) and the works of the
+ * transition go. Refused with {@link PushStateConflictError}, changing
+ * nothing, when the consent was written since `expect`.
+ */
+export async function undoRevocation(userId: string, args: UndoRevocationArgs, guard?: WriteGuard): Promise<Consent> {
+  return commit((record) => {
+    const consent = consentFor(record, userId);
+    checkExpectation(consent, args.expect);
+    record.works = record.works.filter((w) => !args.workIds.includes(w.id));
+    return store(record, userId, { ...args.previous, gen: consent.gen, rev: consent.rev });
   }, guard);
 }
 
