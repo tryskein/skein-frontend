@@ -591,32 +591,33 @@ async function register(
       () => sent,
     ),
   );
-  switch (outcome.kind) {
-    case 'ok':
-      try {
-        await confirmConsent(userId, { expect: snapshotOf(consent), label: plan.label, endpoint, keysFingerprint: fingerprint }, guardOf(step));
-      } catch (error) {
+  try {
+    switch (outcome.kind) {
+      case 'ok':
         // A revocation of this device (a logout, a disable in another tab)
-        // came after the registration was sent: "enabled" does not come back
-        // (rule 8), and a channel this decision created is nobody's — the
-        // revocation did not know it.
-        if (created && readConsent(userId).gen !== consent.gen) await removeChannelQuietly(endpoint, null);
-        throw error;
-      }
-      return;
-    case 'revoked':
-      await goOffAfterRevoked(ctx, endpoint);
-      return;
-    case 'notFound':
-    case 'refused':
-    case 'taken':
-      if (consent.pending !== null) {
-        await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label }, guardOf(step));
-      }
-      return;
-    case 'sessionEnded':
-    case 'lost':
-      return;
+        // that came after the registration was sent refuses this write:
+        // "enabled" does not come back (rule 8).
+        await confirmConsent(userId, { expect: snapshotOf(consent), label: plan.label, endpoint, keysFingerprint: fingerprint }, guardOf(step));
+        return;
+      case 'revoked':
+        await goOffAfterRevoked(ctx, endpoint);
+        return;
+      case 'notFound':
+      case 'refused':
+      case 'taken':
+        if (consent.pending !== null) {
+          await abandonConsentLabel(userId, { expect: snapshotOf(consent), label: consent.pending.label }, guardOf(step));
+        }
+        return;
+      case 'sessionEnded':
+      case 'lost':
+        return;
+    }
+  } finally {
+    // On every way out — an answer, a refused write, an ended step: a channel
+    // this decision created is nobody's once a revocation of this device came
+    // meanwhile, which did not know it. Without one it stays for the repeat.
+    if (created && readConsent(userId).gen !== consent.gen) await removeChannelQuietly(endpoint, null);
   }
 }
 
@@ -1303,53 +1304,60 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
     publicKey: server.publicKey,
     deviceRemoved: false,
   };
-  switch (outcome.kind) {
-    case 'ok':
-      try {
-        // Confirmed only with the same generation and the same pending label:
-        // a revocation since then keeps the consent off.
-        await confirmConsent(
-          userId,
-          { expect: snapshotOf(pending), label, endpoint: channel.endpoint, keysFingerprint: fingerprint },
-          guardOf(step),
-        );
-      } catch (error) {
-        // The appearance was replaced after the registration was accepted:
-        // the consent stays unconfirmed and the next appearance confirms it
-        // (row 4) — the registration is not taken back.
-        if (error instanceof StepEnded) throw error;
-        if (error instanceof PushStateConflictError) {
-          // A revocation came first (rule 8): a channel this enable created
-          // is nobody's.
-          if (created && readConsent(userId).gen !== gen) await removeChannelQuietly(channel.endpoint, null);
-          return { kind: 'superseded' };
+  try {
+    switch (outcome.kind) {
+      case 'ok':
+        try {
+          // Confirmed only with the same generation and the same pending label:
+          // a revocation since then keeps the consent off.
+          await confirmConsent(
+            userId,
+            { expect: snapshotOf(pending), label, endpoint: channel.endpoint, keysFingerprint: fingerprint },
+            guardOf(step),
+          );
+        } catch (error) {
+          // The appearance was replaced after the registration was accepted:
+          // the consent stays unconfirmed and the next appearance confirms it
+          // (row 4) — the registration is not taken back.
+          if (error instanceof StepEnded) throw error;
+          // A revocation came first (rule 8): see below for the channel.
+          if (error instanceof PushStateConflictError) return { kind: 'superseded' };
+          await undoRegistration(step, label, channel.endpoint);
+          return { kind: 'failed', reason: 'storage' };
         }
-        await undoRegistration(step, label, channel.endpoint);
-        return { kind: 'failed', reason: 'storage' };
+        refresh();
+        return { kind: 'done' };
+      case 'revoked':
+        await goOffAfterRevoked(ctx, channel.endpoint);
+        refresh();
+        return { kind: 'failed', reason: 'revoked' };
+      case 'notFound':
+      case 'refused':
+      case 'taken':
+        try {
+          await abandonConsentLabel(userId, { expect: snapshotOf(pending), label }, guardOf(step));
+        } catch (error) {
+          return failure(error);
+        }
+        publish(step, {});
+        return { kind: 'failed', reason: 'refused' };
+      case 'sessionEnded':
+      case 'lost':
+        publish(step, {});
+        return { kind: 'failed', reason: 'unconfirmed' };
+      case 'userChanged':
+        // `request` ends the step on this outcome before it gets here.
+        return { kind: 'superseded' };
+      default: {
+        const unknown: never = outcome;
+        throw new Error(`an unknown registration outcome: ${JSON.stringify(unknown)}`);
       }
-      refresh();
-      return { kind: 'done' };
-    case 'revoked':
-      await goOffAfterRevoked(ctx, channel.endpoint);
-      refresh();
-      return { kind: 'failed', reason: 'revoked' };
-    case 'notFound':
-    case 'refused':
-    case 'taken':
-      try {
-        await abandonConsentLabel(userId, { expect: snapshotOf(pending), label }, guardOf(step));
-      } catch (error) {
-        return failure(error);
-      }
-      publish(step, {});
-      return { kind: 'failed', reason: 'refused' };
-    case 'sessionEnded':
-    case 'lost':
-      publish(step, {});
-      return { kind: 'failed', reason: 'unconfirmed' };
-    case 'userChanged':
-      // `request` ends the step on this outcome before it gets here.
-      return { kind: 'superseded' };
+    }
+  } finally {
+    // On every way out — an answer, a refused write, an ended step: a channel
+    // this enable created is nobody's once a revocation of this device came
+    // meanwhile. Without one it stays for the repeat of an unknown answer.
+    if (created && readConsent(userId).gen !== gen) await removeChannelQuietly(channel.endpoint, null);
   }
 }
 

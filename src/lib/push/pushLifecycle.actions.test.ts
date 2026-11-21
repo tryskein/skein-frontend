@@ -659,6 +659,35 @@ describe('row 56 — the channel an enable created goes when a revocation came m
     expect(browser.channel).toBeNull();
   });
 
+  test.each(['lost', 'sessionEnded'] as const)(
+    'the registration answer is %s after a revocation came meanwhile: the new channel goes',
+    async (kind) => {
+      const tab = await openTab(A);
+      api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+        await revokeConsent(A, { endpoint: args.endpoint, guard: 'unconfirmed' });
+        return { kind };
+      });
+
+      expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'failed', reason: 'unconfirmed' });
+      expect(browser.created).toBe(1);
+      expect(browser.channel).toBeNull();
+    },
+  );
+
+  test('a decision\'s registration (row 2) is lost after a revocation came meanwhile: the channel it created goes', async () => {
+    const x = channel('x');
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      await revokeConsent(A, { endpoint: args.endpoint, guard: 'unconfirmed' });
+      return { kind: 'lost' };
+    });
+
+    await openTab(A, true);
+    expect(browser.created).toBe(1);
+    expect(browser.channel).toBeNull();
+  });
+
   test('the appearance is replaced while the registration is answered, without a revocation: the channel stays for the next appearance', async () => {
     const tab = await openTab(A);
     api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
