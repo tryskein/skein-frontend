@@ -79,16 +79,22 @@ export function PushDevicesSection() {
       .finally(() => setBusy(false));
   };
 
-  // The channel could not be read (row 0) and this browser holds no mark:
-  // a subscription of the user listed here may be this device's (one made
-  // before the consent existed), so the switch offers to turn it off — the
-  // disable records "explicitly off" and row 7 removes it by its endpoint
-  // once the channel is read (US-3).
-  const maybeThisDevice = state.row === 0 && consent?.state === 'none' && (devices?.length ?? 0) > 0;
-  const enabled = consent?.state === 'enabled' || maybeThisDevice;
+  // The channel could not be read (row 0) and this browser holds no mark,
+  // while the user has subscriptions: one of them may be this device's (one
+  // made before the consent existed). Its state is shown as unknown, with
+  // an explicit disable of this browser — it records "explicitly off", and
+  // row 7 removes the subscription by its endpoint once the channel is read
+  // (US-3).
+  const channelUnknown = state.row === 0 && consent?.state === 'none' && (devices?.length ?? 0) > 0;
+  const enabled = consent?.state === 'enabled';
   const thisDeviceListed =
     thisDeviceHash !== null && (devices ?? []).some((d) => d.endpointHash === thisDeviceHash);
-  const offUnconfirmed = consent?.state === 'off' && consent.offUnconfirmed && thisDeviceListed;
+  // Without a known endpoint the list cannot tell whether this device is
+  // still subscribed: the retry stays offered.
+  const offUnconfirmed =
+    consent?.state === 'off' && consent.offUnconfirmed && (thisDeviceListed || thisDeviceHash === null);
+  // No row of the list is known to be this browser.
+  const thisDeviceUnknown = state.row === 0 && thisDeviceHash === null && (devices?.length ?? 0) > 0;
 
   // Called directly by the switch: the enable action must start in the click.
   const onToggleDevicePush = (checked: boolean) => {
@@ -132,6 +138,15 @@ export function PushDevicesSection() {
           ) : state.serverPush === 'disabled' ? (
             <Alert variant="light" style={WARN_ALERT_VARS} title={t('device.serverDisabledTitle')}>
               {t('device.serverDisabledBody')}
+            </Alert>
+          ) : channelUnknown ? (
+            <Alert variant="light" style={WARN_ALERT_VARS} title={t('device.channelUnknownTitle')}>
+              <Stack gap="xs" align="flex-start">
+                <Text size="sm">{t('device.channelUnknownBody')}</Text>
+                <Button size="xs" variant="default" loading={busy} onClick={() => settle(disable())}>
+                  {t('device.channelUnknownDisable')}
+                </Button>
+              </Stack>
             </Alert>
           ) : (
             <Stack gap="sm">
@@ -221,54 +236,61 @@ export function PushDevicesSection() {
                 {t('devices.empty')}
               </Text>
             ) : (
-              // A homogeneous set of revocable rows is a list: AT should hear
-              // "list, N items" and be able to walk it, which a bare
-              // stack of <div>s does not offer.
-              <Stack component="ul" gap="sm" className="settings-device-list">
-                {sortedDevices.map((d) => {
-                  const isCurrent = thisDeviceHash !== null && d.endpointHash === thisDeviceHash;
-                  return (
-                    <Group
-                      component="li"
-                      key={d.id}
-                      justify="space-between"
-                      wrap="nowrap"
-                      align="flex-start"
-                    >
-                      <Box style={{ minWidth: 0 }}>
-                        <Group gap="xs" wrap="nowrap" align="center">
-                          <Text
-                            size="sm"
-                            fw={600}
-                            style={{ wordBreak: 'break-word' }}
-                          >
-                            {parseUserAgent(d.ua)}
-                          </Text>
-                          {isCurrent ? (
-                            <Badge size="sm" variant="light" style={INFO_BADGE_VARS}>
-                              {t('devices.thisDevice')}
-                            </Badge>
-                          ) : null}
-                        </Group>
-                        <Text size="xs" c="var(--ink-2)">
-                          {t('devices.meta', { created: formatTime(d.createdAt), lastSeen: formatTime(d.lastSeenAt) })}
-                        </Text>
-                      </Box>
-                      <Button
-                        variant="default"
-                        size="xs"
-                        loading={removingId === d.id}
-                        disabled={removingId !== null && removingId !== d.id}
-                        aria-label={t('devices.unsubscribeAria', {
-                          device: parseUserAgent(d.ua),
-                        })}
-                        onClick={() => onRemove(d)}
+              <Stack gap="sm">
+                {thisDeviceUnknown ? (
+                  <Text size="sm" c="var(--ink-2)">
+                    {t('devices.thisDeviceUnknown')}
+                  </Text>
+                ) : null}
+                {/* A homogeneous set of revocable rows is a list: AT should hear
+                    "list, N items" and be able to walk it, which a bare
+                    stack of <div>s does not offer. */}
+                <Stack component="ul" gap="sm" className="settings-device-list">
+                  {sortedDevices.map((d) => {
+                    const isCurrent = thisDeviceHash !== null && d.endpointHash === thisDeviceHash;
+                    return (
+                      <Group
+                        component="li"
+                        key={d.id}
+                        justify="space-between"
+                        wrap="nowrap"
+                        align="flex-start"
                       >
-                        {t('devices.unsubscribe')}
-                      </Button>
-                    </Group>
-                  );
-                })}
+                        <Box style={{ minWidth: 0 }}>
+                          <Group gap="xs" wrap="nowrap" align="center">
+                            <Text
+                              size="sm"
+                              fw={600}
+                              style={{ wordBreak: 'break-word' }}
+                            >
+                              {parseUserAgent(d.ua)}
+                            </Text>
+                            {isCurrent ? (
+                              <Badge size="sm" variant="light" style={INFO_BADGE_VARS}>
+                                {t('devices.thisDevice')}
+                              </Badge>
+                            ) : null}
+                          </Group>
+                          <Text size="xs" c="var(--ink-2)">
+                            {t('devices.meta', { created: formatTime(d.createdAt), lastSeen: formatTime(d.lastSeenAt) })}
+                          </Text>
+                        </Box>
+                        <Button
+                          variant="default"
+                          size="xs"
+                          loading={removingId === d.id}
+                          disabled={removingId !== null && removingId !== d.id}
+                          aria-label={t('devices.unsubscribeAria', {
+                            device: parseUserAgent(d.ua),
+                          })}
+                          onClick={() => onRemove(d)}
+                        >
+                          {t('devices.unsubscribe')}
+                        </Button>
+                      </Group>
+                    );
+                  })}
+                </Stack>
               </Stack>
             )}
           </SettingsPanel>

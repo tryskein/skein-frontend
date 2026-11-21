@@ -199,12 +199,16 @@ test('the channel could not be read (row 0): the list is shown and push can be t
   expect(push.disable).toHaveBeenCalledTimes(1);
 });
 
-test('the channel could not be read and this browser holds no mark (row 0): the switch turns push off, not on', () => {
+test('the channel could not be read and this browser holds no mark (row 0): unknown, not "on"; an explicit disable of this browser', () => {
   const OLD = { id: 'dev-old', endpointHash: 'old-hash', ua: '', createdAt: '2026-06-01T10:00:00Z', lastSeenAt: '2026-06-01T10:00:00Z', deviceLabel: null, version: 1 };
   push.state = decided({ decided: false, row: 0, devices: [OLD], thisDeviceHash: null });
   renderSection();
 
-  fireEvent.click(categorySwitch('Push on this device is on'));
+  expect(screen.queryByRole('switch')).toBeNull();
+  expect(screen.getByText(t('device.channelUnknownTitle'))).toBeTruthy();
+  // Which row is this browser is not known, and the page says so.
+  expect(screen.getByText(t('devices.thisDeviceUnknown'))).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: t('device.channelUnknownDisable') }));
   expect(push.disable).toHaveBeenCalledTimes(1);
   expect(push.enable).not.toHaveBeenCalled();
 });
@@ -218,6 +222,14 @@ describe('PushDevicesSection — "disable not confirmed" (row 79, US-3)', () => 
 
     const retry = screen.getByRole('button', { name: t('device.offUnconfirmedRetry') });
     fireEvent.click(retry);
+    expect(push.disable).toHaveBeenCalledTimes(1);
+  });
+
+  test('shown while the disable is unconfirmed and this device\'s endpoint is not known (the channel unread): its retry disables again', () => {
+    push.state = decided({ decided: false, row: 0, devices: [THIS], thisDeviceHash: null }, { state: 'off', offUnconfirmed: true });
+    renderSection();
+
+    fireEvent.click(screen.getByRole('button', { name: t('device.offUnconfirmedRetry') }));
     expect(push.disable).toHaveBeenCalledTimes(1);
   });
 

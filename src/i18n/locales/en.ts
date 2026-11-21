@@ -2050,6 +2050,10 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
       offUnconfirmedBody:
         'Push is off on this device, but the server has not confirmed it yet: this device may still receive notifications. Skein will try again on the next visit.',
       offUnconfirmedRetry: 'Try again now',
+      channelUnknownTitle: 'Push on this device is unknown',
+      channelUnknownBody:
+        'The browser did not say whether this device has a push subscription, and one of the devices below may be this one. You can turn push off on this browser.',
+      channelUnknownDisable: 'Turn push off on this browser',
       failed: {
         unconfirmed: 'The server did not answer. Try again.',
         refused: 'The server refused to turn push on for this device.',
@@ -2067,6 +2071,8 @@ collapsedChip: '{{total}} · {{collapsed}} collapsed',
       loadFailed: 'could not load the devices',
       empty: 'No device has push enabled yet.',
       thisDevice: 'this device',
+      thisDeviceUnknown:
+        'It is not known which of these devices is this browser. Unsubscribing a device here removes it as another device; to turn push off on this browser, use the button above.',
       loading: 'Loading devices',
       meta: 'added {{created}} · last seen {{lastSeen}}',
       unsubscribeAria: 'Unsubscribe device {{device}}',
