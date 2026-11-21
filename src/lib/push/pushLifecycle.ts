@@ -259,7 +259,7 @@ async function removeChannelJournaled(step: Step, endpoint: string): Promise<voi
 async function createChannelFor(step: Step, publicKey: string): Promise<BrowserChannel> {
   const channel = await createChannel(publicKey, step.signal, () => live(step));
   if (!isLive(step)) {
-    await removeChannelQuietly(channel.endpoint, null);
+    await dropCreatedChannel(channel.endpoint, step.token.userId);
     throw new StepEnded('superseded');
   }
   return channel;
@@ -567,12 +567,13 @@ async function compensatingCreated<T>(
   created: boolean,
   revokedSince: () => boolean,
   endpoint: string,
+  userId: string,
   outcome: Promise<T>,
 ): Promise<T> {
   try {
     return await outcome;
   } catch (error) {
-    if (created && revokedSince()) await removeChannelQuietly(endpoint, null);
+    if (created && revokedSince()) await dropCreatedChannel(endpoint, userId);
     throw error;
   }
 }
@@ -583,14 +584,44 @@ async function compensatingCreated<T>(
  * channel goes in any case — also when a newer write (a revocation) keeps
  * the consent as it is.
  */
-function undoWithCreatedChannel(undoConsent: () => Promise<void>, endpoint: string): () => Promise<void> {
+function undoWithCreatedChannel(undoConsent: () => Promise<void>, endpoint: string, userId: string): () => Promise<void> {
   return async () => {
     try {
       await undoConsent();
     } finally {
-      await removeChannelQuietly(endpoint, null);
+      await dropCreatedChannel(endpoint, userId);
     }
   };
+}
+
+/** How long removing a channel an operation created waits for the browser before it journals the removal instead. */
+export const COMPENSATION_WAIT_MS = 1500;
+
+/**
+ * Removes a channel the operation created and nobody accepted. The browser
+ * is waited for at most {@link COMPENSATION_WAIT_MS} — the operation may hold
+ * `skein.push.op`; when it fails or does not answer, the removal is
+ * journaled for the repeats (`localUnsubscribe` of `ownerUserId`, which no
+ * repeat performs once another user has confirmed that channel).
+ */
+async function dropCreatedChannel(endpoint: string, ownerUserId: string): Promise<void> {
+  const bound = new AbortController();
+  const timer = setTimeout(
+    () => bound.abort(new DOMException('the browser did not answer', 'TimeoutError')),
+    COMPENSATION_WAIT_MS,
+  );
+  let result: 'removed' | 'notCurrent' | 'failed';
+  try {
+    result = await removeChannelQuietly(endpoint, null, bound.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (result !== 'failed') return;
+  try {
+    await addPushWork({ type: 'localUnsubscribe', endpoint, ownerUserId });
+  } catch {
+    // The store failed too: the channel stays to the decision table (row 5).
+  }
 }
 
 /** Puts the consent back as `previous` if `written` is still the last write of it. */
@@ -624,6 +655,7 @@ async function register(
     created,
     () => sent && revokedSince(userId, plan.label),
     endpoint,
+    userId,
     undoingOnUserChanged(
       request(step, (signal) => {
         sent = true;
@@ -670,7 +702,7 @@ async function register(
     // this decision created is nobody's once a revocation of this device came
     // meanwhile, which did not know it (revokedSince). Without one it stays
     // for the repeat, and a later appearance confirms it (row 4).
-    if (created && revokedSince(userId, plan.label)) await removeChannelQuietly(endpoint, null);
+    if (created && revokedSince(userId, plan.label)) await dropCreatedChannel(endpoint, userId);
   }
 }
 
@@ -733,7 +765,7 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
       } catch (error) {
         // The consent moved on or could not be written: the new channel is
         // nobody's, so it does not stay.
-        await removeChannelQuietly(channel.endpoint, null);
+        await dropCreatedChannel(channel.endpoint, userId);
         throw error;
       }
       await register(
@@ -743,7 +775,7 @@ async function execute(ctx: DecisionContext, action: DecisionAction): Promise<vo
         channel.keys,
         fingerprint,
         action.register,
-        undoWithCreatedChannel(undoConsentWrite(userId, consent, recorded), channel.endpoint),
+        undoWithCreatedChannel(undoConsentWrite(userId, consent, recorded), channel.endpoint, userId),
         true,
       );
       return;
@@ -1341,7 +1373,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
             guardOf(step),
           );
   } catch (error) {
-    if (created) await removeChannelQuietly(channel.endpoint, null);
+    if (created) await dropCreatedChannel(channel.endpoint, userId);
     if (error instanceof StepEnded) throw error;
     return failure(error);
   }
@@ -1355,6 +1387,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
     created,
     () => sent && revokedSince(userId, label),
     channel.endpoint,
+    userId,
     undoingOnUserChanged(
       request(step, (signal) => {
         sent = true;
@@ -1370,7 +1403,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
           signal,
         );
       }),
-      created ? undoWithCreatedChannel(undoEnable, channel.endpoint) : undoEnable,
+      created ? undoWithCreatedChannel(undoEnable, channel.endpoint, userId) : undoEnable,
       () => sent,
     ),
   );
@@ -1437,7 +1470,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
     // On every way out — an answer, a refused write, an ended step: a channel
     // this enable created is nobody's once a revocation of this device came
     // meanwhile. Without one it stays for the repeat of an unknown answer.
-    if (created && revokedSince(userId, label)) await removeChannelQuietly(channel.endpoint, null);
+    if (created && revokedSince(userId, label)) await dropCreatedChannel(channel.endpoint, userId);
   }
 }
 

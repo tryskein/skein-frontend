@@ -674,6 +674,26 @@ describe('row 56 — the channel an enable created goes when a revocation came m
     },
   );
 
+  test('the browser does not answer the removal of the created channel: the lock is freed in bounded time, the removal journaled', async () => {
+    const tab = await openTab(A);
+    api.pushSubscribe.mockImplementationOnce(async (args: SubscribeArgs) => {
+      await revokeConsent(A, { endpoint: args.endpoint, guard: 'unconfirmed' });
+      return { kind: 'lost' };
+    });
+    browserApi.removeChannel.mockImplementationOnce(
+      (_endpoint: string, _precondition?: () => void, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true })),
+    );
+
+    expect(await tab.lifecycle.enablePush()).toEqual({ kind: 'failed', reason: 'unconfirmed' });
+    await settle();
+    expect(locks.idle()).toBe(true);
+    const created = browser.channel;
+    expect(readPushState().works).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'localUnsubscribe', endpoint: created?.endpoint, ownerUserId: A })]),
+    );
+  });
+
   test('a decision\'s registration (row 2) is lost after a revocation came meanwhile: the channel it created goes', async () => {
     const x = channel('x');
     addSub(A, x.endpoint, LABEL_A);
