@@ -70,7 +70,7 @@ import {
 } from './browserPush';
 import { decide, type DecisionAction, type DecisionChannel, type DecisionRow, type RegisterPlan } from './decide';
 import { endpointFingerprint, keysFingerprint } from './fingerprint';
-import { afterLockReleased, heldLockNames, withPushOpLock } from './locks';
+import { afterLockReleased, heldLockNames, liveDeparturesOf, withPushOpLock } from './locks';
 import { guardOf, isLive, live, type PushStep, request, StepEnded } from './pushStep';
 import {
   abandonConsentLabel,
@@ -79,6 +79,8 @@ import {
   type Consent,
   claimedByOther,
   type ConsentSnapshot,
+  DepartureInProgressError,
+  noLiveDeparture,
   confirmConsent,
   isHeld,
   MAX_CONSENT_LABELS,
@@ -302,10 +304,14 @@ async function repeatLocalUnsubscribe(
  */
 async function repeatWork(step: Step): Promise<string[]> {
   const userId = step.token.userId;
+  // The journal first, then the locks: a work written by a logout carries a
+  // lock taken before the write, so a snapshot taken after the read shows
+  // it while that logout is live.
+  const works = readPushState().works;
   const held = await heldLockNames();
   live(step);
   const skipped = new Set<string>();
-  for (const work of readPushState().works) {
+  for (const work of works) {
     if (isHeld(work, held)) {
       skipped.add(heldByOf(work));
       continue;
@@ -624,6 +630,25 @@ async function dropCreatedChannel(endpoint: string, ownerUserId: string): Promis
   }
 }
 
+/**
+ * Sends a registration of the step's user unless an explicit logout of that
+ * user is live (`locks.ts#DEPARTURE_LOCK_PREFIX`), checked right before the
+ * request — the label was already written before that logout began, so its
+ * transition revokes it. A live logout, or one that cannot be ruled out,
+ * ends the step before the request.
+ */
+async function registeredUnlessDeparting<T>(
+  step: Step,
+  send: (signal: AbortSignal) => Promise<PushOutcome<T>>,
+): Promise<PushOutcome<T>> {
+  try {
+    await noLiveDeparture(step.token.userId);
+  } catch {
+    throw new StepEnded('superseded');
+  }
+  return request(step, send);
+}
+
 /** Puts the consent back as `previous` if `written` is still the last write of it. */
 function undoConsentWrite(userId: string, previous: Consent, written: Consent): () => Promise<void> {
   return async () => {
@@ -657,7 +682,7 @@ async function register(
     endpoint,
     userId,
     undoingOnUserChanged(
-      request(step, (signal) => {
+      registeredUnlessDeparting(step, (signal) => {
         sent = true;
         return pushSubscribe(
           {
@@ -973,10 +998,12 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
   const permission = notificationPermission();
   const consent = readConsent(userId);
   const works = readPushState().works;
+  // Read after the consent and the journal: a logout of U that wrote them
+  // began before, and its lock is in this snapshot while it is live.
   const heldNow = await heldLockNames();
   live(step);
-  const ownHeld = works.filter((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId && isHeld(w, heldNow));
-  for (const work of ownHeld) skipped.push(heldByOf(work));
+  const departing = liveDeparturesOf(heldNow, userId);
+  skipped.push(...departing);
   const decision = decide({
     consent,
     channel,
@@ -989,7 +1016,7 @@ async function decideOnAppearance(step: Step): Promise<DecisionResult> {
     blocks: {
       ownRevokePending: works.some((w) => w.type === 'deviceRevoke' && w.ownerUserId === userId),
       foreignRemovalPending: works.some((w) => w.type === 'localUnsubscribe'),
-      ownRevokeHeld: ownHeld.length > 0,
+      ownRevokeHeld: departing.length > 0,
     },
   });
 
@@ -1122,8 +1149,9 @@ async function repeatLocalUnsubscribesOnLoad(): Promise<void> {
   const skipped = new Set<string>();
   try {
     await withPushOpLock(async () => {
+      const works = readPushState().works;
       const held = await heldLockNames();
-      for (const work of readPushState().works) {
+      for (const work of works) {
         if (controller.signal.aborted) return;
         if (work.type !== 'localUnsubscribe') continue;
         if (isHeld(work, held)) skipped.add(heldByOf(work));
@@ -1217,7 +1245,9 @@ function endedEarly<T>(result: T | EndedEarly): result is EndedEarly {
 /** Maps an error that ended an action to its result. */
 function failure(error: unknown): PushActionResult {
   // A step that ended (its appearance replaced) is not a failure of storage.
-  if (error instanceof StepEnded || error instanceof PushStateConflictError) return { kind: 'superseded' };
+  if (error instanceof StepEnded || error instanceof PushStateConflictError || error instanceof DepartureInProgressError) {
+    return { kind: 'superseded' };
+  }
   if (error instanceof PushLabelLimitError) return { kind: 'failed', reason: 'labelLimit' };
   return { kind: 'failed', reason: 'storage' };
 }
@@ -1389,7 +1419,7 @@ async function enableUnderLock(step: Step, gen: number, refresh: () => void): Pr
     channel.endpoint,
     userId,
     undoingOnUserChanged(
-      request(step, (signal) => {
+      registeredUnlessDeparting(step, (signal) => {
         sent = true;
         return pushSubscribe(
           {
@@ -1624,8 +1654,9 @@ export async function revokeConfirmedDevice(
     }
     // Earlier unfinished revocations of this device by the same owner are
     // sent now as well: a disable asked again is the manual retry of US-3.
+    const works = readPushState().works;
     const held = await heldLockNames();
-    for (const earlier of readPushState().works) {
+    for (const earlier of works) {
       if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier, held)) continue;
       done = (await repeatOwnRevocation(step, earlier)) && done;
     }

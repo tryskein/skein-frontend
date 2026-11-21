@@ -35,6 +35,7 @@ export function channel(name: string): BrowserChannel {
 /** Exclusive Web Locks with abortable waiting, as the browser grants them. */
 export class FakeLocks {
   private readonly held = new Set<string>();
+  private readonly modes = new Map<string, LockMode>();
   private readonly queues = new Map<string, Array<() => void>>();
   /** Names of the lock requests, in the order they were made. */
   readonly requests: string[] = [];
@@ -65,9 +66,11 @@ export class FakeLocks {
       queue.push(grant);
       signal?.addEventListener('abort', onAbort, { once: true });
     });
+    this.modes.set(name, options.mode ?? 'exclusive');
     try {
       return await callback({ name, mode: 'exclusive' } as Lock);
     } finally {
+      this.modes.delete(name);
       this.onRelease?.(name);
       const next = this.queues.get(name)?.shift();
       if (next) next();
@@ -77,7 +80,7 @@ export class FakeLocks {
 
   /** The held locks, as `navigator.locks.query()` answers. */
   async query(): Promise<LockManagerSnapshot> {
-    return { held: [...this.held].map((name) => ({ name, mode: 'exclusive' as LockMode })), pending: [] };
+    return { held: [...this.held].map((name) => ({ name, mode: this.modes.get(name) ?? ('exclusive' as LockMode) })), pending: [] };
   }
 
   idle(): boolean {

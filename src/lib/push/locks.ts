@@ -63,21 +63,46 @@ export function withPushStoreLock<T>(body: () => T | Promise<T>, signal?: AbortS
 }
 
 /**
- * Prefix of the lock an explicit logout holds while the works it wrote are
- * still its own (`pushState.ts#isHeld`): from before its first write until
- * its verdict and its take-back or channel removal are done, at most its
- * budget. The browser frees it when the tab goes, so it never outlives its
- * logout, whatever the clock says.
+ * Prefix of the lock an explicit logout holds while it runs
+ * (`skein.push.departure.<userId>.<id>`, {@link departureLockName}): from
+ * before its first write until it ended or nothing of it can be taken back
+ * any more, at most its budget. The browser frees it when the tab goes, so
+ * it never outlives its logout, whatever the clock says.
+ *
+ * It is the sign, visible to every tab, that a logout of that user is live:
+ * the works it wrote are still its own (`pushState.ts#isHeld`), no new label
+ * of that user is written and no registration of it is sent, and rows 7 and
+ * 10 of that user wait — also when the logout could write nothing.
  */
 export const DEPARTURE_LOCK_PREFIX = 'skein.push.departure.';
 
-/** The names of the locks held right now in any tab of the origin. */
+/** A fresh name of the lock of an explicit logout of `userId`. */
+export function departureLockName(userId: string): string {
+  return `${DEPARTURE_LOCK_PREFIX}${userId}.${crypto.randomUUID()}`;
+}
+
+/** The locks of the live explicit logouts of `userId` among `held`. */
+export function liveDeparturesOf(held: ReadonlySet<string>, userId: string): string[] {
+  const prefix = `${DEPARTURE_LOCK_PREFIX}${userId}.`;
+  return [...held].filter((name) => name.startsWith(prefix));
+}
+
+/**
+ * The names of the locks held exclusively right now in any tab of the
+ * origin. A snapshot: read the state it protects (the journal, the consent)
+ * BEFORE asking, so a lock taken before that state was written is in it.
+ * Rejects when the browser cannot answer — callers must not take that for
+ * "nothing is held".
+ */
 export async function heldLockNames(): Promise<Set<string>> {
   const locks = lockManager();
   if (locks === null) return new Set();
+  if (typeof locks.query !== 'function') throw new PushLocksUnavailableError();
   const snapshot = await locks.query();
   const names = new Set<string>();
-  for (const lock of snapshot.held ?? []) if (typeof lock.name === 'string') names.add(lock.name);
+  for (const lock of snapshot.held ?? []) {
+    if (typeof lock.name === 'string' && lock.mode !== 'shared') names.add(lock.name);
+  }
   return names;
 }
 

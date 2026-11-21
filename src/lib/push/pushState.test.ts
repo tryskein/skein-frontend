@@ -46,7 +46,11 @@ const ENDPOINT_2 = 'https://push.example.test/send/two';
 beforeEach(() => {
   window.localStorage.clear();
   Object.defineProperty(navigator, 'locks', {
-    value: { request: (_name: string, _options: LockOptions, cb: LockGrantedCallback<unknown>) => Promise.resolve().then(() => cb(null)) },
+    value: {
+      request: (_name: string, _options: LockOptions, cb: LockGrantedCallback<unknown>) => Promise.resolve().then(() => cb(null)),
+      // No other lock is held: no explicit logout runs.
+      query: async () => ({ held: [], pending: [] }),
+    },
     configurable: true,
   });
 });

@@ -771,6 +771,130 @@ describe('row 69 — a late answer after the deletion of the account', () => {
   });
 });
 
+describe('a live logout of U is a barrier for every new label and registration of U (rule 8, US-4)', () => {
+  test('the logout\'s transition is refused; an enable holding skein.push.op from before writes no label and registers nothing', async () => {
+    // Tab 2: an enable of A holds skein.push.op and waits for the list.
+    const list = deferred<void>();
+    api.pushListDevices.mockImplementationOnce(async (userId: string) => {
+      await list.promise;
+      return model.list(userId);
+    });
+    const tab2 = await openTab(A);
+    const enabling = tab2.lifecycle.enablePush();
+    for (let i = 0; i < 200 && api.pushListDevices.mock.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+    // Tab 1: A clicks "Log out"; the store refuses its transition.
+    const real = Storage.prototype.setItem;
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === PUSH_STATE_KEY && JSON.parse(value).consents?.[A]?.state === 'off') {
+        throw new DOMException('the quota is full', 'QuotaExceededError');
+      }
+      return real.call(this, key, value);
+    });
+    vi.resetModules();
+    const tab1Appearance = await import('../../auth/appearance');
+    const tab1Departure = await import('./departure');
+    tab1Appearance.noteLogin(A);
+    const departure = tab1Departure.beginExplicitDeparture();
+
+    // The enable goes on while the logout is live.
+    list.resolve();
+    try {
+      expect(await enabling).toEqual({ kind: 'superseded' });
+      expect(await departure.prepare()).toBe('proceed');
+      await departure.finish();
+    } finally {
+      setItem.mockRestore();
+      tab1Appearance.noteSignedOut();
+    }
+
+    expect(api.pushSubscribe).not.toHaveBeenCalled();
+    expect(readConsent(A).labels).toEqual([]);
+    expect(server.subs).toEqual([]);
+    expect(browser.channel).toBeNull();
+  });
+});
+
+describe('the live logout of U is seen without any work of it (US-9, rule 5)', () => {
+  test('empty S, an old subscription without a label and no consent: row 7 waits while the logout is live; superseded leaves both', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, null);
+    const config = deferred<void>();
+    api.getPushConfig.mockImplementationOnce(async () => {
+      await config.promise;
+      return { publicKey: server.publicKey };
+    });
+    const tab2 = await openTab(A);
+    tab2.lifecycle.startPushLifecycle();
+    for (let i = 0; i < 200 && api.getPushConfig.mock.calls.length === 0; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+    api.pushListDevices.mockImplementationOnce(() => new Promise(() => undefined));
+    vi.resetModules();
+    const tab1Appearance = await import('../../auth/appearance');
+    const tab1Departure = await import('./departure');
+    tab1Appearance.noteLogin(A);
+    const departure = tab1Departure.beginExplicitDeparture();
+    for (let i = 0; i < 200 && readConsent(A).state !== 'off'; i += 1) await new Promise((r) => setTimeout(r, 0));
+    // Nothing to journal: no label, no endpoint known.
+    expect(readPushState().works).toEqual([]);
+
+    config.resolve();
+    for (let i = 0; i < 50; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    expect(browser.channel).toEqual(x);
+
+    tab1Appearance.noteLogin(A);
+    expect(await departure.prepare()).toBe('superseded');
+    await settle();
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    expect(server.subs.map((sub) => sub.endpoint)).toEqual([x.endpoint]);
+    expect(browser.channel).toEqual(x);
+    tab1Appearance.noteSignedOut();
+  });
+
+  test('the snapshot of the locks is taken before the logout writes its work and arrives after: the repeat does not perform it', async () => {
+    const x = channel('x');
+    browser.channel = x;
+    addSub(A, x.endpoint, LABEL_A);
+    seed({ [A]: enabledConsent(LABEL_A, x, null) });
+    const tab2 = await openTab(A);
+    // The snapshot of tab 2's repeat of the journal (after the page-load
+    // repeat's) is taken, then arrives late: the logout of tab 1 writes meanwhile.
+    const query = locks.query.bind(locks);
+    const late = deferred<void>();
+    let queries = 0;
+    locks.query = async () => {
+      queries += 1;
+      const snapshot = await query();
+      if (queries === 2) await late.promise;
+      return snapshot;
+    };
+    tab2.lifecycle.startPushLifecycle();
+    for (let i = 0; i < 200 && queries < 2; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(queries).toBe(2);
+
+    api.pushListDevices.mockImplementationOnce(() => new Promise(() => undefined));
+    vi.resetModules();
+    const tab1Appearance = await import('../../auth/appearance');
+    const tab1Departure = await import('./departure');
+    tab1Appearance.noteLogin(A);
+    const departure = tab1Departure.beginExplicitDeparture();
+    for (let i = 0; i < 200 && readPushState().works.length === 0; i += 1) await new Promise((r) => setTimeout(r, 0));
+    late.resolve();
+    for (let i = 0; i < 50; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+
+    tab1Appearance.noteLogin(A);
+    expect(await departure.prepare()).toBe('superseded');
+    await settle();
+    expect(api.pushRevokeDevices).not.toHaveBeenCalled();
+    expect(server.subs).toHaveLength(1);
+    expect(browser.channel).toEqual(x);
+    tab1Appearance.noteSignedOut();
+  });
+});
+
 describe('row 7 against a logout in another tab that may still be taken back (rule 5, US-4)', () => {
   test('tab 2 decides while tab 1 logs out: rows 7/10 wait; the logout is superseded; A\'s subscription and channel stay', async () => {
     const x = channel('x');

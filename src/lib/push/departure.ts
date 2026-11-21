@@ -57,7 +57,7 @@ import {
 } from '../../auth/appearance';
 import { browserPushSupported, type ChannelRead, readChannel } from './browserPush';
 import { endpointFingerprint } from './fingerprint';
-import { DEPARTURE_LOCK_PREFIX, heldLockNames, holdLock, PUSH_OP_LOCK } from './locks';
+import { departureLockName, heldLockNames, holdLock, PUSH_OP_LOCK } from './locks';
 import {
   abortPushOperations,
   getPushLifecycleState,
@@ -242,7 +242,7 @@ export function beginExplicitDeparture(): ExplicitDeparture {
   // performs them, so taking them back cannot come after their effect
   // (pushState.ts#isHeld). It is held from before the first write until the
   // logout ended, at most the budget; the browser frees it with the tab.
-  const heldBy = `${DEPARTURE_LOCK_PREFIX}${crypto.randomUUID()}`;
+  const heldBy = departureLockName(userId);
   const marker = holdLock(heldBy);
   const server = deadline(DEPARTURE_PREPARE_MS, budget.signal);
   const lockWait = deadline(DEPARTURE_CONFIRM_MS, server.signal);
@@ -446,8 +446,9 @@ export function beginExplicitDeparture(): ExplicitDeparture {
     if (devices !== null) {
       // (a) U is confirmed.
       let done = work === null ? read.kind === 'none' : await repeatOwnRevocation(step, asRevocation(work), progress);
+      const works = readPushState().works;
       const held = await heldLockNames();
-      for (const earlier of readPushState().works) {
+      for (const earlier of works) {
         if (earlier.type !== 'deviceRevoke' || earlier.ownerUserId !== userId || earlier.id === work?.id || isHeld(earlier, held)) continue;
         done = (await repeatOwnRevocation(step, earlier)) && done;
       }
@@ -496,7 +497,12 @@ export function beginExplicitDeparture(): ExplicitDeparture {
         listed = named.value.listed;
       }
     }
-    await revokeUnjournaled(snapshot.labels, snapshot.endpoint, devices, endpoint, listed);
+    // The labels S held before the transition, and those of the record now
+    // (written before this logout's lock was taken, or after a refused
+    // transition) — read at the request.
+    const now = readConsent(userId);
+    const labels = [...new Set([...snapshot.labels, ...now.labels])];
+    await revokeUnjournaled(labels, snapshot.endpoint ?? now.endpoint, devices, endpoint, listed);
   }
 
   /**

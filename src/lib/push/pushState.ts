@@ -34,7 +34,7 @@
  */
 
 import { MAX_REVOKED_DEVICE_LABELS } from '../../api/push';
-import { withPushStoreLock } from './locks';
+import { heldLockNames, liveDeparturesOf, withPushStoreLock } from './locks';
 
 /** localStorage key of the push state record. */
 export const PUSH_STATE_KEY = 'skein.push.v1.state';
@@ -159,6 +159,32 @@ export class PushStorageError extends Error {
     super(message);
     this.name = 'PushStorageError';
   }
+}
+
+/**
+ * A new label or a registration of a user meets a live explicit logout of
+ * that user (`locks.ts#DEPARTURE_LOCK_PREFIX`), or whether one is live
+ * could not be known. Nothing changed.
+ */
+export class DepartureInProgressError extends Error {
+  constructor(message = 'an explicit logout of this user is running') {
+    super(message);
+    this.name = 'DepartureInProgressError';
+  }
+}
+
+/**
+ * Throws {@link DepartureInProgressError} while an explicit logout of
+ * `userId` is live — also when the browser cannot say whether one is.
+ */
+export async function noLiveDeparture(userId: string): Promise<void> {
+  let held: Set<string>;
+  try {
+    held = await heldLockNames();
+  } catch {
+    throw new DepartureInProgressError('the locks of the browser could not be read');
+  }
+  if (liveDeparturesOf(held, userId).length > 0) throw new DepartureInProgressError();
 }
 
 /** The consent moved on since the caller read it. Nothing changed. */
@@ -352,11 +378,22 @@ export function isNoMark(consent: Consent): boolean {
  *
  * `guard` bounds the write (see {@link WriteGuard}).
  */
-async function commit<T>(change: (record: PushStateRecord) => T, guard?: WriteGuard): Promise<T> {
+async function commit<T>(
+  change: (record: PushStateRecord) => T,
+  guard?: WriteGuard,
+  barrier?: () => Promise<void>,
+): Promise<T> {
   const signal = guard?.signal;
-  return withPushStoreLock(() => {
+  return withPushStoreLock(async () => {
     if (signal?.aborted) throw signal.reason;
     guard?.check?.();
+    if (barrier !== undefined) {
+      // Under the store lock: a logout that starts after this is written
+      // after this write, and its transition takes what it wrote.
+      await barrier();
+      if (signal?.aborted) throw signal.reason;
+      guard?.check?.();
+    }
     const s = storage();
     let before: string | null;
     try {
@@ -476,7 +513,8 @@ export interface BeginLabelArgs {
  * not confirmed" — before the registration that carries it is sent. An
  * explicit enable starts from "no mark" or "explicitly off"; an accept of an
  * existing subscription (row 6) only from "no mark". Refused with
- * {@link PushLabelLimitError} when S is full.
+ * {@link PushLabelLimitError} when S is full, and with
+ * {@link DepartureInProgressError} while an explicit logout of the user runs.
  */
 export async function beginConsentLabel(userId: string, args: BeginLabelArgs, guard?: WriteGuard): Promise<Consent> {
   return commit((record) => {
@@ -500,7 +538,7 @@ export async function beginConsentLabel(userId: string, args: BeginLabelArgs, gu
       keysFingerprint: args.keysFingerprint,
       offUnconfirmed: false,
     });
-  }, guard);
+  }, guard, () => noLiveDeparture(userId));
 }
 
 /** Arguments of {@link confirmConsent}. */
@@ -569,7 +607,7 @@ export async function recordUnconfirmedChannel(userId: string, args: RecordChann
       endpoint: args.endpoint,
       keysFingerprint: args.keysFingerprint,
     });
-  }, guard);
+  }, guard, () => noLiveDeparture(userId));
 }
 
 /** Arguments of {@link abandonConsentLabel}. */
