@@ -2,7 +2,7 @@
  * The decision table of US-2 (rows 41–47 of the test matrix).
  *
  * The expected rows and actions are the spec's decision table, composition
- * rules 7 and 9, ИНВ-2, US-3/6/8/9/10 and Edge 9/11/12, written as literals.
+ * rules 7 and 9, INV-2, US-3/6/8/9/10 and Edge 9/11/12, written as literals.
  */
 import { describe, expect, test } from 'vitest';
 import type { PushDevice, PushOutcome } from '../../api/push';
@@ -264,7 +264,7 @@ describe('row 44 — rows 0 and 1', () => {
   });
 });
 
-describe('row 45 — ИНВ-2: no registration without consent outside rows 6 and 9', () => {
+describe('row 45 — INV-2: no registration without consent outside rows 6 and 9', () => {
   const consents: ConsentKind[] = ['none', 'off', 'confirmed', 'enablePending', 'acceptPending'];
   const channels: DecisionChannel[] = [{ kind: 'unreadable' }, NO_CHANNEL, channel(OWN), channel(OWN, 'fp-2'), channel(FOREIGN)];
   const lists: Array<PushOutcome<PushDevice[]>> = [

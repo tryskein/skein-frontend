@@ -2,7 +2,7 @@
  * The service worker `public/sw.js`, executed in a stand-in `self`
  * (rows 81 and 82 of the test matrix).
  *
- * Expected (spec US-10, Р-9, "Component boundaries"): on
+ * Expected (spec US-10, R-9, "Component boundaries"): on
  * `pushsubscriptionchange` the worker makes no server request and creates no
  * channel; a `push` with a body shows a notification titled from the body;
  * `notificationclick` opens the notification's URL.
