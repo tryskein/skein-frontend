@@ -440,7 +440,7 @@ describe('row 251 — "Users": the spaces of an account', () => {
     fireEvent.click(box(dialog, 'Acme'));
     fireEvent.change(within(dialog).getByRole('textbox', { name: /Email/ }), { target: { value: 'new@acme.io' } });
     fireEvent.change(within(dialog).getByRole('textbox', { name: /^Name/ }), { target: { value: 'New' } });
-    fireEvent.change(within(dialog).getByLabelText(/^Password/), { target: { value: 'longenough' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Password/), { target: { value: 'long-enough-pass' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
     await waitFor(() => expect(api.createUser).toHaveBeenCalled());
     const sent = api.createUser.mock.calls[0][0] as { spaceIds: string[] };
@@ -455,7 +455,7 @@ describe('row 251 — "Users": the spaces of an account', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Create user' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: /Email/ }), { target: { value: 'new@acme.io' } });
     fireEvent.change(within(dialog).getByRole('textbox', { name: /^Name/ }), { target: { value: 'New' } });
-    fireEvent.change(within(dialog).getByLabelText(/^Password/), { target: { value: 'longenough' } });
+    fireEvent.change(within(dialog).getByLabelText(/^Password/), { target: { value: 'long-enough-pass' } });
     return dialog;
   }
 
