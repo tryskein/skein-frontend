@@ -61,3 +61,59 @@ describe('listIssues — query filters on the wire', () => {
     }
   });
 });
+
+// sk-1048.84 — every other filter of the same handler (`handler/issues.go#List`):
+// one value each, `label` repeated, `origin=all` and `unreviewed=false` spelled
+// by leaving the parameter out, explicit `false` / `0` kept.
+describe('listIssues — the remaining filters on the wire', () => {
+  test('sends every filter by its handler name', async () => {
+    await listIssues('proj-1', {
+      priority: 2,
+      parentId: 'sk-7',
+      pinned: true,
+      text: 'login bug',
+      acceptedAtNull: true,
+      origin: 'agent-autonomous',
+      labels: ['ui', 'auth'],
+      componentId: '11111111-2222-3333-4444-555555555555',
+      source: 'api',
+      sort: 'created',
+      isBlocked: true,
+      unreviewed: true,
+      cursor: 'c-2',
+      limit: 50,
+    });
+    const query = sentUrl().searchParams;
+    expect(query.get('priority')).toBe('2');
+    expect(query.get('parentId')).toBe('sk-7');
+    expect(query.get('pinned')).toBe('true');
+    expect(query.get('text')).toBe('login bug');
+    expect(query.get('acceptedAt')).toBe('null');
+    expect(query.get('origin')).toBe('agent-autonomous');
+    expect(query.getAll('label')).toEqual(['ui', 'auth']);
+    expect(query.get('componentId')).toBe('11111111-2222-3333-4444-555555555555');
+    expect(query.get('source')).toBe('api');
+    expect(query.get('sort')).toBe('created');
+    expect(query.get('isBlocked')).toBe('true');
+    expect(query.get('unreviewed')).toBe('true');
+    expect(query.get('cursor')).toBe('c-2');
+    expect(query.get('limit')).toBe('50');
+  });
+
+  test('keeps explicit false and zero, and spells "accepted" as not-null', async () => {
+    await listIssues('proj-1', { priority: 0, pinned: false, isBlocked: false, acceptedAtNotNull: true, limit: 0 });
+    const query = sentUrl().searchParams;
+    expect(query.get('priority')).toBe('0');
+    expect(query.get('pinned')).toBe('false');
+    expect(query.get('isBlocked')).toBe('false');
+    expect(query.get('acceptedAt')).toBe('not-null');
+    expect(query.get('limit')).toBe('0');
+  });
+
+  test('leaves out origin=all, unreviewed=false and empty values', async () => {
+    await listIssues('proj-1', {
+      origin: 'all', unreviewed: false, labels: [], parentId: '', text: '', cursor: null,
+    });
+    expect([...sentUrl().searchParams.keys()]).toEqual([]);
+  });
+});
