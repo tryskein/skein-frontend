@@ -494,6 +494,40 @@ describe('sk-878.3.1 — the API chip keeps only api comments', () => {
     expect(screen.getByRole('button', { name: /^API/ }).getAttribute('aria-pressed')).toBe('false');
   });
 
+  // sk-1048.11 — the chip's accessible name carries the count while there are
+  // api comments; when the last one goes away with the chip on, the chip stays
+  // (so it can be turned off) without a count, and turning it off removes it.
+  test('the last api comment vanishing keeps the active chip, without a count, until it is turned off', async () => {
+    mockedList.mockResolvedValue(withApi());
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MantineProvider>
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>
+            <CommentsSection projectHandle="pj-1" issueId="sk-1" count={4} />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </MantineProvider>,
+    );
+    await waitFor(() => screen.getByText('integration note'));
+    const chip = screen.getByRole('button', { name: /^API/ });
+    expect(chip.getAttribute('aria-label')).toMatch(/^API \(1\)/);
+
+    fireEvent.click(chip);
+    await waitFor(() => expect(screen.queryByText('human note')).toBeNull());
+
+    mockedList.mockResolvedValue(mixed());
+    await qc.invalidateQueries();
+    await waitFor(() => expect(screen.queryByText('integration note')).toBeNull());
+    const emptied = screen.getByRole('button', { name: /^API/ });
+    expect(emptied.getAttribute('aria-pressed')).toBe('true');
+    expect(emptied.getAttribute('aria-label')).not.toMatch(/\(\d+\)/);
+
+    fireEvent.click(emptied);
+    await waitFor(() => expect(screen.getByText('human note')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /^API/ })).toBeNull();
+  });
+
   test('a thread without api comments gets no API chip', async () => {
     mockedList.mockResolvedValue(mixed());
     renderSection(3);
