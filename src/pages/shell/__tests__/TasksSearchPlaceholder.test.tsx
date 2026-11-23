@@ -155,7 +155,9 @@ describe('the Russian filter panel by accessible name', () => {
     );
 
     const search = screen.getByRole('textbox', { name: ruOnly('filters', 'searchAria') }) as HTMLInputElement;
-    expect(search.placeholder).toBe(RU_PLACEHOLDER);
+    // The exact sentence is the sk-407 case above; here the placeholder is
+    // the Russian dictionary's, not the English fallback.
+    expect(search.placeholder).toBe(ruOnly('filters', 'searchPlaceholder'));
     // The name is not the placeholder: both are announced, for different things.
     expect(search.getAttribute('aria-label')).not.toBe(search.placeholder);
     expect(screen.getByRole('textbox', { name: ruOnly('filters', 'labels.status') })).toBeTruthy();
