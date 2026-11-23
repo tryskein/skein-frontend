@@ -263,3 +263,62 @@ describe('MoveIssueButton — destinations within the issue’s space', () => {
     expect(vi.mocked(listAllIssues).mock.calls[0][0]?.space).toBeUndefined();
   });
 });
+
+// sk-1048.33 — a move under an epic adds the new parent edge BEFORE taking the
+// old one off, so the tree never shows the issue as an orphan. If the add
+// lands and the removal is refused, the issue now has two parents: the dialog
+// stays open with the reason, and the card, its edges and the issue / edge
+// lists are refreshed to show that state.
+describe('MoveIssueButton — a move under an epic that fails half way', () => {
+  test('adds first, keeps the dialog with the error, and refreshes what the partial move changed', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const detailKey = ['issues', 'detail', 'sk-42'];
+    const listKey = ['issues', 'list', 'p1'];
+    const newParentEdgesKey = ['deps', 'p1', 'demo-1'];
+    qc.setQueryData(detailKey, makeIssue());
+    qc.setQueryData(listKey, { items: [] });
+    qc.setQueryData(newParentEdgesKey, { outgoing: [], incoming: [] });
+    vi.mocked(listDependencies).mockResolvedValue({
+      outgoing: [{
+        fromId: 'sk-42', toId: 'demo-0', type: 'parent-child', version: 1,
+        createdAt: '2026-05-01T10:00:00Z', metadata: {},
+      } as DependencyEdge],
+      incoming: [],
+    });
+    vi.mocked(addDependency).mockResolvedValue({} as never);
+    vi.mocked(removeDependency).mockRejectedValue(new Error('the old parent edge could not be removed'));
+
+    render(
+      <MantineProvider forceColorScheme="dark">
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>
+            <LayoutProvider>
+              <MoveIssueButton issue={makeIssue()} />
+            </LayoutProvider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </MantineProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('details:move.buttonAria', { id: 'sk-42' }) }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText(i18n.t('details:move.currentParent', { ids: 'demo-0' }));
+    const edgeReads = vi.mocked(listDependencies).mock.calls.length;
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: i18n.t('details:move.destination') }), {
+      target: { value: 'demo-1' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('details:move.button') }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveProperty('textContent', 'the old parent edge could not be removed');
+    expect(addDependency).toHaveBeenCalledWith('p1', 'sk-42', { toId: 'demo-1', type: 'parent-child' });
+    expect(removeDependency).toHaveBeenCalledWith('p1', 'sk-42', 'demo-0', 'parent-child');
+    expect(vi.mocked(addDependency).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(removeDependency).mock.invocationCallOrder[0]);
+    expect(screen.getByRole('dialog')).toBe(dialog);
+
+    await waitFor(() => expect(vi.mocked(listDependencies).mock.calls.length).toBeGreaterThan(edgeReads));
+    expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(newParentEdgesKey)?.isInvalidated).toBe(true);
+  });
+});
