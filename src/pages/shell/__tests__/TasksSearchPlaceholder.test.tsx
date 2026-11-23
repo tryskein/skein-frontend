@@ -130,3 +130,32 @@ describe('sk-407 — the Tasks search placeholder', () => {
     expect(en, 'the English placeholder must name the task code').toMatch(/code/);
   });
 });
+
+/**
+ * sk-1048.76 — the Russian panel is found by its Russian accessible names.
+ * A field's NAME is what a screen reader announces and what a speech-input
+ * user says; the placeholder is a hint that disappears on typing, so an
+ * empty name with a filled placeholder is a nameless field.
+ */
+describe('the Russian filter panel by accessible name', () => {
+  test('search, status and assignee answer to their Russian names', async () => {
+    await act(async () => {
+      await i18n.changeLanguage('ru');
+    });
+    render(
+      <MantineProvider>
+        <TaskFilters
+          {...props()}
+          collapsed={false}
+          showAssigneeRow
+          assigneeOptions={[{ username: 'oleg', label: 'Oleg' }]}
+        />
+      </MantineProvider>,
+    );
+
+    const search = screen.getByRole('textbox', { name: 'Поиск задач' }) as HTMLInputElement;
+    expect(search.placeholder).toBe(RU_PLACEHOLDER);
+    expect(screen.getByRole('textbox', { name: 'Статус' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Исполнитель' })).toBeTruthy();
+  });
+});
