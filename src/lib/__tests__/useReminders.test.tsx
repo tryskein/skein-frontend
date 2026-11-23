@@ -219,8 +219,11 @@ describe('useDismissReminder — refusal and reconciliation', () => {
       ],
       ringingTaskCount: 2,
     });
-    let refuse: (err: unknown) => void = () => {};
-    dismissSpy.mockImplementation(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    // The refusal exists before the request does (see the hook test of
+    // useIssueDetail.changeStatus for why).
+    let refuse!: (err: unknown) => void;
+    const answer = new Promise<void>((_resolve, reject) => { refuse = reject; });
+    dismissSpy.mockImplementation(() => answer);
     const { client } = renderHost('sk-1');
     client.setQueryData(notificationCountsKey, {});
     await waitFor(() => expect(captured?.ringingCount).toBe(2));
@@ -230,6 +233,7 @@ describe('useDismissReminder — refusal and reconciliation', () => {
     });
     await waitFor(() => expect(captured?.issueReminders).toEqual([]));
     expect(captured?.ringingCount).toBe(1);
+    await waitFor(() => expect(dismissSpy).toHaveBeenCalledWith('a', undefined));
 
     act(() => refuse(new BusinessError(422, 'reminder belongs to another user', 'forbidden')));
 
