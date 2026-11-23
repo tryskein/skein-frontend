@@ -108,7 +108,11 @@ describe('uploadAttachment', () => {
     });
     expect(xhr.body?.get('key')).toBe('issues/sk-1/att-1');
     expect(xhr.body?.get('policy')).toBe('cG9saWN5');
-    expect(xhr.body?.get('file')).toBeInstanceOf(File);
+    const sentFile = xhr.body?.get('file') as File;
+    expect(sentFile).toBeInstanceOf(File);
+    expect(sentFile.name).toBe('notes.txt');
+    expect(sentFile.type).toBe('text/plain');
+    expect(await sentFile.text()).toBe('hello');
     expect(onProgress.mock.calls).toEqual([[2, 5]]);
     expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))).toEqual({});
   });
@@ -137,7 +141,7 @@ describe('uploadAttachment', () => {
     const malformed = uploadAttachment('sk-1', new File(['hello'], 'notes.txt'));
     (await transfer()).status = 204;
     FakeXhr.sent[0].onload?.();
-    await expect(malformed).rejects.toThrow(Error);
+    await expect(malformed).rejects.toMatchObject({ name: 'Error' });
   });
 
   test('a file without a type is sent as octet-stream, and no comment means no commentId', async () => {
@@ -166,7 +170,8 @@ describe('uploadAttachment', () => {
     const pending = uploadAttachment('sk-1', new File(['hello'], 'notes.txt', { type: 'text/plain' }));
     fail(await transfer());
 
-    await expect(pending).rejects.toThrow(Error);
+    // A failure, not a cancel: a refused or broken transfer is never an AbortError.
+    await expect(pending).rejects.toMatchObject({ name: 'Error' });
     expect(confirmed()).toEqual([]);
   });
 
