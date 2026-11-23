@@ -305,4 +305,25 @@ describe('watching the issue from its card', () => {
     expect(headerToggle().getAttribute('aria-pressed')).toBe('false');
     releaseRead();
   });
+  test('in the section, an explicitly unwatched caller is offered «Watch», not «Stop watching»', async () => {
+    server.watchers = [DAVE, { userId: 'u-1', username: 'carol', name: 'Carol', reasons: ['assignee', 'unwatched'], since: '2026-11-20T00:00:00Z' }];
+    mountPanel();
+    await waitFor(() => expect(watcherNames()).toEqual(['dave']));
+
+    expect(within(watchersSection()).getByRole('button', { name: d('watchers.add') })).toBeTruthy();
+    expect(within(watchersSection()).queryByRole('button', { name: d('watchers.stopWatching') })).toBeNull();
+  });
+
+  test('the section control is off while its request is in flight', async () => {
+    const user = userEvent.setup();
+    await loaded();
+    const release = hold('writeGate');
+
+    const add = within(watchersSection()).getByRole('button', { name: d('watchers.add') }) as HTMLButtonElement;
+    await user.click(add);
+
+    await waitFor(() => expect(add.disabled).toBe(true));
+    expect(server.watch).toHaveBeenCalledTimes(1);
+    release();
+  });
 });
