@@ -72,7 +72,9 @@ describe('width budget — the inputs exist and are non-degenerate', () => {
 /* ──────────────── every term actually moves the total ──────────────── */
 
 describe('sensitivity — no term of the formula is inert', () => {
-  const base = appFloorPx(COL_BOUNDS as ColWidthBoundsMap, TOKENS_IN);
+  // sk-1048.53 — computed inside each test, not while the file is collected:
+  // a broken formula must fail the test that uses it, not the whole file.
+  const base = () => appFloorPx(COL_BOUNDS as ColWidthBoundsMap, TOKENS_IN);
   /** An arbitrary non-unit delta, so a term counted once cannot be
    *  confused with one counted twice. */
   const D = 7;
@@ -85,19 +87,19 @@ describe('sensitivity — no term of the formula is inert', () => {
         default: COL_BOUNDS[col as keyof typeof COL_BOUNDS].default + D,
       },
     } as ColWidthBoundsMap;
-    expect(appFloorPx(bumped, TOKENS_IN)).toBe(base + D);
+    expect(appFloorPx(bumped, TOKENS_IN)).toBe(base() + D);
   });
 
   test('--lens-frame moves the floor by LENS_FRAME_SIDES per px', () => {
     expect(appFloorPx(COL_BOUNDS as ColWidthBoundsMap, { ...TOKENS_IN, lensFramePx: LENS_FRAME_PX + D })).toBe(
-      base + LENS_FRAME_SIDES * D,
+      base() + LENS_FRAME_SIDES * D,
     );
   });
 
   test('--width-resize moves the floor by one handle per fixed column', () => {
     expect(
       appFloorPx(COL_BOUNDS as ColWidthBoundsMap, { ...TOKENS_IN, widthResizePx: WIDTH_RESIZE_PX + D }),
-    ).toBe(base + COL_KEYS.length * D);
+    ).toBe(base() + COL_KEYS.length * D);
   });
 
   test('the floor is recomputed, never read back from the stylesheet', () => {
