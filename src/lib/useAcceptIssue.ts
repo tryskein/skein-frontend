@@ -26,6 +26,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { acceptIssue, type IssueDetail, type ListIssuesResult } from '../api/issues';
 import { BusinessError } from '../api/client';
 import { inboxQueryKey } from './useInbox';
+import { notificationCountsKey } from './useNotificationCounts';
 import {
   applyAcceptedRetention,
   releaseAccepted,
@@ -117,10 +118,7 @@ export function useAcceptIssue() {
       // Header bell badge reflects unaccepted counts — refresh that.
       // We deliberately do NOT invalidate the inbox feed: keeping the
       // dimmed card around is the whole point of the optimistic patch.
-      qc.invalidateQueries({
-        predicate: (q) =>
-          Array.isArray(q.queryKey) && q.queryKey[0] === 'notifications',
-      });
+      qc.invalidateQueries({ queryKey: notificationCountsKey });
     },
   });
 }
