@@ -132,6 +132,18 @@ describe('sk-407 — the Tasks search placeholder', () => {
 });
 
 /**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
+/**
  * sk-1048.76 — the Russian panel is found by its Russian accessible names.
  * A field's NAME is what a screen reader announces and what a speech-input
  * user says; the placeholder is a hint that disappears on typing, so an
@@ -153,9 +165,11 @@ describe('the Russian filter panel by accessible name', () => {
       </MantineProvider>,
     );
 
-    const search = screen.getByRole('textbox', { name: 'Поиск задач' }) as HTMLInputElement;
+    const search = screen.getByRole('textbox', { name: ruOnly('filters', 'searchAria') }) as HTMLInputElement;
     expect(search.placeholder).toBe(RU_PLACEHOLDER);
-    expect(screen.getByRole('textbox', { name: 'Статус' })).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Исполнитель' })).toBeTruthy();
+    // The name is not the placeholder: both are announced, for different things.
+    expect(search.getAttribute('aria-label')).not.toBe(search.placeholder);
+    expect(screen.getByRole('textbox', { name: ruOnly('filters', 'labels.status') })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: ruOnly('filters', 'labels.assignee') })).toBeTruthy();
   });
 });
