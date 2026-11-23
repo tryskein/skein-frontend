@@ -42,7 +42,9 @@ const json = (body: unknown, status = 200) =>
 
 beforeEach(() => {
   themes = [theme('th-mine', 'Midnight', 'u-1'), theme('th-team', 'Harbour', 'u-2')];
-  pref = { mode: 'custom', builtinTheme: 'light', customThemeId: 'th-mine' } as UserThemePref;
+  // The built-in palette the user keeps underneath the custom theme: dark,
+  // so falling back to it after a delete is told apart from the page's light boot.
+  pref = { mode: 'custom', builtinTheme: 'dark', customThemeId: 'th-mine' } as UserThemePref;
   fetchSpy.mockReset();
   fetchSpy.mockImplementation(async (input, init) => {
     const url = String(input);
@@ -99,19 +101,24 @@ async function openMenu() {
   return screen.findByRole('menu');
 }
 
-/** The menu as a reader meets it: each group label followed by its themes. */
+/**
+ * The menu as a reader meets it: each group label, by its visible text,
+ * with the saved themes that follow it in reading order. The editor actions
+ * («Open editor», «Create new») are not themes and are left out by name.
+ */
 function groups(menu: HTMLElement): Record<string, string[]> {
+  const labels = [chrome('theme.myThemes'), chrome('theme.teamThemes')]
+    .map((text) => within(menu).queryByText(text, { exact: true }))
+    .filter((el): el is HTMLElement => el !== null);
+  const actions = new Set([chrome('theme.openEditor'), chrome('theme.createNew')]);
+  const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
   const out: Record<string, string[]> = {};
-  let current = '';
-  // The divider ends the saved themes; the editor actions follow it.
-  for (const el of menu.querySelectorAll('.mantine-Menu-label, .mantine-Menu-divider, [role="menuitem"]')) {
-    if (el.classList.contains('mantine-Menu-divider')) break;
-    if (el.classList.contains('mantine-Menu-label')) {
-      current = (el.textContent ?? '').trim();
-      out[current] = [];
-    } else if (current) {
-      out[current].push((el.textContent ?? '').trim());
-    }
+  for (const label of labels) out[(label.textContent ?? '').trim()] = [];
+  for (const item of within(menu).queryAllByRole('menuitem')) {
+    const name = (item.textContent ?? '').trim();
+    if (actions.has(name)) continue;
+    const owner = labels.filter((label) => follows(label, item)).at(-1);
+    if (owner) out[(owner.textContent ?? '').trim()].push(name);
   }
   return out;
 }
@@ -148,7 +155,7 @@ describe('ThemeToggle — saved themes', () => {
     await waitFor(() => expect(requests('DELETE', '/api/v1/themes/th-mine')).toBe(1));
     expect(requests('DELETE', '/api/v1/themes/th-team')).toBe(0);
     await waitFor(() => expect(requests('GET', '/api/v1/me/theme')).toBeGreaterThan(prefReadsBefore));
-    await waitFor(() => expect(dataTheme()).toBe('light'));
+    await waitFor(() => expect(dataTheme()).toBe('dark'));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     const reopened = await openMenu();
