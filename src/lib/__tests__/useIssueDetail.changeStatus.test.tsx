@@ -219,6 +219,33 @@ describe('useIssueDetail.changeStatus — F5 typed-error contract at the source'
     expect((failure.error as BusinessError).extra.childIds).toEqual(['sk-42.3', 'sk-42.5']);
   });
 
+  // sk-1048.29 — the card shows the requested status while the request is in
+  // flight, and a refusal puts the previous status and version back.
+  test('a refused transition rolls the optimistic status and version back on the card', async () => {
+    let refuse: (err: unknown) => void = () => {};
+    transitionStatusSpy.mockImplementation(
+      () => new Promise<IssueDetail>((_resolve, reject) => { refuse = reject; }),
+    );
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => useIssueDetail({ issueId: ISSUE_ID, projectHandle: PROJECT }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'standing', version: 7 }));
+
+    const pending = result.current.changeStatus('closed', 'retiring');
+
+    await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'closed', version: 8 }));
+
+    const err = childErr();
+    refuse(err);
+    const outcome = await pending;
+
+    expect(outcome).toEqual({ error: err });
+    expect((outcome as { error: BusinessError }).error.code).toBe('standing_has_open_children');
+    await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'standing', version: 7 }));
+  });
+
   test('a non-Error rejection is still surfaced as { error } (wrapped), never null', async () => {
     transitionStatusSpy.mockRejectedValue('boom-string');
     const { wrapper } = makeWrapper();
