@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
@@ -728,7 +728,10 @@ describe('CommentsThread in Russian (comments)', () => {
       </Wrap>,
     );
     await waitFor(() => screen.getByText('directed agent note'));
-    expect(screen.getByText(ruOnly('comments', 'kind.directed'))).toBeTruthy();
-    expect(screen.getByText(ruOnly('comments', 'kind.autonomous'))).toBeTruthy();
+    // Each label on its own comment: the directed note carries «directed»,
+    // the autonomous one «autonomous».
+    const commentOf = (body: string) => screen.getByText(body).closest('article') as HTMLElement;
+    expect(within(commentOf('directed agent note')).getByText(ruOnly('comments', 'kind.directed'))).toBeTruthy();
+    expect(within(commentOf('autonomous agent note')).getByText(ruOnly('comments', 'kind.autonomous'))).toBeTruthy();
   });
 });
