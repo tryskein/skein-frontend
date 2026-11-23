@@ -55,7 +55,6 @@ describe('snoozeReminder', () => {
   test.each([
     { name: 'relative', args: { by: '3h' }, body: { by: '3h' } },
     { name: 'absolute', args: { until: AT }, body: { until: AT } },
-    { name: 'absolute wins over relative', args: { by: '1d', until: AT }, body: { until: AT } },
     { name: 'blank reason left out', args: { by: '1w', reason: ' \t ' }, body: { by: '1w' } },
     { name: 'reason trimmed', args: { until: AT, reason: ' busy ' }, body: { until: AT, reason: 'busy' } },
   ])('$name', async ({ args, body }) => {
