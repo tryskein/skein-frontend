@@ -430,25 +430,39 @@ describe('NotificationsPage — the switches in Russian', () => {
     if (i18n.language !== DEFAULT_LANGUAGE) await i18n.changeLanguage(DEFAULT_LANGUAGE);
   });
 
-  test('each switch is named «reason: channel»', async () => {
+  test('each switch is named by its reason and its own channel', async () => {
+    // One reason with both channels, set differently, so the two switches of
+    // the reason can only be told apart by the channel in their names.
+    getReasonPrefsSpy.mockResolvedValue({
+      ...PREFS,
+      reasons: [{
+        key: 'mention',
+        label: 'Mention',
+        hint: 'someone wrote @me',
+        feed: { applicable: true, audience: 'mentioned', enabled: false },
+        push: { applicable: true, audience: 'mentioned', enabled: true },
+      }],
+    });
     await i18n.changeLanguage('ru');
     render(<Wrap><NewNotificationsPage /></Wrap>);
-    await waitFor(() => expect(screen.getByText('Comment')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Mention')).toBeTruthy());
 
-    // The channel word is where the Russian name differs from the English
-    // one; the name around it is composed by the Russian dictionary.
-    const ruT = i18n.getFixedT('ru', 'notifications');
-    const commentFeed = screen.getByRole('switch', {
-      name: ruT('reasons.switchAria', { reason: 'Comment', channel: ruOnly('notifications', 'reasons.channels.feed') }) as string,
-    });
-    const reminderPush = screen.getByRole('switch', {
-      // «Push» is the same word in both languages, so this name is read from
-      // the Russian dictionary without the «differs from English» check.
-      name: ruT('reasons.switchAria', { reason: 'Reminder', channel: ruT('reasons.channels.push') }) as string,
-    });
-    expect(commentFeed).not.toBe(reminderPush);
-    expect((reminderPush as HTMLInputElement).checked).toBe(true);
-    expect((commentFeed as HTMLInputElement).checked).toBe(false);
+    const feedWord = ruOnly('notifications', 'reasons.channels.feed');
+    // «Push» is the same word in both languages: read from the Russian
+    // dictionary, without the «differs from English» check.
+    const pushWord = i18n.getFixedT('ru', 'notifications')('reasons.channels.push') as string;
+    const switches = screen.getAllByRole('switch').filter((el) =>
+      (el.getAttribute('aria-label') ?? '').includes('Mention'),
+    );
+    expect(switches).toHaveLength(2);
+    const byChannel = (word: string) => {
+      const found = switches.filter((el) => (el.getAttribute('aria-label') ?? '').includes(word));
+      expect(found, word).toHaveLength(1);
+      return found[0] as HTMLInputElement;
+    };
+    expect(byChannel(feedWord).checked).toBe(false);
+    expect(byChannel(pushWord).checked).toBe(true);
+    expect(byChannel(feedWord)).not.toBe(byChannel(pushWord));
   });
 });
 
