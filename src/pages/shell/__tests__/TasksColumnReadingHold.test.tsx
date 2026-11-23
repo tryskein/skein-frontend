@@ -1242,17 +1242,30 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     vi.mocked(lookupIdBatch).mockResolvedValue({ items: [] } as Awaited<ReturnType<typeof lookupIdBatch>>);
   });
 
-  async function pasteInto(text: string): Promise<void> {
+  /** Pastes into the search box; answers whether the paste was left to the box (not taken). */
+  async function pasteInto(text: string): Promise<boolean> {
     server(1, 3);
     serve();
     await act(async () => { render(column('/projects/demo')); });
     await advance(500);
     const search = screen.getByRole('textbox', { name: /search/i });
+    let leftToTheBox = true;
     await act(async () => {
-      fireEvent.paste(search, { clipboardData: { getData: () => text } });
+      leftToTheBox = fireEvent.paste(search, { clipboardData: { getData: () => text } });
     });
     await advance(300);
+    return leftToTheBox;
   }
+
+  /** The found issues' cards, by their accessible names, in screen order. */
+  const shownCards = (expected: Array<[string, string]>) => {
+    const named = expected.map(([id, title]) =>
+      screen.queryByRole('button', { name: i18n.t('tasks:card.openIssue', { id, title }) as string }),
+    );
+    return named.filter((el): el is HTMLElement => el !== null)
+      .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+      .map((el) => el.getAttribute('aria-label'));
+  };
 
   const chips = () =>
     within(screen.getByRole('list', { name: tt('blob.chipsAria') })).getAllByRole('listitem')
@@ -1265,7 +1278,8 @@ describe('sk-1048.67 — the result of pasted codes', () => {
 
     await pasteInto('see demo-9, demo-5 and demo-1 please');
 
-    expect(vi.mocked(lookupIdBatch)).toHaveBeenLastCalledWith(['demo-1', 'demo-5', 'demo-9']);
+    // Every pasted code is asked for once; the order of the request is the cache's business.
+    expect([...vi.mocked(lookupIdBatch).mock.lastCall![0]].sort()).toEqual(['demo-1', 'demo-5', 'demo-9']);
     expect(screen.getByText(tt('blob.extracted', { count: 3 }))).toBeTruthy();
     expect(screen.getByText(tt('blob.foundSummary', { found: 2, notFound: 1 }))).toBeTruthy();
     expect(chips()).toEqual([
@@ -1273,10 +1287,11 @@ describe('sk-1048.67 — the result of pasted codes', () => {
       ['SPAN', tt('blob.notFoundAria', { code: 'demo-5' })],
       ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
     ]);
-    const cards = [...document.querySelectorAll('.blob-matched-row')].map((row) => row.textContent ?? '');
-    expect(cards).toHaveLength(2);
-    expect(cards[0]).toContain('Invoice layout');
-    expect(cards[1]).toContain('Refund total');
+    // The cards of the found issues, in paste order.
+    expect(shownCards([['demo-1', 'Refund total'], ['demo-9', 'Invoice layout']])).toEqual([
+      i18n.t('tasks:card.openIssue', { id: 'demo-9', title: 'Invoice layout' }),
+      i18n.t('tasks:card.openIssue', { id: 'demo-1', title: 'Refund total' }),
+    ]);
   });
 
   test('every code found: the count, and no not-found summary', async () => {
@@ -1292,8 +1307,12 @@ describe('sk-1048.67 — the result of pasted codes', () => {
       ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
       ['BUTTON', tt('blob.openChip', { code: 'demo-2' })],
     ]);
-    expect(document.querySelector('.blob-result-notfound-summary')).toBeNull();
-    expect(document.querySelectorAll('.blob-matched-row')).toHaveLength(2);
+    expect(screen.queryByText(tt('blob.foundSummary', { found: 2, notFound: 0 }))).toBeNull();
+    expect(shownCards([['demo-1', 'Refund total']])).toHaveLength(1);
+    // The untitled issue's card: its name is the open-issue phrase with an
+    // empty title, which the accessible-name computation trims.
+    const untitled = (i18n.t('tasks:card.openIssue', { id: 'demo-2', title: '' }) as string).trim();
+    expect(screen.getByRole('button', { name: untitled })).toBeTruthy();
   });
 
   test('no code resolves: every chip is not found and the panel says none matched', async () => {
@@ -1304,7 +1323,7 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     expect(screen.getByText(tt('blob.foundSummary', { found: 0, notFound: 2 }))).toBeTruthy();
     expect(chips().map(([tag]) => tag)).toEqual(['SPAN', 'SPAN']);
     expect(screen.getByText(tt('blob.emptyNoMatches'))).toBeTruthy();
-    expect(document.querySelectorAll('.blob-matched-row')).toHaveLength(0);
+    expect(shownCards([['demo-7', 'title demo-7'], ['demo-8', 'title demo-8']])).toEqual([]);
   });
 
   test('while the codes resolve the panel says so', async () => {
@@ -1326,10 +1345,14 @@ describe('sk-1048.67 — the result of pasted codes', () => {
   });
 
   test('a paste without codes leaves the board and opens no panel', async () => {
-    await pasteInto('nothing to see here');
+    const leftToTheBox = await pasteInto('nothing to see here');
 
-    expect(document.querySelector('.blob-result')).toBeNull();
+    // The paste is the browser's to put into the box: nothing took it.
+    expect(leftToTheBox).toBe(true);
+    expect(screen.queryByRole('list', { name: tt('blob.chipsAria') })).toBeNull();
     expect(vi.mocked(lookupIdBatch)).not.toHaveBeenCalled();
+    // The board is still there with its own tasks.
+    expect(screen.getByText('title demo-1')).toBeTruthy();
   });
   test('a found chip opens its issue; a not-found one is not a control', async () => {
     vi.mocked(lookupIdBatch).mockResolvedValueOnce({
