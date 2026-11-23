@@ -46,6 +46,21 @@ describe('toast action link', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Open' })).toBeNull());
   });
 
+  test('without a router navigate a plain click is left to the browser', () => {
+    render(
+      <MantineProvider>
+        <Notifications />
+      </MantineProvider>,
+    );
+    act(() => {
+      toaster.info('Exported', { action: { label: 'Download', to: '/exports/1' } });
+    });
+    const link = screen.getByRole('link', { name: 'Download' });
+
+    expect(fireEvent.click(link, { button: 0 })).toBe(true);
+    expect(screen.getByRole('link', { name: 'Download' })).toBe(link);
+  });
+
   test.each([
     { name: 'Meta', init: { button: 0, metaKey: true } },
     { name: 'Ctrl', init: { button: 0, ctrlKey: true } },
