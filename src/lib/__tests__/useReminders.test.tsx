@@ -15,6 +15,8 @@ import { render, cleanup, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import type { Reminder, RemindersListResponse } from '../../api/reminders';
+import { BusinessError } from '../../api/client';
+import { notificationCountsKey } from '../useNotificationCounts';
 import {
   remindersListKey,
   useDismissReminder,
@@ -35,8 +37,10 @@ vi.mock('../../api/reminders', async (importOriginal) => {
   };
 });
 
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+
 vi.mock('../../components/Toaster', () => ({
-  useToaster: () => ({ error: vi.fn(), success: vi.fn() }),
+  useToaster: () => ({ error: toastError, success: vi.fn() }),
 }));
 
 function reminder(over: Partial<Reminder> = {}): Reminder {
@@ -173,6 +177,66 @@ describe('useDismissReminder — optimistic removal', () => {
     expect(captured?.ringingIds.has('sk-1')).toBe(false);
     expect(captured?.ringingIds.has('sk-2')).toBe(true);
     expect(dismissSpy).toHaveBeenCalledWith('a', undefined);
+  });
+});
+
+// sk-1048.66 — the row leaves at once; a refusal brings the list and the
+// ringing count back and says why; either way the list and the counters refetch.
+describe('useDismissReminder — refusal and reconciliation', () => {
+  // The list refetch after the answer never resolves, so what the hook put
+  // into the cache stays observable instead of being replaced by the server.
+  function pendingRefetchAfter(first: RemindersListResponse) {
+    listSpy.mockResolvedValueOnce(first).mockImplementation(() => new Promise(() => {}));
+  }
+
+  test('keeps the ringing count while another reminder of the same issue still rings', async () => {
+    pendingRefetchAfter({
+      reminders: [
+        reminder({ id: 'a', issueId: 'sk-1', state: 'ringing' }),
+        reminder({ id: 'c', issueId: 'sk-1', state: 'ringing' }),
+      ],
+      ringingTaskCount: 1,
+    });
+    dismissSpy.mockImplementation(() => new Promise(() => {}));
+    renderHost('sk-1');
+    await waitFor(() => expect(captured?.issueReminders.map((r) => r.id)).toEqual(['a', 'c']));
+
+    act(() => {
+      captured!.dismiss.mutate({ reminderId: 'a' });
+    });
+
+    await waitFor(() => expect(captured?.issueReminders.map((r) => r.id)).toEqual(['c']));
+    expect(captured?.ringingCount).toBe(1);
+    expect(captured?.ringingIds.has('sk-1')).toBe(true);
+  });
+
+  test('a refusal restores the row and the count, shows the reason and refetches list and counters', async () => {
+    pendingRefetchAfter({
+      reminders: [
+        reminder({ id: 'a', issueId: 'sk-1', state: 'ringing' }),
+        reminder({ id: 'b', issueId: 'sk-2', state: 'ringing' }),
+      ],
+      ringingTaskCount: 2,
+    });
+    let refuse: (err: unknown) => void = () => {};
+    dismissSpy.mockImplementation(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    const { client } = renderHost('sk-1');
+    client.setQueryData(notificationCountsKey, {});
+    await waitFor(() => expect(captured?.ringingCount).toBe(2));
+
+    act(() => {
+      captured!.dismiss.mutate({ reminderId: 'a' });
+    });
+    await waitFor(() => expect(captured?.issueReminders).toEqual([]));
+    expect(captured?.ringingCount).toBe(1);
+
+    act(() => refuse(new BusinessError(422, 'reminder belongs to another user', 'forbidden')));
+
+    await waitFor(() => expect(captured?.issueReminders.map((r) => r.id)).toEqual(['a']));
+    expect(captured?.ringingCount).toBe(2);
+    expect(toastError).toHaveBeenCalledWith(expect.stringContaining('reminder belongs to another user'));
+    await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
+    expect(client.getQueryState(notificationCountsKey)?.isInvalidated).toBe(true);
   });
 });
 
