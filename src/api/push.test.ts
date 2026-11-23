@@ -324,6 +324,9 @@ describe('GET /push/config — only a string key is an answer', () => {
   test.each([
     { case: 'no key', body: {} },
     { case: 'a key that is not a string', body: { publicKey: 42 } },
+    // sk-1048.58 — a body that is not an object carries no key either.
+    { case: 'a null body', body: null },
+    { case: 'a body that is a string', body: 'BPk' },
   ])('$case: rejected, not "push off"', async ({ body }) => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     await expect(getPushConfig()).rejects.toThrow();
