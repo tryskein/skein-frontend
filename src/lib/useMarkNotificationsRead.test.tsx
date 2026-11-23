@@ -120,19 +120,28 @@ describe('marking mentions read', () => {
 
     act(() => view.result.current.mark.mutate([11, 13]));
 
-    await waitFor(() =>
-      expect(readState(view.result.current.feed.data?.items)).toEqual([
-        [11, true],
-        [12, false],
-        [13, true],
-      ]),
-    );
-    expect(pendingReads.size).toBe(2);
-    expect(readPosts().sort()).toEqual([
-      '/api/v1/notifications/11/read',
-      '/api/v1/notifications/13/read',
-    ]);
-    expect(view.result.current.mark.isPending).toBe(true);
+    try {
+      await waitFor(() =>
+        expect(readState(view.result.current.feed.data?.items)).toEqual([
+          [11, true],
+          [12, false],
+          [13, true],
+        ]),
+      );
+      expect(pendingReads.size).toBe(2);
+      expect(readPosts().sort()).toEqual([
+        '/api/v1/notifications/11/read',
+        '/api/v1/notifications/13/read',
+      ]);
+      expect(view.result.current.mark.isPending).toBe(true);
+    } finally {
+      // Let the held answers through and the mutation finish inside the test,
+      // whether or not the checks above passed.
+      await act(async () => {
+        for (const held of pendingReads.values()) held.resolve(new Response(null, { status: 204 }));
+      });
+    }
+    await waitFor(() => expect(view.result.current.mark.isSuccess).toBe(true));
   });
 
   test('a success refreshes the counters and keeps the read cards in the feed', async () => {
