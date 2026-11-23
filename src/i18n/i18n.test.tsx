@@ -368,7 +368,7 @@ describe('dictionary parity at run time', () => {
 
   test('every English key has a non-empty Russian string', () => {
     const english = leaves(en).filter(([, v]) => typeof v === 'string');
-    expect(english.length).toBeGreaterThan(1000);
+    expect(english.length, 'the English dictionary was read').toBeGreaterThan(0);
     const filled = (path: string) => {
       const value = at(ru, path);
       return typeof value === 'string' && value.trim() !== '';
@@ -377,12 +377,17 @@ describe('dictionary parity at run time', () => {
     // integer categories (`_one` / `_few` / `_many`) — `_other` is Russian
     // only for fractions — or by one Russian string that needs no plural.
     // A plural is judged as a whole: every Russian form a count can pick
-    // must be there, not just the one that shares the English suffix.
+    // must be there, not just the one that shares the English suffix. One
+    // Russian string in place of the forms is allowed only where the
+    // dictionary says so on purpose (the label-and-value wording, correct
+    // for every count — see the comment at `categoryAria` in `en.ts`).
+    const SINGLE_STRING_PLURALS = new Set(['details.epic.categoryAria']);
     const plural = /^(.*)_(one|other)$/;
     const missing = english.filter(([path]) => {
       const base = plural.exec(path)?.[1];
       if (base === undefined) return !filled(path);
-      return !(filled(base) || ['one', 'few', 'many'].every((form) => filled(`${base}_${form}`)));
+      if (SINGLE_STRING_PLURALS.has(base)) return !filled(base);
+      return !['one', 'few', 'many'].every((form) => filled(`${base}_${form}`));
     }).map(([path]) => path);
     expect(missing).toEqual([]);
   });
