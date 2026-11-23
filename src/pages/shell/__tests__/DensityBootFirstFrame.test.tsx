@@ -47,7 +47,12 @@ function runBoot(): string | null {
 /** GET /me/ui-prefs never answers until released; resolves with `density`. */
 let releaseGet: ((density: string) => void) | null;
 
+/** What the boot script writes on <html> besides the density; put back after each test. */
+const BOOT_ATTRS = ['data-theme', 'data-width-mode'] as const;
+let initialBootAttrs: Array<[string, string | null]> = [];
+
 beforeEach(() => {
+  initialBootAttrs = BOOT_ATTRS.map((name) => [name, document.documentElement.getAttribute(name)]);
   window.localStorage.clear();
   document.documentElement.removeAttribute('data-density');
   auth = { user: { id: 'u-1' }, isLoading: false, sessionResolved: true };
@@ -79,6 +84,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
   window.localStorage.clear();
   document.documentElement.removeAttribute('data-density');
+  for (const [name, value] of initialBootAttrs) {
+    if (value === null) document.documentElement.removeAttribute(name);
+    else document.documentElement.setAttribute(name, value);
+  }
 });
 
 function mountSync() {
