@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -727,19 +727,26 @@ describe('DependenciesSection — writing links', () => {
       edge({ toId: 'pay-4', type: 'blocks', issue: target('pay-4', 'Invoice layout') }),
       edge({ toId: 'pay-4', type: 'related', issue: target('pay-4', 'Invoice layout') }),
     ];
+    /** The types of the listed links to pay-4, read off their rows. */
+    const typesOfPay4 = () =>
+      screen.queryAllByRole('listitem')
+        .filter((row) => within(row).queryByRole('button', { name: 'Remove link to pay-4' }) !== null)
+        .map((row) => ['blocks', 'related'].find((type) => (row.textContent ?? '').includes(type)));
     const user = userEvent.setup();
     await renderLive();
-    expect(listedLinks()).toEqual(['pay-4', 'pay-4']);
+    expect(typesOfPay4().sort()).toEqual(['blocks', 'related']);
     const release = held('DELETE');
 
-    // The second row is the «related» one (the list keeps the server's order).
-    await user.click(screen.getAllByRole('button', { name: 'Remove link to pay-4' })[1]);
+    const relatedRow = screen.getAllByRole('listitem').find(
+      (row) => (row.textContent ?? '').includes('related') && (row.textContent ?? '').includes('pay-4'),
+    )!;
+    await user.click(within(relatedRow).getByRole('button', { name: 'Remove link to pay-4' }));
 
     await waitFor(() => expect(writes()).toEqual([['DELETE', `${BASE}/pay-4/related`, null]]));
-    // Before the answer: one link to pay-4 is still listed — the «blocks» one.
-    await waitFor(() => expect(listedLinks()).toEqual(['pay-4']));
+    // Before the answer: the «related» row has gone, the «blocks» one is still listed.
+    await waitFor(() => expect(typesOfPay4()).toEqual(['blocks']));
     release();
-    await waitFor(() => expect(outgoing.map((e) => e.type)).toEqual(['blocks']));
-    expect(listedLinks()).toEqual(['pay-4']);
+    // After it: the same, now from the list the server answers.
+    await waitFor(() => expect(typesOfPay4()).toEqual(['blocks']));
   });
 });
