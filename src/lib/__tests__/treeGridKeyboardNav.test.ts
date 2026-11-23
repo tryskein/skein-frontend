@@ -302,6 +302,22 @@ describe('sk-285.2.19 — Home and End read the cursor’s MODE', () => {
   });
 });
 
+// sk-1048.13 — a table with every optional column switched off still has the
+// mandatory title cell, and the keys keep working on it.
+describe('a table of the title column alone', () => {
+  test('Right on a leaf in row mode enters its only cell', () => {
+    expect(key('ArrowRight', { row: 4, col: null }, { colCount: 1 })).toEqual(focus(4, 0));
+  });
+
+  test('Right in that only cell is a wall', () => {
+    expect(key('ArrowRight', { row: 4, col: 0 }, { colCount: 1 })).toEqual(NONE);
+  });
+
+  test('no column at all claims nothing', () => {
+    expect(key('ArrowRight', { row: 4, col: null }, { colCount: 0 })).toEqual(NONE);
+  });
+});
+
 describe('sk-285.2.19 — Ctrl+Home and Ctrl+End are the ends of the GRID', () => {
   test('they jump to the first and last row', () => {
     expect(key('Home', { row: 3, col: null }, { ctrl: true })).toEqual(
