@@ -111,6 +111,26 @@ describe('theme-boot.js paints the cached density before React mounts', () => {
     expect(document.documentElement.getAttribute('data-width-mode')).not.toBeNull();
   });
 
+  // sk-1048.48 — the record shape `densityBootCache.ts` writes: `v` 1 and a
+  // non-empty string `userId`. A compact record of any other shape is not the
+  // person's density and leaves the first frame «Normal»; theme and width mode
+  // are painted all the same.
+  test.each([
+    { name: 'another schema version', record: { v: 2, userId: 'u-1', density: 'compact' } },
+    { name: 'no version', record: { userId: 'u-1', density: 'compact' } },
+    { name: 'no userId', record: { v: 1, density: 'compact' } },
+    { name: 'an empty userId', record: { v: 1, userId: '', density: 'compact' } },
+    { name: 'a userId that is not a string', record: { v: 1, userId: 42, density: 'compact' } },
+  ])('a compact record with $name is «Normal» on the first frame', ({ record }) => {
+    window.localStorage.setItem(DENSITY_BOOT_CACHE_KEY, JSON.stringify(record));
+    document.documentElement.removeAttribute('data-theme');
+    document.documentElement.removeAttribute('data-width-mode');
+
+    expect(runBoot()).toBeNull();
+    expect(document.documentElement.getAttribute('data-theme')).not.toBeNull();
+    expect(document.documentElement.getAttribute('data-width-mode')).not.toBeNull();
+  });
+
   test('a localStorage that throws is «Normal», without an exception', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('SecurityError');
