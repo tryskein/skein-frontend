@@ -24,11 +24,32 @@ beforeEach(async () => {
   runtime = await import('./themeRuntime');
 });
 
+/**
+ * The stylesheet links in `<head>`, read as what the browser would fetch:
+ * the Google Fonts CSS endpoint, the family, its weights and `display`.
+ * Parsed rather than compared as text, so the order of query parameters
+ * is not part of the check.
+ */
 const fontLinks = () =>
-  Array.from(document.head.querySelectorAll<HTMLLinkElement>('link')).map((l) => ({
-    rel: l.rel,
-    href: l.getAttribute('href'),
-  }));
+  Array.from(document.head.querySelectorAll<HTMLLinkElement>('link')).map((l) => {
+    const url = new URL(l.getAttribute('href') ?? '');
+    const [family, axis] = (url.searchParams.get('family') ?? '').split(':');
+    return {
+      rel: l.rel,
+      source: `${url.origin}${url.pathname}`,
+      family,
+      weights: axis?.replace(/^wght@/, '') ?? '',
+      display: url.searchParams.get('display'),
+    };
+  });
+
+const link = (family: string) => ({
+  rel: 'stylesheet',
+  source: 'https://fonts.googleapis.com/css2',
+  family,
+  weights: '400;500;600;700',
+  display: 'swap',
+});
 
 const IBM_PLEX_SANS_UI = "'IBM Plex Sans', system-ui, sans-serif";
 const FIRA_CODE_MONO = "'Fira Code', ui-monospace, Menlo, Consolas, monospace";
@@ -37,23 +58,13 @@ describe('applying font tokens', () => {
   test('a hosted UI font is linked with its family and weights', () => {
     runtime.applyVariables({ '--font-ui': IBM_PLEX_SANS_UI });
 
-    expect(fontLinks()).toEqual([
-      {
-        rel: 'stylesheet',
-        href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap',
-      },
-    ]);
+    expect(fontLinks()).toEqual([link('IBM Plex Sans')]);
   });
 
   test('a hosted monospace font is linked with its family and weights', () => {
     runtime.applyVariables({ '--font-mono': FIRA_CODE_MONO });
 
-    expect(fontLinks()).toEqual([
-      {
-        rel: 'stylesheet',
-        href: 'https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap',
-      },
-    ]);
+    expect(fontLinks()).toEqual([link('Fira Code')]);
   });
 
   test('applying the same fonts again adds no second link', () => {
@@ -62,10 +73,10 @@ describe('applying font tokens', () => {
     runtime.applyVariables(theme);
     runtime.applyVariables({ '--font-ui': IBM_PLEX_SANS_UI });
 
-    expect(fontLinks().map((l) => l.href)).toEqual([
-      'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap',
-      'https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap',
-    ]);
+    // One link per family, whatever order they were added in.
+    const links = fontLinks();
+    expect(links).toHaveLength(2);
+    expect(links).toEqual(expect.arrayContaining([link('IBM Plex Sans'), link('Fira Code')]));
   });
 
   test.each([
