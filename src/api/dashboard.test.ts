@@ -30,13 +30,18 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function sent(): { path: string; query: Record<string, string>; method: string } {
+/** Every key/value pair the request carried, repeats included, in a stable order. */
+function pairs(entries: Iterable<[string, string]>): Array<[string, string]> {
+  return [...entries].sort(([a, x], [b, y]) => a.localeCompare(b) || x.localeCompare(y));
+}
+
+function sent(): { path: string; query: Array<[string, string]>; method: string } {
   expect(fetchSpy).toHaveBeenCalledTimes(1);
   const [url, init] = fetchSpy.mock.calls[0];
   const parsed = new URL(String(url), 'http://localhost');
   return {
     path: parsed.pathname,
-    query: Object.fromEntries(parsed.searchParams),
+    query: pairs(parsed.searchParams),
     method: init?.method ?? 'GET',
   };
 }
@@ -117,6 +122,6 @@ describe('dashboard client — path and query of every request', () => {
     },
   ])('$name', async ({ run, path, query }) => {
     await run();
-    expect(sent()).toEqual({ path, query, method: 'GET' });
+    expect(sent()).toEqual({ path, query: pairs(Object.entries(query)), method: 'GET' });
   });
 });
