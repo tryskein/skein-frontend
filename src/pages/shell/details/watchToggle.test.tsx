@@ -149,9 +149,14 @@ const headerToggle = () =>
   screen.getByRole('button', { name: new RegExp(`^(${d('header.watch')}|${d('header.watching')})$`) });
 const watchersSection = () =>
   screen.getByRole('heading', { name: new RegExp(`^${d('sectionsMore.watchers')}`) }).closest('section') as HTMLElement;
-const sectionCount = () => watchersSection().querySelector('.detail-section-count')?.textContent ?? '0';
+/** The count the section heading shows after its name (nothing when there is none). */
+const sectionCount = () => {
+  const heading = within(watchersSection()).getByRole('heading');
+  return (heading.textContent ?? '').slice(d('sectionsMore.watchers').length).trim();
+};
+/** The people the section lists, as it prints them (`@name`). */
 const watcherNames = () =>
-  [...watchersSection().querySelectorAll('.watcher-name')].map((n) => (n.textContent ?? '').trim().replace(/^@/, ''));
+  within(watchersSection()).queryAllByText(/^@\S+$/).map((n) => (n.textContent ?? '').replace(/^@/, ''));
 
 beforeEach(() => {
   server.watchers = [DAVE];
@@ -164,7 +169,12 @@ beforeEach(() => {
   toast.error.mockClear();
 });
 
-afterEach(() => cleanup());
+/** Held answers are always let through, so no request outlives its case. */
+const openGates: Array<() => void> = [];
+afterEach(() => {
+  for (const open of openGates.splice(0)) open();
+  cleanup();
+});
 
 async function loaded() {
   mountPanel();
@@ -211,19 +221,6 @@ describe('watching the issue from its card', () => {
     expect(headerToggle().getAttribute('aria-pressed')).toBe('false');
   });
 
-  test('a refused subscribe from the header leaves everything as it was and says why', async () => {
-    const user = userEvent.setup();
-    await loaded();
-    server.refuse = 'watching is not allowed here';
-
-    await user.click(headerToggle());
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('watching is not allowed here'));
-    await waitFor(() => expect(headerToggle().getAttribute('aria-pressed')).toBe('false'));
-    expect(watcherNames()).toEqual(['dave']);
-    expect(sectionCount()).toBe('1');
-  });
-
   test('a refused subscribe from the section leaves the list as it was and says why', async () => {
     const user = userEvent.setup();
     await loaded();
@@ -244,7 +241,9 @@ describe('watching the issue from its card', () => {
   function hold(slot: 'writeGate' | 'readGate') {
     let open: () => void = () => {};
     server[slot] = new Promise<void>((resolve) => { open = resolve; });
-    return () => { server[slot] = null; open(); };
+    const release = () => { server[slot] = null; open(); };
+    openGates.push(release);
+    return release;
   }
 
   test('the subscription shows on the card before the server answers', async () => {
@@ -258,6 +257,7 @@ describe('watching the issue from its card', () => {
     expect(headerToggle().getAttribute('aria-pressed')).toBe('true');
     expect(server.watchers.map((w) => w.username)).toEqual(['dave']);
     release();
+    await waitFor(() => expect(server.watchers.map((w) => w.username)).toEqual(['dave', 'carol']));
   });
 
   test('the unsubscription shows on the card before the server answers', async () => {
@@ -291,20 +291,28 @@ describe('watching the issue from its card', () => {
     release();
   });
 
-  test('a refused subscribe takes the caller off the list before the list is read again', async () => {
+  test('a refused subscribe from the header: shown at once, then taken back with the reason', async () => {
     const user = userEvent.setup();
     await loaded();
     server.refuse = 'watching is not allowed here';
-    const releaseRead = hold('readGate');
+    const releaseWrite = hold('writeGate');
 
     await user.click(headerToggle());
+    // Before the server answers: the caller is listed and the toggle is on.
+    await waitFor(() => expect(watcherNames()).toEqual(['dave', 'carol']));
+    expect(headerToggle().getAttribute('aria-pressed')).toBe('true');
+    expect(sectionCount()).toBe('2');
 
+    // The refusal arrives while the re-read it starts is still held, so
+    // what follows is the card's own rollback, not the server's list.
+    hold('readGate');
+    releaseWrite();
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('watching is not allowed here'));
-    // The re-read the refusal starts is held: this is the card's own rollback.
     await waitFor(() => expect(watcherNames()).toEqual(['dave']));
     expect(headerToggle().getAttribute('aria-pressed')).toBe('false');
-    releaseRead();
+    expect(sectionCount()).toBe('1');
   });
+
   test('in the section, an explicitly unwatched caller is offered «Watch», not «Stop watching»', async () => {
     server.watchers = [DAVE, { userId: 'u-1', username: 'carol', name: 'Carol', reasons: ['assignee', 'unwatched'], since: '2026-11-20T00:00:00Z' }];
     mountPanel();
