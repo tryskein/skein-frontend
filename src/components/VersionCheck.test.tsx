@@ -3,9 +3,10 @@
  *
  * Contract (DEV_GUIDELINES «SPA versioning», `VersionCheck.tsx`): `/version.json`
  * is read with `cache: 'no-store'` on mount and then every 60 s; the first
- * valid answer is the baseline and shows nothing; a failed read is ignored and
- * the next poll still runs; only a version different from the baseline shows
- * the banner; unmounting stops the polling.
+ * valid answer (2xx with a non-empty version) is the baseline and shows
+ * nothing; a failed read is ignored and the next poll still runs; only a
+ * version different from the baseline shows the banner; unmounting stops the
+ * polling.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -51,9 +52,10 @@ describe('VersionCheck', () => {
   test('baseline, same version, failed reads, then a new version shows the banner', async () => {
     fetchSpy
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(version(''))
       .mockResolvedValueOnce(version('1.4.0'))
       .mockResolvedValueOnce(version('1.4.0'))
-      .mockResolvedValueOnce(new Response('', { status: 502 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: '9.9.9' }), { status: 503 }))
       .mockResolvedValueOnce(version('1.5.0'));
     mount();
 
@@ -64,11 +66,12 @@ describe('VersionCheck', () => {
     await tick(POLL_MS);
     await tick(POLL_MS);
     await tick(POLL_MS);
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    await tick(POLL_MS);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
     expect(screen.queryByRole('alert')).toBeNull();
 
     await tick(POLL_MS);
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    expect(fetchSpy).toHaveBeenCalledTimes(6);
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 
