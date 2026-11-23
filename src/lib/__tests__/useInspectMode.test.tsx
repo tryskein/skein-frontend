@@ -31,8 +31,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const inspectPosts = () =>
+/** Every request to the selection endpoint, whatever its method. */
+const inspectCalls = () =>
   fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/v1/me/theme/inspect');
+
+/** The pick is sent after lazy imports; let them finish before asserting nothing was sent. */
+async function settled() {
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+}
 
 function Host({ onTarget }: { onTarget: () => void }) {
   const inspect = useInspectMode();
@@ -87,8 +95,13 @@ describe('useInspectMode', () => {
     expect(notCancelled).toBe(false);
     expect(onTarget).not.toHaveBeenCalled();
     expect(state()).toBe('off');
-    await waitFor(() => expect(inspectPosts()).toHaveLength(1));
-    const body = JSON.parse(String(inspectPosts()[0][1]?.body));
+    await waitFor(() => expect(inspectCalls()).toHaveLength(1));
+    await settled();
+    expect(inspectCalls()).toHaveLength(1);
+    expect(inspectCalls()[0][1]?.method).toBe('POST');
+    const body = JSON.parse(String(inspectCalls()[0][1]?.body));
+    expect(Array.isArray(body.tokens)).toBe(true);
+    expect(typeof body.computedStyle).toBe('object');
     expect(body.selector).toBe('.card-title');
     expect(body.parents[0]).toBe('.page');
   });
@@ -103,8 +116,8 @@ describe('useInspectMode', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(state()).toBe('off');
-    await act(async () => {});
-    expect(inspectPosts()).toHaveLength(0);
+    await settled();
+    expect(inspectCalls()).toHaveLength(0);
   });
 
   test('the toggle is not picked: a second click on it turns the mode off', async () => {
@@ -115,8 +128,8 @@ describe('useInspectMode', () => {
     fireEvent.click(toggle);
 
     expect(state()).toBe('off');
-    await act(async () => {});
-    expect(inspectPosts()).toHaveLength(0);
+    await settled();
+    expect(inspectCalls()).toHaveLength(0);
   });
 
   test('after the mode ends the page behaves as before: clicks act, hovers mark nothing', async () => {
@@ -129,7 +142,7 @@ describe('useInspectMode', () => {
 
     expect(target.style.outline).toBe('2px solid red');
     expect(onTarget).toHaveBeenCalledTimes(1);
-    await act(async () => {});
-    expect(inspectPosts()).toHaveLength(0);
+    await settled();
+    expect(inspectCalls()).toHaveLength(0);
   });
 });
