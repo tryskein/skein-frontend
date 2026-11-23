@@ -60,6 +60,7 @@ import type { IssueDetail } from '../../../api/issues';
 import { BusinessError } from '../../../api/client';
 import { LayoutProvider } from '../../../lib/useLayoutState';
 import { DetailsHeader } from './DetailsHeader';
+import i18n from '../../../i18n/config';
 
 function Wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({
@@ -889,5 +890,31 @@ describe('DetailsHeader — sk-489 close outcome (row 57)', () => {
     expect(
       screen.getByRole('button', { name: /currently invented_by_a_newer_server/i }),
     ).toBeTruthy();
+  });
+});
+
+/**
+ * sk-1048.77 — the card header in Russian: the priority and the status
+ * controls answer to Russian accessible names that carry the issue's actual
+ * priority and status, and a status blocked by dependencies says so.
+ */
+describe('DetailsHeader — Russian accessible names', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test.each([
+    ['in progress', { ...makeIssue({ status: 'in_progress' }), priority: 1 }, 'Приоритет P1', 'Статус: in_progress'],
+    ['blocked', { ...makeIssue({ status: 'open', isBlocked: true }), priority: 3 }, 'Приоритет P3', 'Статус: open (заблокировано зависимостями)'],
+  ])('%s', async (_case, issue, priorityName, statusName) => {
+    await i18n.changeLanguage('ru');
+    render(
+      <Wrapper>
+        <DetailsHeader issue={issue as IssueDetail} isWatching={false} watchToggling={false} {...noopHandlers} />
+      </Wrapper>,
+    );
+
+    expect(screen.getByRole('button', { name: priorityName })).toBeTruthy();
+    expect(screen.getByRole('button', { name: statusName })).toBeTruthy();
   });
 });

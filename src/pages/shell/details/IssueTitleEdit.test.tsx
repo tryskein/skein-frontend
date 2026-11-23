@@ -59,3 +59,20 @@ describe('IssueTitleEdit — keyboard', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * sk-1048.77 — in Russian the title field answers to its Russian accessible
+ * name; the placeholder is not the name.
+ */
+describe('IssueTitleEdit — Russian accessible name', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test('the field is «Заголовок задачи» and holds the title', async () => {
+    await i18n.changeLanguage('ru');
+    render(<IssueTitleEdit initial="Возврат средств" onSave={vi.fn(async () => undefined)} />);
+
+    expect((screen.getByRole('textbox', { name: 'Заголовок задачи' }) as HTMLTextAreaElement).value).toBe('Возврат средств');
+  });
+});
