@@ -4,7 +4,7 @@
  * Contract (`ThemeEditorPage.tsx`, routes of `api/themes.ts`): «Save as new»
  * POSTs `/api/v1/themes` with the name, base and variables; the editor then
  * opens the created theme by the id of the answer (`?theme=<id>`) and «Save»
- * PATCHes that theme. A refused save shows the server's reason and leaves what
+ * PATCHes that theme; the name goes out trimmed both times. A refused save shows the server's reason and leaves what
  * was typed in place for another try.
  */
 
@@ -109,7 +109,9 @@ describe('ThemeEditorPage — saving', () => {
 
   test('«Save as new» creates the theme, opens it by the answer\'s id, and «Save» then updates that theme', async () => {
     createAnswers.push(json(201, stored('Cobalt', 'light', {})));
-    await openNewTheme();
+    const name = await openNewTheme();
+    // The name is saved without the spaces around it, on create and on update.
+    fireEvent.change(name, { target: { value: '  Cobalt  ' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
 
