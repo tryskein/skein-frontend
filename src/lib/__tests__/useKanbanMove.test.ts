@@ -20,6 +20,7 @@ import {
   formatTransitionError,
   useKanbanMove,
 } from '../useKanbanMove';
+import { issueDetailKey } from '../useIssueDetail';
 import type { IssueStatus, IssueSummary, TransitionCloseInput } from '../../api/issues';
 
 // sk-489 (test plan, row 56) — a spy on `transitionStatus`. A shape with
@@ -48,8 +49,10 @@ vi.mock('../../api/issues', async (importOriginal) => {
   };
 });
 
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+
 vi.mock('../../components/Toaster', () => ({
-  useToaster: () => ({ error: vi.fn(), success: vi.fn() }),
+  useToaster: () => ({ error: toastError, success: vi.fn() }),
 }));
 
 function issue(over: Partial<IssueSummary> = {}): IssueSummary {
@@ -311,5 +314,56 @@ describe('useKanbanMove — sk-489 guard: the board does not pass the close outc
     // `undefined` in its place. `toHaveBeenCalledWith` checks arity,
     // so an extra argument turns red even if it is empty.
     expect(transitionStatusSpy).toHaveBeenCalledWith('p', 'sk-1', 4, 'closed');
+  });
+});
+
+/**
+ * sk-1048.50 — a real move through the hook against a server that refuses it.
+ * The card is in its new column while the request is pending; the refusal puts
+ * every tasks cache entry back as it was, names the reason, and both the tasks
+ * lists and the issue card are marked for refetch.
+ */
+describe('useKanbanMove — optimistic move and rollback on a refusal', () => {
+  beforeEach(() => {
+    transitionStatusSpy.mockReset();
+    toastError.mockReset();
+  });
+
+  afterEach(() => cleanup());
+
+  test('moves the card at once, restores it on refusal, says why and refreshes the lists and the card', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children);
+    const moved = issue({ id: 'sk-1', version: 4, status: 'open' });
+    const other = issue({ id: 'sk-2', version: 9, status: 'open' });
+    const tasksKey = ['tasks', 'p', 'board'];
+    const detailKey = issueDetailKey('sk-1');
+    client.setQueryData(tasksKey, paged([moved, other]));
+    client.setQueryData(detailKey, { ...moved });
+    const before = client.getQueryData(tasksKey);
+
+    let refuse: (err: unknown) => void = () => {};
+    transitionStatusSpy.mockImplementation(
+      () => new Promise((_resolve, reject) => { refuse = reject; }),
+    );
+
+    const { result } = renderHook(() => useKanbanMove(), { wrapper });
+    result.current.mutate({ item: moved, axis: 'status', from: 'open', to: 'in_progress' });
+
+    await waitFor(() => expect(transitionStatusSpy).toHaveBeenCalledTimes(1));
+    const during = client.getQueryData<ReturnType<typeof paged>>(tasksKey);
+    expect(during?.pages[0].items[0]).toMatchObject({ id: 'sk-1', status: 'in_progress', version: 5 });
+    expect(during?.pages[0].items[1]).toBe(other);
+
+    refuse(new BusinessError(422, 'the issue is locked by another session', 'issue_locked'));
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(client.getQueryData(tasksKey)).toEqual(before);
+    expect(toastError).toHaveBeenCalledWith('the issue is locked by another session');
+    expect(client.getQueryState(tasksKey)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(detailKey)?.isInvalidated).toBe(true);
   });
 });
