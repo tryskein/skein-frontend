@@ -348,6 +348,45 @@ describe('i18n dictionaries', () => {
   });
 });
 
+/**
+ * sk-1048.74 — the Russian dictionary is complete at run time, not only for
+ * the type checker. A section or a string emptied in `ru.ts` keeps the
+ * `Resources` type happy (an empty string is a string, and a mutated build
+ * is never type-checked) while i18next quietly falls back to English or
+ * renders nothing. Every leaf of the English dictionary must therefore have
+ * a non-empty Russian string at the same path.
+ */
+describe('dictionary parity at run time', () => {
+  function leaves(node: unknown, path: string[] = []): Array<[string, unknown]> {
+    if (node !== null && typeof node === 'object') {
+      return Object.entries(node as Record<string, unknown>).flatMap(([k, v]) => leaves(v, [...path, k]));
+    }
+    return [[path.join('.'), node]];
+  }
+  const at = (root: unknown, path: string) =>
+    path.split('.').reduce<unknown>((n, k) => (n !== null && typeof n === 'object' ? (n as Record<string, unknown>)[k] : undefined), root);
+
+  test('every English key has a non-empty Russian string', () => {
+    const english = leaves(en).filter(([, v]) => typeof v === 'string');
+    expect(english.length).toBeGreaterThan(1000);
+    const filled = (path: string) => {
+      const value = at(ru, path);
+      return typeof value === 'string' && value.trim() !== '';
+    };
+    // An English plural pair (`_one` / `_other`) is matched by the Russian
+    // integer categories (`_one` / `_few` / `_many`) — `_other` is Russian
+    // only for fractions — or by one Russian string that needs no plural.
+    const plural = /^(.*)_(one|other)$/;
+    const missing = english.filter(([path]) => {
+      if (filled(path)) return false;
+      const base = plural.exec(path)?.[1];
+      if (base === undefined) return true;
+      return !(filled(base) || ['one', 'few', 'many'].every((form) => filled(`${base}_${form}`)));
+    }).map(([path]) => path);
+    expect(missing).toEqual([]);
+  });
+});
+
 describe('language preference', () => {
   test('default is English', () => {
     expect(DEFAULT_LANGUAGE).toBe('en');
