@@ -207,7 +207,7 @@ vi.mock('../../../lib/useReminders', () => ({
 
 import { InboxColumn } from '../InboxColumn';
 import { LayoutProvider, useLayoutState } from '../../../lib/useLayoutState';
-import { ruOnly } from '../../../test/ruText';
+import { ruPlural, ruTemplate } from '../../../test/ruText';
 
 /** Mounts the column with real layout state (collapse flag included). */
 function Harness() {
@@ -360,13 +360,25 @@ describe('Queues column — the total in Russian', () => {
     await i18n.changeLanguage('en');
   });
 
-  test.each([1, 2, 5])('%i unread', async (n) => {
-    const name = ruOnly('inbox', 'totalCountAria', { count: n });
-    expect(name).toContain(String(n));
+  // Which Russian form a count takes is stated here, independently of
+  // i18next: 1 and 21 → one, 2 → few, 5 → many.
+  test.each([
+    [1, 'one'],
+    [2, 'few'],
+    [5, 'many'],
+    [21, 'one'],
+  ] as const)('%i unread → the «%s» form', async (n, form) => {
+    const name = ruPlural('inbox', 'totalCountAria', n, form);
     Object.assign(queueSizes, { inbox: n, mentions: 0, watching: 0 });
     await i18n.changeLanguage('ru');
     renderColumn();
 
     expect(screen.getByLabelText(name).textContent).toBe(String(n));
+  });
+
+  test('the singular differs from the plural forms', () => {
+    // «непрочитанное» / «непрочитанных»: few and many share one word in
+    // Russian here, the singular does not.
+    expect(ruTemplate('inbox', 'totalCountAria_one')).not.toBe(ruTemplate('inbox', 'totalCountAria_few'));
   });
 });

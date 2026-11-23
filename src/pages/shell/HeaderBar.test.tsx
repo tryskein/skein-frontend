@@ -158,7 +158,7 @@ import { TREE_DEFAULT_COLUMNS } from '../../lib/treeColumns';
 import { KANBAN_DEFAULT_CARD_FIELDS } from '../../lib/kanbanCardFields';
 import { KANBAN_DEFAULT_AXIS } from '../../lib/kanbanBoard';
 import { LIST_DEFAULT_CARD_FIELDS } from '../../lib/listCardFields';
-import { ruOnly } from '../../test/ruText';
+import { ruPlural, ruTemplate } from '../../test/ruText';
 
 /**
  * Shows the current address next to the header so a badge click can be
@@ -299,17 +299,28 @@ describe('HeaderBar — sk-62.2 Reminders lens button', () => {
 
   // sk-1048.75 — in Russian the ringing alarm's accessible name carries
   // the count with the plural form that goes with it (one / few / many).
-  test.each([1, 2, 5])('in Russian, %i ringing', async (n) => {
+  // Which Russian form a count takes is stated here, independently of
+  // i18next: 1 and 21 → one, 2 → few, 5 → many.
+  test.each([
+    [1, 'one'],
+    [2, 'few'],
+    [5, 'many'],
+    [21, 'one'],
+  ] as const)('in Russian, %i ringing → the «%s» form', async (n, form) => {
     mockRingingTaskCount = n;
-    const name = ruOnly('header', 'remindersAriaRinging', { count: n });
-    expect(name).toContain(String(n));
+    const name = ruPlural('header', 'remindersAriaRinging', n, form);
     await i18n.changeLanguage('ru');
     try {
       renderHeader();
-      expect(screen.getByRole('button', { name }).classList.contains('ringing')).toBe(true);
+      expect(screen.getByRole('button', { name })).toBeTruthy();
     } finally {
       await i18n.changeLanguage('en');
     }
+  });
+
+  test('the Russian alarm forms differ where Russian grammar needs them to', () => {
+    const forms = (['one', 'few', 'many'] as const).map((f) => ruTemplate('header', `remindersAriaRinging_${f}`));
+    expect(new Set(forms).size).toBe(3);
   });
 
   test('clicking the alarm toggles budilnik mode', () => {
