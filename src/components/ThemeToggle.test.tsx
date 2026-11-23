@@ -174,6 +174,18 @@ describe('ThemeToggle — cancelling the delete', () => {
  * its dictionary section, not the English fallback: a section emptied in
  * `ru.ts` would quietly fall back to English and pass every English test.
  */
+/**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
 describe('ThemeToggle in Russian (chrome)', () => {
   afterEach(async () => {
     await i18n.changeLanguage('en');
@@ -182,8 +194,8 @@ describe('ThemeToggle in Russian (chrome)', () => {
   test('the theme segment and the saved-themes group are in Russian', async () => {
     await i18n.changeLanguage('ru');
     renderToggle();
-    fireEvent.contextMenu(screen.getByRole('group', { name: 'Тема' }));
+    fireEvent.contextMenu(screen.getByRole('group', { name: ruOnly('chrome', 'theme.group') }));
     const menu = await screen.findByRole('menu');
-    expect(await within(menu).findByText('Мои темы')).toBeTruthy();
+    expect(await within(menu).findByText(ruOnly('chrome', 'theme.myThemes'))).toBeTruthy();
   });
 });

@@ -333,10 +333,22 @@ describe('a successful registration', () => {
  * its dictionary section, not the English fallback: a section emptied in
  * `ru.ts` would quietly fall back to English and pass every English test.
  */
+/**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
 describe('the Russian signup page (auth, account)', () => {
   test('the email field and the consent are in Russian', async () => {
     await openSignup();
-    expect(screen.getByRole('textbox', { name: /^Почта/ })).toBeTruthy();
-    expect(screen.getByRole('checkbox', { name: 'Принимаю условия использования и политику конфиденциальности' })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: new RegExp(`^${ruOnly('auth', 'emailLabel')}`) })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: ruOnly('account', 'consent').replace(/<\/?[a-z]+>/g, '') })).toBeTruthy();
   });
 });
