@@ -152,6 +152,7 @@ vi.mock('../../components/DensitySetting', () => ({ DensitySetting: () => null }
 vi.mock('../../components/NavLayoutSetting', () => ({ NavLayoutSetting: () => null }));
 
 import { HeaderBar } from './HeaderBar';
+import i18n from '../../i18n/config';
 import { TasksUiStateProvider, useTasksUiState } from '../../lib/useTasksUiState';
 import { TREE_DEFAULT_COLUMNS } from '../../lib/treeColumns';
 import { KANBAN_DEFAULT_CARD_FIELDS } from '../../lib/kanbanCardFields';
@@ -293,6 +294,23 @@ describe('HeaderBar — sk-62.2 Reminders lens button', () => {
     expect(badge?.textContent).toBe('3');
     // Icon is in the violent-shake state.
     expect(btn.querySelector('.budilnik-icon.shaking')).not.toBeNull();
+  });
+
+  // sk-1048.75 — in Russian the ringing alarm's accessible name carries
+  // the count with the plural form that goes with it (one / few / many).
+  test.each([
+    [1, 'Будильник — 1 задача звонит'],
+    [2, 'Будильник — 2 задачи звонят'],
+    [5, 'Будильник — 5 задач звонят'],
+  ])('in Russian, %i ringing → «%s»', async (n, name) => {
+    mockRingingTaskCount = n;
+    await i18n.changeLanguage('ru');
+    try {
+      renderHeader();
+      expect(screen.getByRole('button', { name }).classList.contains('ringing')).toBe(true);
+    } finally {
+      await i18n.changeLanguage('en');
+    }
   });
 
   test('clicking the alarm toggles budilnik mode', () => {

@@ -31,6 +31,10 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import i18n from '../../../i18n/config';
+
+/** Queue sizes the mocks below serve; the defaults are the ones the cases above rely on. */
+const queueSizes = vi.hoisted(() => ({ inbox: 3, mentions: 1, watching: 4 }));
 
 const query = <T,>(data: T) => ({
   data,
@@ -45,7 +49,7 @@ vi.mock('../../../lib/useInbox', () => ({
   inboxQueryKey: ['inbox', 'assigned-to-me-unaccepted-open'] as const,
   useInbox: () => ({
     data: {
-      items: [1, 2, 3].map((n) => ({
+      items: Array.from({ length: queueSizes.inbox }, (_, i) => i + 1).map((n) => ({
         id: `sk-${n}`,
         projectId: 'p1',
         parentIdCurrent: null,
@@ -132,7 +136,7 @@ vi.mock('../../../lib/useMentions', () => ({
           oldValue: null,
           newValue: null,
         },
-      ],
+      ].slice(0, queueSizes.mentions),
       hasMore: false,
       nextCursor: null,
     }),
@@ -161,15 +165,15 @@ vi.mock('../../../lib/useWatching', () => ({
             createdAt: '2026-05-01T09:00:00Z',
           },
           reasons: ['manual'],
-          unreadEventsCount: 4,
+          unreadEventsCount: queueSizes.watching,
           recentEvents: [],
         },
-      ],
+      ].slice(0, queueSizes.watching > 0 ? 1 : 0),
       // sk-303.13 (T028 / INV-3) — the badge is the response's OWN
       // uncapped total, not a sum over the cards: the server caps the
       // cards at 100 and counts the badge over every subscription.
-      unreadTotal: 4,
-      subscriptionsTotal: 1,
+      unreadTotal: queueSizes.watching,
+      subscriptionsTotal: queueSizes.watching > 0 ? 1 : 0,
       truncated: false,
       hasMore: false,
       nextCursor: null,
@@ -238,6 +242,7 @@ function renderColumn() {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  Object.assign(queueSizes, { inbox: 3, mentions: 1, watching: 4 });
 });
 
 describe('Queues column — header', () => {
@@ -341,5 +346,28 @@ describe('Queues column — queue picker', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown', code: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
     expect(input.value).toBe('Mentions 1');
+  });
+});
+
+/**
+ * sk-1048.75 — the cross-queue total in Russian: its accessible name carries
+ * the number with the Russian plural form that goes with it (one / few /
+ * many: 1, 2, 5), so a screen reader says a sentence, not a bare digit.
+ */
+describe('Queues column — the total in Russian', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test.each([
+    [1, '1 непрочитанное во всех очередях'],
+    [2, '2 непрочитанных во всех очередях'],
+    [5, '5 непрочитанных во всех очередях'],
+  ])('%i unread → «%s»', async (n, name) => {
+    Object.assign(queueSizes, { inbox: n, mentions: 0, watching: 0 });
+    await i18n.changeLanguage('ru');
+    renderColumn();
+
+    expect(screen.getByLabelText(name).textContent).toBe(String(n));
   });
 });
