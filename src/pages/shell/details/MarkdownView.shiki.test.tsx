@@ -77,6 +77,19 @@ describe('MarkdownView — the code highlighter', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1);
   });
 
+  test('two views on screen load the plugin once and both repaint', async () => {
+    const { MarkdownView } = await import('./MarkdownView');
+    const { container } = render(
+      <MemoryRouter>
+        <MarkdownView text={'```ts\nconst a = 1;\n```\n'} />
+        <MarkdownView text={'```ts\nconst b = 2;\n```\n'} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(container.querySelectorAll('pre.test-highlighted')).toHaveLength(2));
+    expect(loadPlugin).toHaveBeenCalledTimes(1);
+  });
+
   test('a block whose highlighting throws falls back to plain code and the note still renders', async () => {
     const { container } = await renderNote(
       'intro\n\n```ts\nconst ok = 1;\n```\n\n```boom\nraw <b>source</b>\n```\n',
