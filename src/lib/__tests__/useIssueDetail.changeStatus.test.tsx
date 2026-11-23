@@ -224,10 +224,11 @@ describe('useIssueDetail.changeStatus — F5 typed-error contract at the source'
   // sk-1048.29 — the card shows the requested status while the request is in
   // flight, and a refusal puts the previous status and version back.
   test('a refused transition rolls the optimistic status and version back on the card', async () => {
-    let refuse: (err: unknown) => void = () => {};
-    transitionStatusSpy.mockImplementation(
-      () => new Promise<IssueDetail>((_resolve, reject) => { refuse = reject; }),
-    );
+    // The refusal exists before the request does, so refusing never depends
+    // on when the mutation reaches the stubbed call.
+    let refuse!: (err: unknown) => void;
+    const answer = new Promise<IssueDetail>((_resolve, reject) => { refuse = reject; });
+    transitionStatusSpy.mockImplementation(() => answer);
     const { wrapper } = makeWrapper();
     const { result } = renderHook(
       () => useIssueDetail({ issueId: ISSUE_ID, projectHandle: PROJECT }),
@@ -243,12 +244,10 @@ describe('useIssueDetail.changeStatus — F5 typed-error contract at the source'
 
     await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'closed', version: 8 }));
 
-    const err = childErr();
-    refuse(err);
-    const outcome = await pending;
+    // The shape of the returned failure is the F5 test's subject above.
+    refuse(childErr());
+    await pending;
 
-    expect(outcome).toEqual({ error: err });
-    expect((outcome as { error: BusinessError }).error.code).toBe('standing_has_open_children');
     await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'standing', version: 7 }));
     expect(toastError).toHaveBeenCalledTimes(1);
   });
