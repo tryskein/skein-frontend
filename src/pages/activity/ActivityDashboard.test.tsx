@@ -410,9 +410,10 @@ describe('ActivityDashboard render', () => {
     expect(lastCall?.[0].window).toBe('7d');
   });
 
-  // sk-1048.47 — the shared period switch reads the feed again, and the row
-  // the new answer brings shows up in the ticker next to the earlier ones.
-  test('a change of the shared period reads the feed again and shows its new row', async () => {
+  // sk-1048.47 — the shared period switch reads the feed again; the row the
+  // new answer brings joins the ticker, and the rows already shown stay even
+  // though the new answer does not repeat them (merged, not replaced).
+  test('a change of the shared period reads the feed again, adds its new row and keeps the earlier ones', async () => {
     mockedScoring.mockResolvedValue(scoring());
     mockedFeed.mockResolvedValue(feedSample());
     render(
@@ -431,7 +432,6 @@ describe('ActivityDashboard render', () => {
         entity: { ...fresh.items[0].entity, id: 'demo-26', title: 'New period row' },
         summary: 'alice closed demo-26 (New period row)',
       },
-      ...fresh.items,
     ];
     mockedFeed.mockResolvedValue(fresh);
     const windowTabs = document.querySelector('.activity-throughput-wrap .race-chip-row') as HTMLElement;
