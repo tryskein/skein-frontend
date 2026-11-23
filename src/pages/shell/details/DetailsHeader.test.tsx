@@ -922,4 +922,33 @@ describe('DetailsHeader — Russian accessible names', () => {
     expect(screen.getByRole('button', { name: priorityName })).toBeTruthy();
     expect(screen.getByRole('button', { name: statusName })).toBeTruthy();
   });
+
+  test('the same status says whether it is blocked', async () => {
+    await i18n.changeLanguage('ru');
+    const statusNameOf = (isBlocked: boolean) => {
+      const { unmount } = render(
+        <Wrapper>
+          <DetailsHeader
+            issue={{ ...makeIssue({ status: 'open', isBlocked }), priority: 2 } as IssueDetail}
+            isWatching={false}
+            watchToggling={false}
+            {...noopHandlers}
+          />
+        </Wrapper>,
+      );
+      const name = screen
+        .getAllByRole('button')
+        .map((b) => b.getAttribute('aria-label') ?? '')
+        .find((label) => label === ruOnly('details', isBlocked ? 'header.statusAriaBlocked' : 'header.statusAria', { status: 'open' }));
+      unmount();
+      return name;
+    };
+
+    const free = statusNameOf(false);
+    const blocked = statusNameOf(true);
+    expect(free).toContain('open');
+    expect(blocked).toContain('open');
+    // Blocked is said: the two names of one status are not the same.
+    expect(blocked).not.toBe(free);
+  });
 });
