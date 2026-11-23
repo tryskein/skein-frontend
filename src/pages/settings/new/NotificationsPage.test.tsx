@@ -418,6 +418,30 @@ describe('NotificationsPage — reason × channel form', () => {
  * whole suite green. Both are properties of the page, so they are pinned
  * here.
  */
+/**
+ * sk-1048.78 — in Russian every reason × channel switch is named by both
+ * halves: the reason (the server's label) and the channel (the Russian
+ * channel word). Two switches of different reasons and channels therefore
+ * answer to different names.
+ */
+describe('NotificationsPage — the switches in Russian', () => {
+  afterEach(async () => {
+    if (i18n.language !== DEFAULT_LANGUAGE) await i18n.changeLanguage(DEFAULT_LANGUAGE);
+  });
+
+  test('each switch is named «reason: channel»', async () => {
+    await i18n.changeLanguage('ru');
+    render(<Wrap><NewNotificationsPage /></Wrap>);
+    await waitFor(() => expect(screen.getByText('Comment')).toBeTruthy());
+
+    const commentFeed = screen.getByRole('switch', { name: 'Comment: Лента' });
+    const reminderPush = screen.getByRole('switch', { name: 'Reminder: Push' });
+    expect(commentFeed).not.toBe(reminderPush);
+    expect((reminderPush as HTMLInputElement).checked).toBe(true);
+    expect((commentFeed as HTMLInputElement).checked).toBe(false);
+  });
+});
+
 describe('the review panel is on the page, and it is not inside the reason form', () => {
   const reviewSave = () =>
     screen.getByRole('button', { name: 'Save review settings' });
