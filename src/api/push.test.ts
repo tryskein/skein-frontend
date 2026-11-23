@@ -318,7 +318,7 @@ describe('GET /push/config — only a string key is an answer', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/v1/push/config');
-    expect(init?.method).toBe('GET');
+    expect(init?.method ?? 'GET').toBe('GET');
   });
 
   test.each([
