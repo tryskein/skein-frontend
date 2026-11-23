@@ -215,6 +215,7 @@ describe('useDismissReminder — refusal and reconciliation', () => {
       reminders: [
         reminder({ id: 'a', issueId: 'sk-1', state: 'ringing' }),
         reminder({ id: 'b', issueId: 'sk-2', state: 'ringing' }),
+        reminder({ id: 'c', issueId: 'sk-3', state: 'armed' }),
       ],
       ringingTaskCount: 2,
     });
