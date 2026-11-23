@@ -68,6 +68,7 @@ describe('useInspectMode', () => {
     fireEvent.mouseMove(target);
     expect(target.style.outline).not.toBe('2px solid red');
 
+    fireEvent.mouseMove(target);
     fireEvent.mouseMove(other);
     expect(target.style.outline).toBe('2px solid red');
     expect(other.style.outline).not.toBe('');
@@ -81,8 +82,9 @@ describe('useInspectMode', () => {
     fireEvent.click(toggle);
     expect(state()).toBe('on');
 
-    fireEvent.click(target);
+    const notCancelled = fireEvent.click(target);
 
+    expect(notCancelled).toBe(false);
     expect(onTarget).not.toHaveBeenCalled();
     expect(state()).toBe('off');
     await waitFor(() => expect(inspectPosts()).toHaveLength(1));
@@ -91,9 +93,12 @@ describe('useInspectMode', () => {
     expect(body.parents[0]).toBe('.page');
   });
 
-  test('Escape ends the mode without picking anything', async () => {
+  test('Escape ends the mode without picking anything; other keys leave it on', async () => {
     const { toggle, state } = mount();
     fireEvent.click(toggle);
+
+    fireEvent.keyDown(document, { key: 'a' });
+    expect(state()).toBe('on');
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
