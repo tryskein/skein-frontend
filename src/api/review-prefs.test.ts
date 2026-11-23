@@ -43,7 +43,7 @@ afterEach(() => vi.unstubAllGlobals());
 function onlyCall(): { url: string; method: string | undefined; body: string | undefined } {
   expect(fetchSpy).toHaveBeenCalledTimes(1);
   const [url, init] = fetchSpy.mock.calls[0];
-  return { url: String(url), method: init?.method, body: init?.body === undefined ? undefined : String(init.body) };
+  return { url: String(url), method: init?.method ?? 'GET', body: init?.body === undefined ? undefined : String(init.body) };
 }
 
 describe('review-prefs client', () => {
