@@ -512,7 +512,7 @@ describe('sk-878.3.1 — the API chip keeps only api comments', () => {
     );
     await waitFor(() => screen.getByText('integration note'));
     const chip = screen.getByRole('button', { name: /^API/ });
-    expect(chip.getAttribute('aria-label')).toMatch(/^API \(1\)/);
+    expect(chip.getAttribute('aria-label')).toBe(i18n.t('comments:apiAria', { suffix: ' (1)' }));
 
     fireEvent.click(chip);
     await waitFor(() => expect(screen.queryByText('human note')).toBeNull());
