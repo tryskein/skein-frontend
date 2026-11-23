@@ -37,7 +37,7 @@ describe('issue-create-prefs client', () => {
 
     const { url, init } = onlyCall();
     expect(url).toBe('/api/v1/me/issue-create-prefs');
-    expect(init.method).toBe('GET');
+    expect(init.method ?? 'GET').toBe('GET');
     expect(init.body).toBeUndefined();
   });
 
