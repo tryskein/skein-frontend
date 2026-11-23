@@ -136,6 +136,12 @@ export default {
     // Stryker must run the tests exactly as CI does, or a mutant could
     // be "killed" by a setup difference rather than by an assertion.
     configFile: 'vitest.config.ts',
+    // The Stryker vitest runner defaults to the `threads` pool, where a
+    // test's `process.env.TZ` does not reach the worker's clock: the
+    // zone-dependent date tests (Honolulu, Tokyo) then fail in the dry run
+    // and nothing is measured. `forks` runs each worker as a process, as
+    // a plain `vitest run` does.
+    pool: 'forks',
   },
 
   // See the header: only worth paying for the tests that reach the mutant.
