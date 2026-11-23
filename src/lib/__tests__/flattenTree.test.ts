@@ -504,3 +504,32 @@ describe('layeredToFlatRows — sk-421.2.8 carrying blockers over (row 27)', () 
     }
   });
 });
+
+// sk-1048.12 — a reference row of the wire tree names the parent of the first
+// occurrence of the same issue (`firstSeenAt`), which the row's "see first"
+// jump uses; a reference to an issue the reader cannot see carries null.
+describe('layeredToFlatRows — the first occurrence of a reference row', () => {
+  const node = (over: Partial<WireIssueTreeNode>): WireIssueTreeNode => ({
+    item: issue('dup-1', 'p-1'),
+    depth: 1,
+    parentRef: { id: 'p-2', edgeType: 'blocks' },
+    isReference: true,
+    firstSeenAt: null,
+    ...over,
+  });
+
+  test('carries a filled firstSeenAt into the row as is', () => {
+    const rows = layeredToFlatRows([
+      node({ item: issue('p-2', null), depth: 0, parentRef: null, isReference: false }),
+      node({ firstSeenAt: 'p-1' }),
+    ]);
+    expect(rows[1]).toMatchObject({ isReference: true, firstSeenAt: 'p-1', edgeType: 'blocks' });
+  });
+
+  test('keeps null for a reference to an unavailable issue, and an absent field reads as null', () => {
+    const absent = node({});
+    delete absent.firstSeenAt;
+    const rows = layeredToFlatRows([node({ firstSeenAt: null }), absent]);
+    expect(rows.map((r) => r.firstSeenAt)).toEqual([null, null]);
+  });
+});
