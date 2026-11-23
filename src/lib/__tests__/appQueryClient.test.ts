@@ -20,6 +20,7 @@ import { describe, expect, test } from 'vitest';
 import { ApiError, BusinessError, UnauthorizedError } from '../../api/client';
 import { createAppQueryClient } from '../appQueryClient';
 import { ME_KEY } from '../../auth/AuthContext';
+import { AUTH_CONFIG_KEY } from '../useAuthConfig';
 
 const USER = { id: 'u-1', username: 'admin', name: 'Administrator' };
 
@@ -93,5 +94,61 @@ describe('createAppQueryClient — session death routes to sign-out', () => {
     unsubscribe();
     expect(notifications).toBe(0);
     expect(client.getQueryData(ME_KEY)).toBeNull();
+  });
+});
+
+// sk-1048.41 — the 401 that ends the session also drops what the server
+// answered for that person, so the next sign-in in the same tab cannot be
+// shown the previous person's data from the cache. The anonymous deployment
+// config is not session data and stays.
+describe('createAppQueryClient — a 401 drops the data of the ended session', () => {
+  const TASKS = ['tasks', 'p-1', 'list'];
+  const DETAIL = ['issues', 'detail', 'sk-1'];
+  const CONFIG = { authMode: 'local' };
+
+  function signedInClient() {
+    const client = createAppQueryClient();
+    client.setQueryData(ME_KEY, USER);
+    client.setQueryData(AUTH_CONFIG_KEY, CONFIG);
+    client.setQueryData(TASKS, { items: [{ id: 'sk-1' }] });
+    client.setQueryData(DETAIL, { id: 'sk-1', title: 'private' });
+    return client;
+  }
+
+  test.each([
+    {
+      name: 'a query',
+      fail: (client: ReturnType<typeof createAppQueryClient>) => failWith(client, new UnauthorizedError()),
+    },
+    {
+      name: 'a mutation',
+      fail: (client: ReturnType<typeof createAppQueryClient>) => client
+        .getMutationCache()
+        .build(client, { mutationFn: () => Promise.reject(new UnauthorizedError()) })
+        .execute(undefined)
+        .catch(() => {}),
+    },
+  ])('a 401 from $name removes the session data and keeps the deployment config', async ({ fail }) => {
+    const client = signedInClient();
+
+    await fail(client);
+
+    expect(client.getQueryData(TASKS)).toBeUndefined();
+    expect(client.getQueryData(DETAIL)).toBeUndefined();
+    expect(client.getQueryData(AUTH_CONFIG_KEY)).toEqual(CONFIG);
+    expect(client.getQueryData(ME_KEY)).toBeNull();
+  });
+
+  test.each([
+    { name: '403', err: new ApiError(403, 'forbidden') },
+    { name: '500', err: new ApiError(500, 'boom') },
+  ])('a $name keeps the signed-in person\'s data', async ({ err }) => {
+    const client = signedInClient();
+
+    await failWith(client, err);
+
+    expect(client.getQueryData(TASKS)).toEqual({ items: [{ id: 'sk-1' }] });
+    expect(client.getQueryData(DETAIL)).toEqual({ id: 'sk-1', title: 'private' });
+    expect(client.getQueryData(ME_KEY)).toEqual(USER);
   });
 });
