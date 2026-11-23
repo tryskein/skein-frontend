@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import i18n from '../../../i18n/config';
 import { IssueTitleEdit } from './IssueTitleEdit';
+import { ruOnly } from '../../../test/ruText';
 
 afterEach(cleanup);
 
@@ -66,11 +67,24 @@ describe('IssueTitleEdit — keyboard', () => {
     const { onSave, field } = renderTitle();
     typed(field, 'Refund the order total');
 
-    for (const key of ['a', ' ', 'Backspace', 'Tab']) {
+    for (const key of ['a', ' ', 'Backspace']) {
       expect(fireEvent.keyDown(field, { key }), key).toBe(true);
       expect(document.activeElement, key).toBe(field);
     }
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  // Tab is not typing: the browser moves focus on, and leaving the field
+  // saves what was typed (the field's `onBlur`). `fireEvent.keyDown` does
+  // not move focus, so the move itself is the blur.
+  test('leaving the field (Tab to the next control) saves the trimmed title', () => {
+    const { onSave, field } = renderTitle();
+    typed(field, '  Refund the order total  ');
+
+    fireEvent.blur(field);
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith('Refund the order total');
   });
 
   test('a title of spaces only is not saved', () => {
@@ -83,18 +97,6 @@ describe('IssueTitleEdit — keyboard', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 });
-
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
 
 /**
  * sk-1048.77 — in Russian the title field answers to its Russian accessible
