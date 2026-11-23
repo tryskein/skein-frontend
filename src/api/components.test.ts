@@ -31,11 +31,14 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function onlyCall(): { url: string; method: string; body: unknown } {
+function onlyCall(): { path: string; query: Array<[string, string]>; method: string; body: unknown } {
   expect(fetchSpy).toHaveBeenCalledTimes(1);
   const [url, init] = fetchSpy.mock.calls[0];
+  // The raw path, so the percent-encoding of each id segment stays visible.
+  const [path, search = ''] = String(url).split('?');
   return {
-    url: String(url),
+    path,
+    query: [...new URLSearchParams(search)].sort(([a], [b]) => a.localeCompare(b)),
     method: init?.method ?? 'GET',
     body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
   };
@@ -49,18 +52,16 @@ const ONE = `${COLLECTION}/comp%202%2Fb`;
 
 describe('listComponents — query parameters', () => {
   test.each([
-    { archived: undefined, lens: undefined, query: '' },
-    { archived: 'true', lens: undefined, query: '?archived=true' },
-    { archived: 'false', lens: undefined, query: '?archived=false' },
-    { archived: 'all', lens: undefined, query: '?archived=all' },
-    { archived: undefined, lens: 'on-me', query: '?lens=on-me' },
-    { archived: undefined, lens: 'delegated', query: '?lens=delegated' },
-    { archived: 'all', lens: 'delegated', query: '?archived=all&lens=delegated' },
-  ] as const)('archived=$archived lens=$lens → "$query"', async ({ archived, lens, query }) => {
+    { archived: undefined, lens: undefined, query: [] },
+    { archived: 'true', lens: undefined, query: [['archived', 'true']] },
+    { archived: 'false', lens: undefined, query: [['archived', 'false']] },
+    { archived: 'all', lens: undefined, query: [['archived', 'all']] },
+    { archived: undefined, lens: 'on-me', query: [['lens', 'on-me']] },
+    { archived: undefined, lens: 'delegated', query: [['lens', 'delegated']] },
+    { archived: 'all', lens: 'delegated', query: [['archived', 'all'], ['lens', 'delegated']] },
+  ] as const)('archived=$archived lens=$lens', async ({ archived, lens, query }) => {
     await listComponents(PROJECT, archived, lens);
-    const call = onlyCall();
-    expect(call.method).toBe('GET');
-    expect(call.url).toBe(`${COLLECTION}${query}`);
+    expect(onlyCall()).toEqual({ path: COLLECTION, query, method: 'GET', body: undefined });
   });
 });
 
@@ -98,6 +99,6 @@ describe('component operations — path, method and body', () => {
     },
   ])('$name', async ({ run, method, url, body }) => {
     await run();
-    expect(onlyCall()).toEqual({ url, method, body });
+    expect(onlyCall()).toEqual({ path: url, query: [], method, body });
   });
 });
