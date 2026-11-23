@@ -569,7 +569,9 @@ describe('DependenciesSection — writing links', () => {
     await user.click(screen.getByRole('button', { name: /^Add/ }));
 
     await screen.findByRole('button', { name: 'Remove link to pay-9' });
-    expect(writes()).toEqual([['POST', BASE, JSON.stringify({ toId: 'pay-9', type: 'related' })]]);
+    expect(writes().map(([method, url, body]) => [method, url, JSON.parse(String(body))])).toEqual([
+      ['POST', BASE, { toId: 'pay-9', type: 'related' }],
+    ]);
     expect(screen.queryByRole('textbox', { name: 'Issue id to depend on' })).toBeNull();
   });
 
@@ -601,7 +603,8 @@ describe('DependenciesSection — writing links', () => {
   test('a refused add is shown and the form stays open', async () => {
     const user = userEvent.setup();
     await renderLive();
-    refuse = { status: 422, body: { error: 'dependency_cycle', message: 'would create a cycle' } };
+    // The server's cycle refusal (`api/dependencies.ts#CycleExtra`): the code and the cycle's path.
+    refuse = { status: 422, body: { error: 'dep_cycle', message: 'would create a cycle', path: ['sk-1', 'pay-3', 'sk-1'] } };
 
     await user.click(screen.getByRole('button', { name: 'Add dependency' }));
     await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-3');
@@ -651,10 +654,15 @@ describe('DependenciesSection — writing links', () => {
     const user = userEvent.setup();
     await renderLive();
     refuse = { status: 422, body: { error: 'dependency_locked', message: 'link is locked' } };
-    const releaseRead = held('GET');
+    const releaseDelete = held('DELETE');
 
     await user.click(screen.getByRole('button', { name: 'Remove link to pay-4' }));
+    // First the link leaves the list, before the server has said anything…
+    await waitFor(() => expect(listedLinks()).toEqual(['pay-3', 'pay-5']));
 
+    // …then the server refuses, and the re-read the refusal starts is held.
+    const releaseRead = held('GET');
+    releaseDelete();
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('link is locked'));
     // The re-read the refusal starts is still held: what is listed now is
     // the section's own rollback, not the server's answer.
