@@ -62,6 +62,17 @@ describe('IssueTitleEdit — keyboard', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  test('other keys are typing, not saving: the field keeps focus and nothing is saved', () => {
+    const { onSave, field } = renderTitle();
+    typed(field, 'Refund the order total');
+
+    for (const key of ['a', ' ', 'Backspace', 'Tab']) {
+      expect(fireEvent.keyDown(field, { key }), key).toBe(true);
+      expect(document.activeElement, key).toBe(field);
+    }
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   test('a title of spaces only is not saved', () => {
     const { onSave, field } = renderTitle();
     typed(field, '   ');
