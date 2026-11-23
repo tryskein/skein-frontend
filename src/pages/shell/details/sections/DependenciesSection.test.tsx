@@ -8,17 +8,20 @@
  * reach the form they just asked for (WCAG 2.4.3).
  */
 
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 
+const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock('../../../../components/Toaster', () => ({
-  useToaster: () => ({ error: vi.fn(), success: vi.fn() }),
+  useToaster: () => toast,
 }));
 
-import type { DependencyEdge, DependencyList } from '../../../../api/dependencies';
+import { listDependencies, type DependencyEdge, type DependencyList } from '../../../../api/dependencies';
+import { issueDependenciesKey } from '../../../../lib/useIssueDetail';
+import i18n from '../../../../i18n/config';
 import { DependenciesSection } from './DependenciesSection';
 
 afterEach(cleanup);
@@ -450,5 +453,258 @@ describe('sk-421.2 T023 — epic dependencies without duplicate children', () =>
       true,
     );
     expect(screen.getByText('Parent epic')).toBeTruthy();
+  });
+});
+
+// ───────────────────────── Adding and removing a link ─────────────────────────
+
+/**
+ * sk-1048.63 — the section's two writes, against a `fetch` stub that models
+ * the dependencies endpoint of one issue, with the list fed to the section
+ * from the same query the card uses (`issueDependenciesKey`). What the
+ * section owes (its docblock and the form): an added link is sent with the
+ * typed id trimmed and the chosen type; a removed link is the chosen one
+ * only; a refusal is shown; an empty id sends nothing.
+ */
+describe('DependenciesSection — writing links', () => {
+  const BASE = '/api/v1/projects/p-uuid/issues/sk-1/dependencies';
+  let outgoing: DependencyEdge[];
+  let refuse: { status: number; body: unknown } | null;
+  /** A held answer per method: the request waits until the test opens the gate. */
+  let gates: Partial<Record<string, Promise<void>>>;
+  /** Reads of the queries around the section, by key head (see `LiveSection`). */
+  let neighbourReads: Record<string, number>;
+  const fetchSpy = vi.fn<typeof fetch>();
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+  const target = (id: string, title: string): DependencyEdge['issue'] => ({
+    id, projectId: 'p-uuid', title, status: 'open', priority: 2, type: 'task',
+  } as DependencyEdge['issue']);
+
+  beforeEach(() => {
+    toast.error.mockClear();
+    outgoing = [
+      edge({ toId: 'pay-3', type: 'blocks', issue: target('pay-3', 'Refund total') }),
+      edge({ toId: 'pay-4', type: 'related', issue: target('pay-4', 'Invoice layout') }),
+      edge({ toId: 'pay-5', type: 'related', issue: target('pay-5', 'Tax rounding') }),
+    ];
+    refuse = null;
+    gates = {};
+    neighbourReads = { detail: 0, list: 0, otherDeps: 0, projects: 0 };
+    fetchSpy.mockReset();
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      await gates[method];
+      if (method !== 'GET' && refuse) return json(refuse.body, refuse.status);
+      if (url === BASE && method === 'GET') return json({ outgoing, incoming: [] });
+      if (url === BASE && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as { toId: string; type: DependencyEdge['type'] };
+        const added = edge({ toId: body.toId, type: body.type, issue: target(body.toId, `Issue ${body.toId}`) });
+        outgoing = [...outgoing, added];
+        return json(added, 201);
+      }
+      const del = new RegExp(`^${BASE}/([^/]+)/([^/]+)$`).exec(url);
+      if (del && method === 'DELETE') {
+        const [toId, type] = [decodeURIComponent(del[1]), decodeURIComponent(del[2])];
+        outgoing = outgoing.filter((e) => !(e.toId === toId && e.type === type));
+        return new Response(null, { status: 204 });
+      }
+      return json({ error: 'unexpected' }, 599);
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function LiveSection() {
+    const q = useQuery({
+      queryKey: issueDependenciesKey('p-uuid', 'sk-1'),
+      queryFn: () => listDependencies('p-uuid', 'sk-1'),
+    });
+    // What else is on screen around the card: its detail, a task list, the
+    // links of another card — a parent-child link changes all of them — and
+    // something a link does not touch.
+    const neighbour = (key: readonly unknown[], name: string) => ({
+      queryKey: key,
+      queryFn: async () => { neighbourReads[name] += 1; return neighbourReads[name]; },
+      staleTime: Infinity,
+    });
+    useQuery(neighbour(['issues', 'detail', 'sk-1'], 'detail'));
+    useQuery(neighbour(['issues', 'list', 'p-uuid'], 'list'));
+    useQuery(neighbour(['deps', 'p-uuid', 'sk-2'], 'otherDeps'));
+    useQuery(neighbour(['projects', 'list'], 'projects'));
+    return <DependenciesSection projectId="p-uuid" issueId="sk-1" dependencies={q.data} isEpic={false} />;
+  }
+
+  async function renderLive() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <LiveSection />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByRole('button', { name: 'Remove link to pay-3' });
+  }
+
+  const writes = () =>
+    fetchSpy.mock.calls
+      .filter((c) => (c[1]?.method ?? 'GET') !== 'GET')
+      .map((c) => [c[1]?.method, String(c[0]), c[1]?.body ?? null]);
+
+  test('adding sends the trimmed id with the chosen type, and the new link is listed', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Link type' }), 'related');
+    await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), '  pay-9  ');
+    await user.click(screen.getByRole('button', { name: /^Add/ }));
+
+    await screen.findByRole('button', { name: 'Remove link to pay-9' });
+    expect(writes()).toEqual([['POST', BASE, JSON.stringify({ toId: 'pay-9', type: 'related' })]]);
+    expect(screen.queryByRole('textbox', { name: 'Issue id to depend on' })).toBeNull();
+  });
+
+  test('an empty id sends nothing and says the id is required', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+    await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), '   ');
+    await user.click(screen.getByRole('button', { name: /^Add/ }));
+
+    expect(writes()).toEqual([]);
+    expect(toast.error).toHaveBeenCalledWith(i18n.t('details:deps.idRequired'));
+  });
+
+  test('removing cuts the chosen link only', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+
+    await user.click(screen.getByRole('button', { name: 'Remove link to pay-4' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove link to pay-4' })).toBeNull(),
+    );
+    expect(writes()).toEqual([['DELETE', `${BASE}/pay-4/related`, null]]);
+    expect(screen.getByRole('button', { name: 'Remove link to pay-3' })).toBeTruthy();
+  });
+
+  test('a refused add is shown and the form stays open', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+    refuse = { status: 422, body: { error: 'dependency_cycle', message: 'would create a cycle' } };
+
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+    await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-3');
+    await user.click(screen.getByRole('button', { name: /^Add/ }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('would create a cycle'));
+    expect(screen.getByRole('textbox', { name: 'Issue id to depend on' })).toBeTruthy();
+  });
+
+  test('a refused remove is shown and the link stays', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+    refuse = { status: 422, body: { error: 'dependency_locked', message: 'link is locked' } };
+
+    await user.click(screen.getByRole('button', { name: 'Remove link to pay-3' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('link is locked'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove link to pay-3' })).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Remove link to pay-4' })).toBeTruthy();
+  });
+  const listedLinks = () =>
+    screen.queryAllByRole('button', { name: /^Remove link to / }).map((b) =>
+      (b.getAttribute('aria-label') ?? '').replace('Remove link to ', ''),
+    );
+
+  function held(method: string) {
+    let open: () => void = () => {};
+    gates[method] = new Promise<void>((resolve) => { open = resolve; });
+    return () => { delete gates[method]; open(); };
+  }
+
+  test('the removed link leaves the list before the server answers; its neighbours stay', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+    const release = held('DELETE');
+
+    await user.click(screen.getByRole('button', { name: 'Remove link to pay-4' }));
+
+    await waitFor(() => expect(listedLinks()).toEqual(['pay-3', 'pay-5']));
+    expect(outgoing.map((e) => e.toId)).toEqual(['pay-3', 'pay-4', 'pay-5']);
+    release();
+    await waitFor(() => expect(outgoing.map((e) => e.toId)).toEqual(['pay-3', 'pay-5']));
+    expect(listedLinks()).toEqual(['pay-3', 'pay-5']);
+  });
+
+  test('a refused remove puts the link back before the list is read again', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+    refuse = { status: 422, body: { error: 'dependency_locked', message: 'link is locked' } };
+    const releaseRead = held('GET');
+
+    await user.click(screen.getByRole('button', { name: 'Remove link to pay-4' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('link is locked'));
+    // The re-read the refusal starts is still held: what is listed now is
+    // the section's own rollback, not the server's answer.
+    await waitFor(() => expect(listedLinks()).toEqual(['pay-3', 'pay-4', 'pay-5']));
+    releaseRead();
+  });
+
+  test.each([
+    ['removing', async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole('button', { name: 'Remove link to pay-4' }));
+      await waitFor(() => expect(outgoing.map((e) => e.toId)).toEqual(['pay-3', 'pay-5']));
+    }],
+    ['adding', async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+      await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-9');
+      await user.click(screen.getByRole('button', { name: /^Add/ }));
+      await screen.findByRole('button', { name: 'Remove link to pay-9' });
+    }],
+  ])('%s a link refreshes the card, the task lists and other cards’ links — nothing else', async (_n, write) => {
+    const user = userEvent.setup();
+    await renderLive();
+    await waitFor(() => expect(neighbourReads).toEqual({ detail: 1, list: 1, otherDeps: 1, projects: 1 }));
+
+    await write(user);
+
+    await waitFor(() => {
+      expect(neighbourReads.detail).toBeGreaterThan(1);
+      expect(neighbourReads.list).toBeGreaterThan(1);
+      expect(neighbourReads.otherDeps).toBeGreaterThan(1);
+    });
+    expect(neighbourReads.projects).toBe(1);
+  });
+
+  test('the form opens empty again: after an added link and after a cancel', async () => {
+    const user = userEvent.setup();
+    await renderLive();
+
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Link type' }), 'related');
+    await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-9');
+    await user.click(screen.getByRole('button', { name: /^Add/ }));
+    await screen.findByRole('button', { name: 'Remove link to pay-9' });
+
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+    expect((screen.getByRole('textbox', { name: 'Issue id to depend on' }) as HTMLInputElement).value).toBe('');
+    expect((screen.getByRole('combobox', { name: 'Link type' }) as HTMLSelectElement).value).toBe('blocks');
+
+    await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-11');
+    await user.click(screen.getByRole('button', { name: /^Cancel/ }));
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
+    expect((screen.getByRole('textbox', { name: 'Issue id to depend on' }) as HTMLInputElement).value).toBe('');
   });
 });
