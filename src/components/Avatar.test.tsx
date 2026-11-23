@@ -37,6 +37,7 @@ describe('Avatar tooltip', () => {
   test('defaults to the @-handle, without doubling a leading @', () => {
     expect(face('alice').getAttribute('title')).toBe('@alice');
     expect(face('@bob').getAttribute('title')).toBe('@bob');
+    expect(face('ann@corp').getAttribute('title')).toBe('@ann@corp');
   });
 
   test('shows the tooltip it is given', () => {
