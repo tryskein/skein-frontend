@@ -25,9 +25,10 @@ const INBOX_FILTERS = { acceptedAt: 'null', status: 'open', createdBy: 'not-me' 
 
 beforeEach(() => {
   fetchSpy.mockReset();
-  fetchSpy.mockImplementation(async (input) => {
+  fetchSpy.mockImplementation(async (input, init) => {
     const url = new URL(String(input), 'http://skein.test');
     const filtered =
+      (init?.method ?? 'GET') === 'GET' &&
       url.pathname === '/api/v1/me/assigned-to' &&
       Object.entries(INBOX_FILTERS).every(([k, v]) => url.searchParams.get(k) === v);
     if (!filtered) return json({ error: 'unexpected request' }, 400);
@@ -58,6 +59,7 @@ describe('the Inbox query', () => {
 
     await waitFor(() => expect(view.result.current.isSuccess).toBe(true));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][1]?.method ?? 'GET').toBe('GET');
     const url = new URL(String(fetchSpy.mock.calls[0][0]), 'http://skein.test');
     expect(url.pathname).toBe('/api/v1/me/assigned-to');
     expect(Object.fromEntries(['acceptedAt', 'status', 'createdBy'].map((k) => [k, url.searchParams.get(k)]))).toEqual(
