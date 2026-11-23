@@ -294,13 +294,16 @@ describe('MoveIssueButton — a move under an epic that fails half way', () => {
     );
     vi.mocked(removeDependency).mockRejectedValue(new Error('the old parent edge could not be removed'));
 
-    // Surfaces that show the card and an issue list: they count their reads.
+    // Surfaces that show the card, an issue list and the new parent's edges:
+    // they count their reads.
     let cardReads = 0;
     let listReads = 0;
+    let parentEdgeReads = 0;
     function OnScreen() {
       const card = useQuery({ queryKey: ['issues', 'detail', 'sk-42'], queryFn: async () => ++cardReads });
       const list = useQuery({ queryKey: ['issues', 'list', 'p1'], queryFn: async () => ++listReads });
-      return <output data-testid="reads">{`${card.data ?? 0}/${list.data ?? 0}`}</output>;
+      const parentEdges = useQuery({ queryKey: ['deps', 'p1', 'demo-1'], queryFn: async () => ++parentEdgeReads });
+      return <output data-testid="reads">{`${card.data ?? 0}/${list.data ?? 0}/${parentEdges.data ?? 0}`}</output>;
     }
 
     render(
@@ -315,7 +318,7 @@ describe('MoveIssueButton — a move under an epic that fails half way', () => {
         </QueryClientProvider>
       </MantineProvider>,
     );
-    await waitFor(() => expect(screen.getByTestId('reads').textContent).toBe('1/1'));
+    await waitFor(() => expect(screen.getByTestId('reads').textContent).toBe('1/1/1'));
     fireEvent.click(screen.getByRole('button', { name: i18n.t('details:move.buttonAria', { id: 'sk-42' }) }));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByText(i18n.t('details:move.currentParent', { ids: 'demo-0' }));
@@ -336,11 +339,10 @@ describe('MoveIssueButton — a move under an epic that fails half way', () => {
     expect(removeDependency).toHaveBeenCalledWith('p1', 'sk-42', 'demo-0', 'parent-child');
     expect(screen.getByRole('dialog')).toBe(dialog);
     expect(await within(dialog).findByText(i18n.t('details:move.currentParents', { ids: 'demo-0, demo-1' }))).toBeTruthy();
-    // Both surfaces were read again after the failed move (how many times is not the contract).
+    // Every surface was read again after the failed move (how many times is not the contract).
     await waitFor(() => {
-      const [card, list] = screen.getByTestId('reads').textContent!.split('/').map(Number);
-      expect(card).toBeGreaterThan(1);
-      expect(list).toBeGreaterThan(1);
+      const reads = screen.getByTestId('reads').textContent!.split('/').map(Number);
+      expect(reads.every((n) => n > 1)).toBe(true);
     });
   });
 });
