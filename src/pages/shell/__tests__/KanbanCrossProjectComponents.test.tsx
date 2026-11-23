@@ -22,6 +22,7 @@ import type { IssueSummary } from '../../../api/issues';
 import { LayoutProvider } from '../../../lib/useLayoutState';
 import { TasksUiStateProvider, useTasksUiState } from '../../../lib/useTasksUiState';
 import { TasksColumn } from '../TasksColumn';
+import i18n from '../../../i18n/config';
 
 const A = 'proj-a-uuid';
 const B = 'proj-b-uuid';
@@ -125,8 +126,9 @@ function renderBoard() {
 }
 
 const asked = () => listComponentsSpy.mock.calls.map(([pid]) => pid).sort();
-const cardText = (id: string) =>
-  [...document.querySelectorAll('.kanban-card')].find((c) => (c.textContent ?? '').includes(id))?.textContent ?? '';
+/** The card of an issue, found by its accessible name; throws when the card is not there. */
+const card = (id: string) =>
+  screen.getByRole('button', { name: i18n.t('tasks:card.openIssue', { id, title: `title ${id}` }) as string });
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -143,9 +145,12 @@ describe('a board across projects names the components of every project', () => 
     window.localStorage.setItem('skein.tasks.kanbanCardFields', 'id,components');
     renderBoard();
 
-    await waitFor(() => expect(cardText('alpha-1')).toContain('Billing'));
-    expect(cardText('alpha-2')).toContain('Billing');
-    expect(cardText('beta-1')).toContain('Search');
+    // Each project answers its own request: wait until both answers are shown.
+    await waitFor(() => {
+      expect(card('alpha-1').textContent).toContain('Billing');
+      expect(card('alpha-2').textContent).toContain('Billing');
+      expect(card('beta-1').textContent).toContain('Search');
+    });
     expect(asked()).toEqual([A, B]);
   });
 
@@ -154,8 +159,10 @@ describe('a board across projects names the components of every project', () => 
     window.localStorage.setItem('skein.tasks.kanbanCardFields', 'id');
     renderBoard();
 
-    await waitFor(() => expect(screen.getAllByText('Billing').length).toBeGreaterThan(0));
-    expect(screen.getAllByText('Search').length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getAllByText('Billing').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Search').length).toBeGreaterThan(0);
+    });
     expect(asked()).toEqual([A, B]);
   });
 
@@ -170,14 +177,15 @@ describe('a board across projects names the components of every project', () => 
     await act(() => qc.invalidateQueries({ queryKey: ['components'] }));
 
     expect(listComponentsSpy).not.toHaveBeenCalled();
-    expect(cardText('alpha-1')).not.toContain('Billing');
+    // The card is still on the board — only the component name left it.
+    expect(card('alpha-1').textContent).not.toContain('Billing');
   });
   test('a list view of the same cards asks for no components', async () => {
     window.localStorage.setItem('skein.tasks.view', 'cards');
     window.localStorage.setItem('skein.tasks.kanbanAxis', 'component');
     window.localStorage.setItem('skein.tasks.kanbanCardFields', 'id,components');
     renderBoard();
-    await screen.findByText('title alpha-1');
+    await waitFor(() => expect(card('alpha-1')).toBeTruthy());
 
     expect(listComponentsSpy).not.toHaveBeenCalled();
   });
