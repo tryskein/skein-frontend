@@ -551,7 +551,7 @@ describe('DependenciesSection — writing links', () => {
         </QueryClientProvider>
       </MemoryRouter>,
     );
-    await screen.findByRole('button', { name: 'Remove link to pay-3' });
+    await screen.findAllByRole('button', { name: `Remove link to ${outgoing[0].toId}` });
   }
 
   const writes = () =>
@@ -709,10 +709,37 @@ describe('DependenciesSection — writing links', () => {
     await user.click(screen.getByRole('button', { name: 'Add dependency' }));
     expect((screen.getByRole('textbox', { name: 'Issue id to depend on' }) as HTMLInputElement).value).toBe('');
     expect((screen.getByRole('combobox', { name: 'Link type' }) as HTMLSelectElement).value).toBe('blocks');
+    // …and an add from it, with the type untouched, sends the default type.
+    await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-12');
+    await user.click(screen.getByRole('button', { name: /^Add/ }));
+    await screen.findByRole('button', { name: 'Remove link to pay-12' });
+    expect(JSON.parse(String(writes().at(-1)?.[2]))).toEqual({ toId: 'pay-12', type: 'blocks' });
+
+    await user.click(screen.getByRole('button', { name: 'Add dependency' }));
 
     await user.type(screen.getByRole('textbox', { name: 'Issue id to depend on' }), 'pay-11');
     await user.click(screen.getByRole('button', { name: /^Cancel/ }));
     await user.click(screen.getByRole('button', { name: 'Add dependency' }));
     expect((screen.getByRole('textbox', { name: 'Issue id to depend on' }) as HTMLInputElement).value).toBe('');
+  });
+  test('removing one link to an issue keeps its other link to the same issue', async () => {
+    outgoing = [
+      edge({ toId: 'pay-4', type: 'blocks', issue: target('pay-4', 'Invoice layout') }),
+      edge({ toId: 'pay-4', type: 'related', issue: target('pay-4', 'Invoice layout') }),
+    ];
+    const user = userEvent.setup();
+    await renderLive();
+    expect(listedLinks()).toEqual(['pay-4', 'pay-4']);
+    const release = held('DELETE');
+
+    // The second row is the «related» one (the list keeps the server's order).
+    await user.click(screen.getAllByRole('button', { name: 'Remove link to pay-4' })[1]);
+
+    await waitFor(() => expect(writes()).toEqual([['DELETE', `${BASE}/pay-4/related`, null]]));
+    // Before the answer: one link to pay-4 is still listed — the «blocks» one.
+    await waitFor(() => expect(listedLinks()).toEqual(['pay-4']));
+    release();
+    await waitFor(() => expect(outgoing.map((e) => e.type)).toEqual(['blocks']));
+    expect(listedLinks()).toEqual(['pay-4']);
   });
 });
