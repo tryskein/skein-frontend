@@ -410,6 +410,38 @@ describe('ActivityDashboard render', () => {
     expect(lastCall?.[0].window).toBe('7d');
   });
 
+  // sk-1048.47 — the shared period switch reads the feed again, and the row
+  // the new answer brings shows up in the ticker next to the earlier ones.
+  test('a change of the shared period reads the feed again and shows its new row', async () => {
+    mockedScoring.mockResolvedValue(scoring());
+    mockedFeed.mockResolvedValue(feedSample());
+    render(
+      <Wrap>
+        <ActivityDashboard />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByRole('link', { name: 'demo-25' }));
+    const feedReads = mockedFeed.mock.calls.length;
+
+    const fresh = feedSample();
+    fresh.items = [
+      {
+        ...fresh.items[0],
+        id: 101,
+        entity: { ...fresh.items[0].entity, id: 'demo-26', title: 'New period row' },
+        summary: 'alice closed demo-26 (New period row)',
+      },
+      ...fresh.items,
+    ];
+    mockedFeed.mockResolvedValue(fresh);
+    const windowTabs = document.querySelector('.activity-throughput-wrap .race-chip-row') as HTMLElement;
+    fireEvent.click(within(windowTabs).getByRole('button', { name: '7d' }));
+
+    await waitFor(() => screen.getByRole('link', { name: 'demo-26' }));
+    expect(mockedFeed.mock.calls.length).toBeGreaterThan(feedReads);
+    expect(screen.getByRole('link', { name: 'demo-25' })).toBeTruthy();
+  });
+
   // sk-674.18 US-19 (screens 1.15, review C2): HOT ZONE keeps a rolling
   // buffer outside the query cache and merges every new answer INTO it, so
   // a row of a lost space the authorized answer omits would stay. On a loss
