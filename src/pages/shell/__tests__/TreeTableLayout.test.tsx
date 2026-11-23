@@ -219,3 +219,25 @@ describe('sk-285.2.19 — the geometry is published where the rules inherit it',
     ).toBe(Number.parseFloat(narrowMin) + TREE_COLUMN_WIDTH_PX.status);
   });
 });
+
+// sk-1048.10 — the floor the table pans below, against the column widths the
+// design settled on (title track `minmax(200px, 1fr)`, ID 124, status 108,
+// blocked 104, priority 108, type 72, assignee 120, components 112, labels
+// 112, progress 92, updated 116, created 112), not against the function that
+// computes it.
+describe('the published minimum width matches the decided column widths', () => {
+  test.each([
+    { columns: [], px: 200 },
+    { columns: ['id'], px: 324 },
+    { columns: ['id', 'status'], px: 432 },
+    { columns: ['type', 'created'], px: 384 },
+    {
+      columns: ['id', 'status', 'blocked', 'priority', 'type', 'assignee',
+        'components', 'labels', 'progress', 'updated', 'created'],
+      px: 1380,
+    },
+  ] as const)('columns $columns → $px px', ({ columns, px }) => {
+    const { container } = renderTree(columns);
+    expect(scroller(container).style.getPropertyValue('--tree-table-min-w')).toBe(`${px}px`);
+  });
+});
