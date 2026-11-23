@@ -101,6 +101,9 @@ vi.mock('../../../lib/useNotificationCounts', () => ({
 
 import { Shell } from '../Shell';
 import { uiPrefsKey } from '../../../lib/useUiPrefs';
+import { mentionsQueryKey } from '../../../lib/useMentions';
+import { watchingStateQueryKey } from '../../../lib/useWatching';
+import { WATCHING_STATES } from '../../../api/notifications';
 
 const INBOX_ITEM = {
   id: 'sk-1',
@@ -167,9 +170,10 @@ function RouterProbe() {
   return null;
 }
 
-function mountShell(navLayout: 'columns' | 'sections') {
+function mountShell(navLayout: 'columns' | 'sections', seed?: (qc: QueryClient) => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(uiPrefsKey('u-1'), prefs(navLayout));
+  seed?.(qc);
   const tree = () => (
     <MantineProvider forceColorScheme="dark">
       <QueryClientProvider client={qc}>
@@ -182,6 +186,7 @@ function mountShell(navLayout: 'columns' | 'sections') {
   );
   const view = render(tree());
   return {
+    qc,
     container: view.container,
     rerender: () => view.rerender(tree()),
     /** The profile now says this — a GET answer, not the person's click. */
@@ -447,5 +452,43 @@ describe('US-15: the bodies’ scroll memory follows the setting', () => {
     act(() => setViewportWidth(1440));
     expect(shell.container.querySelector('.nav-column')).not.toBeNull();
     expect(document.querySelector<HTMLElement>('.nav-section--projects .projects-body')!.scrollTop).toBe(120);
+  });
+});
+
+// sk-1048.40 — the collapsed column's strip names the unread total and each of
+// the three queues apart. The numbers travel from the real Queues column
+// (`InboxColumn`) through the real `ZoneCountsProvider` to the real
+// `NavColumn`; when one queue changes, only its number (and the total) moves.
+describe('the collapsed column names the three queue counts', () => {
+  const mentions = (unread: number) => ({
+    items: Array.from({ length: unread }, (_, i) => ({ id: i + 1, readAt: null })),
+    nextCursor: null,
+    hasMore: false,
+  });
+
+  it('total and Inbox / Mentions / Watching apart, and one queue moving alone', async () => {
+    window.localStorage.setItem('skein.layout.nav.collapsed', 'true');
+    const shell = mountShell('sections', (qc) => {
+      qc.setQueryData(mentionsQueryKey, mentions(3));
+      for (const state of WATCHING_STATES) {
+        qc.setQueryData(watchingStateQueryKey(state), {
+          items: [], unreadTotal: 5, subscriptionsTotal: 2, truncated: false, state,
+          stateTotal: 0, openTotal: 0, closedTotal: 0,
+        });
+      }
+    });
+    const strip = () => shell.container.querySelector<HTMLElement>('.nav-strip')!.getAttribute('aria-label');
+
+    expect(strip()).toBe(
+      i18n.t('shell:nav.expandColumnWithCounts', { total: 9, inbox: 1, mentions: 3, watching: 5, projects: 0 }),
+    );
+
+    act(() => {
+      shell.qc.setQueryData(mentionsQueryKey, mentions(1));
+    });
+
+    await waitFor(() => expect(strip()).toBe(
+      i18n.t('shell:nav.expandColumnWithCounts', { total: 7, inbox: 1, mentions: 1, watching: 5, projects: 0 }),
+    ));
   });
 });
