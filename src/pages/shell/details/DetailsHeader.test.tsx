@@ -894,6 +894,18 @@ describe('DetailsHeader — sk-489 close outcome (row 57)', () => {
 });
 
 /**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
+/**
  * sk-1048.77 — the card header in Russian: the priority and the status
  * controls answer to Russian accessible names that carry the issue's actual
  * priority and status, and a status blocked by dependencies says so.
@@ -904,9 +916,13 @@ describe('DetailsHeader — Russian accessible names', () => {
   });
 
   test.each([
-    ['in progress', { ...makeIssue({ status: 'in_progress' }), priority: 1 }, 'Приоритет P1', 'Статус: in_progress'],
-    ['blocked', { ...makeIssue({ status: 'open', isBlocked: true }), priority: 3 }, 'Приоритет P3', 'Статус: open (заблокировано зависимостями)'],
-  ])('%s', async (_case, issue, priorityName, statusName) => {
+    ['in progress', { ...makeIssue({ status: 'in_progress' }), priority: 1 }, 'header.statusAria'],
+    ['blocked', { ...makeIssue({ status: 'open', isBlocked: true }), priority: 3 }, 'header.statusAriaBlocked'],
+  ])('%s', async (_case, issue, statusKey) => {
+    const priorityName = ruOnly('details', 'header.priorityAria', { priority: issue.priority });
+    const statusName = ruOnly('details', statusKey, { status: issue.status });
+    expect(priorityName).toContain(`P${issue.priority}`);
+    expect(statusName).toContain(issue.status);
     await i18n.changeLanguage('ru');
     render(
       <Wrapper>

@@ -61,6 +61,18 @@ describe('IssueTitleEdit — keyboard', () => {
 });
 
 /**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
+/**
  * sk-1048.77 — in Russian the title field answers to its Russian accessible
  * name; the placeholder is not the name.
  */
@@ -69,10 +81,10 @@ describe('IssueTitleEdit — Russian accessible name', () => {
     await i18n.changeLanguage('en');
   });
 
-  test('the field is «Заголовок задачи» and holds the title', async () => {
+  test('the field answers to its Russian name and holds the title', async () => {
     await i18n.changeLanguage('ru');
     render(<IssueTitleEdit initial="Возврат средств" onSave={vi.fn(async () => undefined)} />);
 
-    expect((screen.getByRole('textbox', { name: 'Заголовок задачи' }) as HTMLTextAreaElement).value).toBe('Возврат средств');
+    expect((screen.getByRole('textbox', { name: ruOnly('details', 'title.aria') }) as HTMLTextAreaElement).value).toBe('Возврат средств');
   });
 });
