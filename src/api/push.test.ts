@@ -312,8 +312,13 @@ describe('GET /push/config — only a string key is an answer', () => {
     { case: 'a key', body: { publicKey: 'BPk' }, expected: 'BPk' },
     { case: 'an empty key (push off on the server)', body: { publicKey: '' }, expected: '' },
   ])('$case', async ({ body, expected }) => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
     expect(await getPushConfig()).toEqual({ publicKey: expected });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/push/config');
+    expect(init?.method).toBe('GET');
   });
 
   test.each([
