@@ -158,6 +158,7 @@ import { TREE_DEFAULT_COLUMNS } from '../../lib/treeColumns';
 import { KANBAN_DEFAULT_CARD_FIELDS } from '../../lib/kanbanCardFields';
 import { KANBAN_DEFAULT_AXIS } from '../../lib/kanbanBoard';
 import { LIST_DEFAULT_CARD_FIELDS } from '../../lib/listCardFields';
+import { ruOnly } from '../../test/ruText';
 
 /**
  * Shows the current address next to the header so a badge click can be
@@ -252,18 +253,6 @@ describe('HeaderBar — sk-54 lens count badges', () => {
     // how the getByRole queries above found these buttons at all.
   });
 });
-
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
 
 describe('HeaderBar — sk-62.2 Reminders lens button', () => {
   beforeEach(() => {

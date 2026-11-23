@@ -61,6 +61,7 @@ import { BusinessError } from '../../../api/client';
 import { LayoutProvider } from '../../../lib/useLayoutState';
 import { DetailsHeader } from './DetailsHeader';
 import i18n from '../../../i18n/config';
+import { ruOnly } from '../../../test/ruText';
 
 function Wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({
@@ -892,18 +893,6 @@ describe('DetailsHeader — sk-489 close outcome (row 57)', () => {
     ).toBeTruthy();
   });
 });
-
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
 
 /**
  * sk-1048.77 — the card header in Russian: the priority and the status

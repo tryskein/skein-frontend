@@ -96,6 +96,7 @@ import i18n, { DEFAULT_LANGUAGE } from '../../../i18n/config';
 import { NewNotificationsPage } from './NotificationsPage';
 import type { ReasonPrefs } from '../../../api/notification-reasons';
 import type { ReviewPrefs } from '../../../api/review-prefs';
+import { ruOnly } from '../../../test/ruText';
 
 function Wrap({ children }: { children: ReactNode }) {
   const qc = new QueryClient({
@@ -418,18 +419,6 @@ describe('NotificationsPage — reason × channel form', () => {
  * whole suite green. Both are properties of the page, so they are pinned
  * here.
  */
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
-
 /**
  * sk-1048.78 — in Russian every reason × channel switch is named by both
  * halves: the reason (the server's label) and the channel (the Russian

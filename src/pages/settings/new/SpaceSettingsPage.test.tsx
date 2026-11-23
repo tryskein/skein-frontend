@@ -101,6 +101,7 @@ vi.mock('../../../api/auth', async (importOriginal) => {
 });
 
 import { SpaceSettingsPage } from './SpaceSettingsPage';
+import { ruOnly } from '../../../test/ruText';
 
 const ACME = 'k3x9p2qa';
 const DELETION_PREVIEW = {
@@ -1088,18 +1089,6 @@ describe('sk-733.1 — the way back to «My spaces»', () => {
  * its dictionary section, not the English fallback: a section emptied in
  * `ru.ts` would quietly fall back to English and pass every English test.
  */
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
-
 describe('the Russian space settings (spaces)', () => {
   test('the owner sees «Invite» in Russian', async () => {
     mount();

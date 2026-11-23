@@ -126,6 +126,7 @@ import {
   _resetDashboardBusForTests,
 } from '../../lib/dashboardEventBus';
 import { resetAfterAccessLoss } from '../../lib/accessLoss';
+import { ruOnly } from '../../test/ruText';
 
 const mockedScoring = vi.mocked(getDashboardScoring);
 const mockedFeed = vi.mocked(getDashboardFeed);
@@ -1971,18 +1972,6 @@ describe('ActivityDashboard — live declaration', () => {
 // counted by skein-api on the agent-on-request axis, which therefore carries
 // the owner's «API» label next to its name — in the throughput matrix header
 // and in the axis legend.
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
-
 describe('ActivityDashboard — sk-878.3.1 the directed axis is labelled API', () => {
   test('sk-1048.74 — in Russian the legend explains API in Russian (dashboard)', async () => {
     await i18n.changeLanguage('ru');

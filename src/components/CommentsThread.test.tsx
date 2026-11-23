@@ -22,6 +22,7 @@ import { AuthProvider, ME_KEY } from '../auth/AuthContext';
 import type { User } from '../api/auth';
 import { CommentsThread, splitCommentsByFilter } from './CommentsThread';
 import i18n from '../i18n/config';
+import { ruOnly } from '../test/ruText';
 
 const PROJECT_ID = 'pj-1';
 const ISSUE_ID = 'sk-1';
@@ -713,18 +714,6 @@ describe('sk-878.3.1 — an api comment is in the Humans group and marked API', 
  * its dictionary section, not the English fallback: a section emptied in
  * `ru.ts` would quietly fall back to English and pass every English test.
  */
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
-
 describe('CommentsThread in Russian (comments)', () => {
   afterEach(async () => {
     await i18n.changeLanguage('en');

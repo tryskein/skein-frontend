@@ -207,6 +207,7 @@ vi.mock('../../../lib/useReminders', () => ({
 
 import { InboxColumn } from '../InboxColumn';
 import { LayoutProvider, useLayoutState } from '../../../lib/useLayoutState';
+import { ruOnly } from '../../../test/ruText';
 
 /** Mounts the column with real layout state (collapse flag included). */
 function Harness() {
@@ -348,18 +349,6 @@ describe('Queues column — queue picker', () => {
     expect(input.value).toBe('Mentions 1');
   });
 });
-
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
 
 /**
  * sk-1048.75 — the cross-queue total in Russian: its accessible name carries

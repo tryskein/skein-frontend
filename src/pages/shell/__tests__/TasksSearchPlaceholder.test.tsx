@@ -34,6 +34,7 @@ import { vi } from 'vitest';
 
 import { TaskFilters, type TaskFiltersProps } from '../TaskFilters';
 import i18n, { DEFAULT_LANGUAGE } from '../../../i18n/config';
+import { ruOnly } from '../../../test/ruText';
 
 /** The maintainers' sentence, sk-407. Repaired typo: «Поис» → «Поиск» ("Searc" → "Search"). */
 const RU_PLACEHOLDER = 'Поиск по тексту или коду задачи';
@@ -130,18 +131,6 @@ describe('sk-407 — the Tasks search placeholder', () => {
     expect(en, 'the English placeholder must name the task code').toMatch(/code/);
   });
 });
-
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
 
 /**
  * sk-1048.76 — the Russian panel is found by its Russian accessible names.

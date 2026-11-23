@@ -75,6 +75,7 @@ import App from '../App';
 import type { RuntimeAuthConfig } from '../api/auth';
 import { ME_KEY } from '../auth/AuthContext';
 import { SignupForm, type SignupInvitation } from './SignupPage';
+import { ruOnly } from '../test/ruText';
 
 function config(over: Record<string, unknown> = {}) {
   return {
@@ -333,18 +334,6 @@ describe('a successful registration', () => {
  * its dictionary section, not the English fallback: a section emptied in
  * `ru.ts` would quietly fall back to English and pass every English test.
  */
-/**
- * The Russian text of a key, read from the Russian dictionary rather than
- * written out here (the wording is not a contract, §5), and required to
- * differ from the English one: a key missing from `ru.ts` resolves to the
- * English fallback and fails this.
- */
-function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
-  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
-  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
-  return ruText;
-}
-
 describe('the Russian signup page (auth, account)', () => {
   test('the email field and the consent are in Russian', async () => {
     await openSignup();
