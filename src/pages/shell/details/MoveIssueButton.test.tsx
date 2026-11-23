@@ -10,10 +10,10 @@
 
 import { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { MemoryRouter } from 'react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 
 import type { IssueDetail } from '../../../api/issues';
 import { listAllIssues } from '../../../api/issues';
@@ -116,6 +116,10 @@ function makeIssue(): IssueDetail {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Every scenario starts from the same answers, whatever an earlier one set.
+  vi.mocked(listDependencies).mockReset().mockResolvedValue({ outgoing: [], incoming: [] });
+  vi.mocked(addDependency).mockReset().mockResolvedValue(undefined as never);
+  vi.mocked(removeDependency).mockReset().mockResolvedValue(undefined as never);
 });
 
 afterEach(() => {
@@ -267,58 +271,76 @@ describe('MoveIssueButton — destinations within the issue’s space', () => {
 // sk-1048.33 — a move under an epic adds the new parent edge BEFORE taking the
 // old one off, so the tree never shows the issue as an orphan. If the add
 // lands and the removal is refused, the issue now has two parents: the dialog
-// stays open with the reason, and the card, its edges and the issue / edge
-// lists are refreshed to show that state.
+// stays open with the reason and shows both parents, and the card and the
+// issue lists on screen are read again.
 describe('MoveIssueButton — a move under an epic that fails half way', () => {
-  test('adds first, keeps the dialog with the error, and refreshes what the partial move changed', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-    const detailKey = ['issues', 'detail', 'sk-42'];
-    const listKey = ['issues', 'list', 'p1'];
-    const newParentEdgesKey = ['deps', 'p1', 'demo-1'];
-    qc.setQueryData(detailKey, makeIssue());
-    qc.setQueryData(listKey, { items: [] });
-    qc.setQueryData(newParentEdgesKey, { outgoing: [], incoming: [] });
-    vi.mocked(listDependencies).mockResolvedValue({
-      outgoing: [{
-        fromId: 'sk-42', toId: 'demo-0', type: 'parent-child', version: 1,
-        createdAt: '2026-05-01T10:00:00Z', metadata: {},
-      } as DependencyEdge],
+  function edge(toId: string): DependencyEdge {
+    return {
+      fromId: 'sk-42', toId, type: 'parent-child', version: 1,
+      createdAt: '2026-05-01T10:00:00Z', metadata: {},
+    } as DependencyEdge;
+  }
+
+  test('removes nothing before the add lands, keeps the dialog with the error, and re-reads what changed', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    let added = false;
+    vi.mocked(listDependencies).mockImplementation(async () => ({
+      outgoing: added ? [edge('demo-0'), edge('demo-1')] : [edge('demo-0')],
       incoming: [],
-    });
-    vi.mocked(addDependency).mockResolvedValue({} as never);
+    }));
+    let finishAdd!: () => void;
+    vi.mocked(addDependency).mockImplementation(
+      () => new Promise((resolve) => { finishAdd = () => { added = true; resolve(undefined as never); }; }),
+    );
     vi.mocked(removeDependency).mockRejectedValue(new Error('the old parent edge could not be removed'));
+
+    // Surfaces that show the card and an issue list: they count their reads.
+    let cardReads = 0;
+    let listReads = 0;
+    function OnScreen() {
+      const card = useQuery({ queryKey: ['issues', 'detail', 'sk-42'], queryFn: async () => ++cardReads });
+      const list = useQuery({ queryKey: ['issues', 'list', 'p1'], queryFn: async () => ++listReads });
+      return <output data-testid="reads">{`${card.data ?? 0}/${list.data ?? 0}`}</output>;
+    }
 
     render(
       <MantineProvider forceColorScheme="dark">
         <QueryClientProvider client={qc}>
           <MemoryRouter>
             <LayoutProvider>
+              <OnScreen />
               <MoveIssueButton issue={makeIssue()} />
             </LayoutProvider>
           </MemoryRouter>
         </QueryClientProvider>
       </MantineProvider>,
     );
+    await waitFor(() => expect(screen.getByTestId('reads').textContent).toBe('1/1'));
     fireEvent.click(screen.getByRole('button', { name: i18n.t('details:move.buttonAria', { id: 'sk-42' }) }));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByText(i18n.t('details:move.currentParent', { ids: 'demo-0' }));
-    const edgeReads = vi.mocked(listDependencies).mock.calls.length;
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: i18n.t('details:move.destination') }), {
       target: { value: 'demo-1' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('details:move.button') }));
 
-    expect(await within(dialog).findByRole('alert')).toHaveProperty('textContent', 'the old parent edge could not be removed');
-    expect(addDependency).toHaveBeenCalledWith('p1', 'sk-42', { toId: 'demo-1', type: 'parent-child' });
-    expect(removeDependency).toHaveBeenCalledWith('p1', 'sk-42', 'demo-0', 'parent-child');
-    expect(vi.mocked(addDependency).mock.invocationCallOrder[0])
-      .toBeLessThan(vi.mocked(removeDependency).mock.invocationCallOrder[0]);
-    expect(screen.getByRole('dialog')).toBe(dialog);
+    await waitFor(() => expect(addDependency).toHaveBeenCalledWith('p1', 'sk-42', { toId: 'demo-1', type: 'parent-child' }));
+    // The old edge stays while the new one is still being written.
+    await act(async () => {});
+    expect(removeDependency).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(vi.mocked(listDependencies).mock.calls.length).toBeGreaterThan(edgeReads));
-    expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(listKey)?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(newParentEdgesKey)?.isInvalidated).toBe(true);
+    await act(async () => finishAdd());
+
+    expect(await within(dialog).findByRole('alert')).toBeTruthy();
+    expect(removeDependency).toHaveBeenCalledWith('p1', 'sk-42', 'demo-0', 'parent-child');
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(await within(dialog).findByText(i18n.t('details:move.currentParents', { ids: 'demo-0, demo-1' }))).toBeTruthy();
+    // Both surfaces were read again after the failed move (how many times is not the contract).
+    await waitFor(() => {
+      const [card, list] = screen.getByTestId('reads').textContent!.split('/').map(Number);
+      expect(card).toBeGreaterThan(1);
+      expect(list).toBeGreaterThan(1);
+    });
   });
 });
