@@ -48,6 +48,7 @@ vi.mock('../../../../api/issues', async (importActual) => {
 import { listComments, type CommentDTO } from '../../../../api/issues';
 import { CommentsSection } from './CommentsSection';
 import { en } from '../../../../i18n/locales/en';
+import i18n from '../../../../i18n/config';
 
 const mockedList = vi.mocked(listComments);
 
@@ -521,7 +522,7 @@ describe('sk-878.3.1 — the API chip keeps only api comments', () => {
     await waitFor(() => expect(screen.queryByText('integration note')).toBeNull());
     const emptied = screen.getByRole('button', { name: /^API/ });
     expect(emptied.getAttribute('aria-pressed')).toBe('true');
-    expect(emptied.getAttribute('aria-label')).not.toMatch(/\(\d+\)/);
+    expect(emptied.getAttribute('aria-label')).toBe(i18n.t('comments:apiAria', { suffix: '' }));
 
     fireEvent.click(emptied);
     await waitFor(() => expect(screen.getByText('human note')).toBeTruthy());
