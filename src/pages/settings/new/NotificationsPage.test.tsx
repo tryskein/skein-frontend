@@ -419,6 +419,18 @@ describe('NotificationsPage — reason × channel form', () => {
  * here.
  */
 /**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
+/**
  * sk-1048.78 — in Russian every reason × channel switch is named by both
  * halves: the reason (the server's label) and the channel (the Russian
  * channel word). Two switches of different reasons and channels therefore
@@ -434,8 +446,17 @@ describe('NotificationsPage — the switches in Russian', () => {
     render(<Wrap><NewNotificationsPage /></Wrap>);
     await waitFor(() => expect(screen.getByText('Comment')).toBeTruthy());
 
-    const commentFeed = screen.getByRole('switch', { name: 'Comment: Лента' });
-    const reminderPush = screen.getByRole('switch', { name: 'Reminder: Push' });
+    // The channel word is where the Russian name differs from the English
+    // one; the name around it is composed by the Russian dictionary.
+    const ruT = i18n.getFixedT('ru', 'notifications');
+    const commentFeed = screen.getByRole('switch', {
+      name: ruT('reasons.switchAria', { reason: 'Comment', channel: ruOnly('notifications', 'reasons.channels.feed') }) as string,
+    });
+    const reminderPush = screen.getByRole('switch', {
+      // «Push» is the same word in both languages, so this name is read from
+      // the Russian dictionary without the «differs from English» check.
+      name: ruT('reasons.switchAria', { reason: 'Reminder', channel: ruT('reasons.channels.push') }) as string,
+    });
     expect(commentFeed).not.toBe(reminderPush);
     expect((reminderPush as HTMLInputElement).checked).toBe(true);
     expect((commentFeed as HTMLInputElement).checked).toBe(false);
