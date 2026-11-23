@@ -1,6 +1,6 @@
 /**
- * sk-1048.46 — the owner change dialog: nothing is sent until a member is
- * picked, the previous owner is said to stay a member, and a refused change
+ * sk-1048.46 — the owner change dialog: it names the current owner, nothing
+ * is sent until a member is picked, the previous owner is said to stay a member, and a refused change
  * keeps the dialog open with the reason and lets the person try again.
  *
  * The real `changeSpaceOwner` runs against a stubbed `fetch`
@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -63,12 +63,15 @@ function open() {
 const stays = () => i18n.t('spaces:owner.stays', { name: 'anna' });
 
 describe('OwnerChangeDialog', () => {
-  test('before a member is picked the change is disabled and a submitted form sends nothing', () => {
+  test('before a member is picked the change is disabled and a submitted form sends nothing', async () => {
     const { confirm } = open();
 
+    expect(screen.getByText(i18n.t('spaces:owner.current', { name: 'anna' }))).toBeTruthy();
     expect((confirm() as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.submit(confirm().closest('form')!);
+    const notCancelled = fireEvent.submit(confirm().closest('form')!);
+    await act(async () => {});
 
+    expect(notCancelled).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(stays())).toBeNull();
   });
