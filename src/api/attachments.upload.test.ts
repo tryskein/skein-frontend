@@ -110,6 +110,34 @@ describe('uploadAttachment', () => {
     expect(xhr.body?.get('policy')).toBe('cG9saWN5');
     expect(xhr.body?.get('file')).toBeInstanceOf(File);
     expect(onProgress.mock.calls).toEqual([[2, 5]]);
+    expect(JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))).toEqual({});
+  });
+
+  test.each([200, 299])('storage status %i is a finished transfer', async (status) => {
+    const pending = uploadAttachment('sk-1', new File(['hello'], 'notes.txt'));
+    const xhr = await transfer();
+    xhr.status = status;
+    xhr.onload?.();
+    await expect(pending).resolves.toEqual(ATTACHMENT);
+  });
+
+  test('a confirmation answered as { attachment } yields that attachment; a malformed one rejects', async () => {
+    fetchSpy.mockImplementation(async (url) => (String(url).endsWith('/upload-url')
+      ? json(POLICY)
+      : json({ attachment: ATTACHMENT })));
+    const wrapped = uploadAttachment('sk-1', new File(['hello'], 'notes.txt'));
+    (await transfer()).status = 204;
+    FakeXhr.sent[0].onload?.();
+    await expect(wrapped).resolves.toEqual(ATTACHMENT);
+
+    FakeXhr.sent = [];
+    fetchSpy.mockImplementation(async (url) => (String(url).endsWith('/upload-url')
+      ? json(POLICY)
+      : json({ attachment: { id: 'att 1' } })));
+    const malformed = uploadAttachment('sk-1', new File(['hello'], 'notes.txt'));
+    (await transfer()).status = 204;
+    FakeXhr.sent[0].onload?.();
+    await expect(malformed).rejects.toThrow(Error);
   });
 
   test('a file without a type is sent as octet-stream, and no comment means no commentId', async () => {
@@ -129,12 +157,26 @@ describe('uploadAttachment', () => {
       name: 'a refused transfer',
       fail: (xhr: FakeXhr) => { xhr.status = 403; xhr.statusText = 'Forbidden'; xhr.onload?.(); },
     },
+    {
+      name: 'a redirect status',
+      fail: (xhr: FakeXhr) => { xhr.status = 300; xhr.onload?.(); },
+    },
     { name: 'a network failure', fail: (xhr: FakeXhr) => xhr.onerror?.() },
   ])('$name rejects and is not confirmed', async ({ fail }) => {
     const pending = uploadAttachment('sk-1', new File(['hello'], 'notes.txt', { type: 'text/plain' }));
     fail(await transfer());
 
     await expect(pending).rejects.toThrow(Error);
+    expect(confirmed()).toEqual([]);
+  });
+
+  test('a signal already cancelled before the transfer rejects without sending the file', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(uploadAttachment('sk-1', new File(['hello'], 'notes.txt'), undefined, controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(FakeXhr.sent).toHaveLength(0);
     expect(confirmed()).toEqual([]);
   });
 
