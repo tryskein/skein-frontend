@@ -337,33 +337,50 @@ describe('useKanbanMove — optimistic move and rollback on a refusal', () => {
     });
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client }, children);
-    const moved = issue({ id: 'sk-1', version: 4, status: 'open' });
-    const other = issue({ id: 'sk-2', version: 9, status: 'open' });
-    const tasksKey = ['tasks', 'p', 'board'];
+    // The same card in two independent Tasks lists: a board and a search.
+    const boardKey = ['tasks', 'p', 'board'];
+    const searchKey = ['tasks', 'all', 'search', 'login'];
     const detailKey = issueDetailKey('sk-1');
-    client.setQueryData(tasksKey, paged([moved, other]));
+    const moved = issue({ id: 'sk-1', version: 4, status: 'open' });
+    client.setQueryData(boardKey, paged([moved, issue({ id: 'sk-2', version: 9, status: 'open' })]));
+    client.setQueryData(searchKey, paged([issue({ id: 'sk-3', version: 2, status: 'closed' })], [moved]));
     client.setQueryData(detailKey, { ...moved });
-    const before = client.getQueryData(tasksKey);
+    const rows = (key: unknown[]) =>
+      client.getQueryData<ReturnType<typeof paged>>(key)?.pages
+        .flatMap((p) => p.items)
+        .map(({ id, status, version }) => ({ id, status, version }));
 
-    let refuse: (err: unknown) => void = () => {};
-    transitionStatusSpy.mockImplementation(
-      () => new Promise((_resolve, reject) => { refuse = reject; }),
-    );
+    let refuse!: (err: unknown) => void;
+    const answer = new Promise((_resolve, reject) => { refuse = reject; });
+    transitionStatusSpy.mockImplementation(() => answer);
 
     const { result } = renderHook(() => useKanbanMove(), { wrapper });
     result.current.mutate({ item: moved, axis: 'status', from: 'open', to: 'in_progress' });
 
     await waitFor(() => expect(transitionStatusSpy).toHaveBeenCalledTimes(1));
-    const during = client.getQueryData<ReturnType<typeof paged>>(tasksKey);
-    expect(during?.pages[0].items[0]).toMatchObject({ id: 'sk-1', status: 'in_progress', version: 5 });
-    expect(during?.pages[0].items[1]).toBe(other);
+    expect(rows(boardKey)).toEqual([
+      { id: 'sk-1', status: 'in_progress', version: 5 },
+      { id: 'sk-2', status: 'open', version: 9 },
+    ]);
+    expect(rows(searchKey)).toEqual([
+      { id: 'sk-3', status: 'closed', version: 2 },
+      { id: 'sk-1', status: 'in_progress', version: 5 },
+    ]);
 
     refuse(new BusinessError(422, 'the issue is locked by another session', 'issue_locked'));
 
     await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(client.getQueryData(tasksKey)).toEqual(before);
+    expect(rows(boardKey)).toEqual([
+      { id: 'sk-1', status: 'open', version: 4 },
+      { id: 'sk-2', status: 'open', version: 9 },
+    ]);
+    expect(rows(searchKey)).toEqual([
+      { id: 'sk-3', status: 'closed', version: 2 },
+      { id: 'sk-1', status: 'open', version: 4 },
+    ]);
     expect(toastError).toHaveBeenCalledWith('the issue is locked by another session');
-    expect(client.getQueryState(tasksKey)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(boardKey)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(searchKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(detailKey)?.isInvalidated).toBe(true);
   });
 });
