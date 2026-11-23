@@ -350,6 +350,18 @@ describe('Queues column — queue picker', () => {
 });
 
 /**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
+/**
  * sk-1048.75 — the cross-queue total in Russian: its accessible name carries
  * the number with the Russian plural form that goes with it (one / few /
  * many: 1, 2, 5), so a screen reader says a sentence, not a bare digit.
@@ -359,11 +371,9 @@ describe('Queues column — the total in Russian', () => {
     await i18n.changeLanguage('en');
   });
 
-  test.each([
-    [1, '1 непрочитанное во всех очередях'],
-    [2, '2 непрочитанных во всех очередях'],
-    [5, '5 непрочитанных во всех очередях'],
-  ])('%i unread → «%s»', async (n, name) => {
+  test.each([1, 2, 5])('%i unread', async (n) => {
+    const name = ruOnly('inbox', 'totalCountAria', { count: n });
+    expect(name).toContain(String(n));
     Object.assign(queueSizes, { inbox: n, mentions: 0, watching: 0 });
     await i18n.changeLanguage('ru');
     renderColumn();

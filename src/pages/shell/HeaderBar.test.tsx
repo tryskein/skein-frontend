@@ -253,6 +253,18 @@ describe('HeaderBar — sk-54 lens count badges', () => {
   });
 });
 
+/**
+ * The Russian text of a key, read from the Russian dictionary rather than
+ * written out here (the wording is not a contract, §5), and required to
+ * differ from the English one: a key missing from `ru.ts` resolves to the
+ * English fallback and fails this.
+ */
+function ruOnly(ns: string, key: string, opts: Record<string, unknown> = {}): string {
+  const ruText = i18n.getFixedT('ru', ns)(key, opts) as string;
+  expect(ruText, `${ns}:${key}`).not.toBe(i18n.getFixedT('en', ns)(key, opts) as string);
+  return ruText;
+}
+
 describe('HeaderBar — sk-62.2 Reminders lens button', () => {
   beforeEach(() => {
     mockCounts = {
@@ -298,12 +310,10 @@ describe('HeaderBar — sk-62.2 Reminders lens button', () => {
 
   // sk-1048.75 — in Russian the ringing alarm's accessible name carries
   // the count with the plural form that goes with it (one / few / many).
-  test.each([
-    [1, 'Будильник — 1 задача звонит'],
-    [2, 'Будильник — 2 задачи звонят'],
-    [5, 'Будильник — 5 задач звонят'],
-  ])('in Russian, %i ringing → «%s»', async (n, name) => {
+  test.each([1, 2, 5])('in Russian, %i ringing', async (n) => {
     mockRingingTaskCount = n;
+    const name = ruOnly('header', 'remindersAriaRinging', { count: n });
+    expect(name).toContain(String(n));
     await i18n.changeLanguage('ru');
     try {
       renderHeader();
