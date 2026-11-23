@@ -44,6 +44,8 @@ beforeEach(() => {
   sent = [];
   createAnswers = [];
   window.localStorage.clear();
+  // Open the editor on the Type section, where the `--font-sm` field is.
+  window.localStorage.setItem('skein.theme-editor.section', 'type');
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -85,22 +87,28 @@ async function openNewTheme() {
       </QueryClientProvider>
     </MantineProvider>,
   );
-  const name = await screen.findByRole('textbox', { name: 'Name' });
-  fireEvent.change(name, { target: { value: 'Cobalt' } });
-  return name as HTMLInputElement;
+  fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Cobalt' } });
 }
 
 const posts = () => sent.filter((s) => s.method === 'POST' && s.url === '/api/v1/themes');
+const nameField = () => screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement;
+
+/** The editor's field for one token, by the id it renders with. */
+function tokenField(key: string): HTMLInputElement {
+  const el = document.getElementById(`tok-${key}`);
+  if (!(el instanceof HTMLInputElement)) throw new Error(`no editor field for ${key}`);
+  return el;
+}
 
 describe('ThemeEditorPage — saving', () => {
   test('a refused «Save as new» shows the reason and keeps the typed name for a retry', async () => {
     createAnswers.push(json(422, { error: 'theme_name_taken', message: 'a theme named Cobalt already exists' }));
-    const name = await openNewTheme();
+    await openNewTheme();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
 
     expect(await screen.findByText('a theme named Cobalt already exists')).toBeTruthy();
-    expect(name.value).toBe('Cobalt');
+    expect(nameField().value).toBe('Cobalt');
     expect(search).toBe('?new=1');
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
     await waitFor(() => expect((screen.getByRole('button', { name: 'Save as new' }) as HTMLButtonElement).disabled).toBe(false));
@@ -109,23 +117,27 @@ describe('ThemeEditorPage — saving', () => {
 
   test('«Save as new» creates the theme, opens it by the answer\'s id, and «Save» then updates that theme', async () => {
     createAnswers.push(json(201, stored('Cobalt', 'light', {})));
-    const name = await openNewTheme();
+    await openNewTheme();
     // The name is saved without the spaces around it, on create and on update.
-    fireEvent.change(name, { target: { value: '  Cobalt  ' } });
+    fireEvent.change(nameField(), { target: { value: '  Cobalt  ' } });
+    fireEvent.change(tokenField('--font-sm'), { target: { value: '13px' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
 
     await waitFor(() => expect(new URLSearchParams(search).get('theme')).toBe(THEME_ID));
     expect(posts()).toHaveLength(1);
     expect(posts()[0].body).toMatchObject({ name: 'Cobalt', base: 'light' });
-    expect(Object.keys(posts()[0].body!.variables as object).length).toBeGreaterThan(0);
+    expect((posts()[0].body!.variables as Record<string, string>)['--font-sm']).toBe('13px');
 
+    fireEvent.change(nameField(), { target: { value: ' Cobalt Deep ' } });
+    fireEvent.change(tokenField('--font-sm'), { target: { value: '15px' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(sent.some((s) => s.method === 'PATCH')).toBe(true));
     const patch = sent.find((s) => s.method === 'PATCH')!;
     expect(patch.url).toBe(`/api/v1/themes/${THEME_ID}`);
-    expect(patch.body).toMatchObject({ name: 'Cobalt', base: 'light' });
+    expect(patch.body).toMatchObject({ name: 'Cobalt Deep', base: 'light' });
+    expect((patch.body!.variables as Record<string, string>)['--font-sm']).toBe('15px');
     expect(posts()).toHaveLength(1);
   });
 });
