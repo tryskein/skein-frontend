@@ -15,7 +15,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toaster } from '../components/Toaster';
 import { releaseAllAccepted } from './inboxAcceptedRetention';
 import { useAcceptIssue } from './useAcceptIssue';
-import { inboxQueryKey, useInbox } from './useInbox';
+import { useInbox } from './useInbox';
 import { useNotificationCounts } from './useNotificationCounts';
 
 const fetchSpy = vi.fn<typeof fetch>();
@@ -25,7 +25,11 @@ const json = (body: unknown, status = 200) =>
 
 /** The server: two unaccepted Inbox issues until one is accepted. */
 let accepted: Set<string>;
-let acceptAnswer: 'ok' | 'conflict' | 'down';
+let acceptAnswer: 'ok' | 'down';
+/** The issue's version on the server; an accept must carry it (optimistic concurrency). */
+const SERVER_VERSION = 7;
+/** A held accept: the POST waits here until the test opens it. */
+let acceptGate: Promise<void> | null;
 
 const detailOf = (id: string) => ({
   id,
@@ -37,14 +41,16 @@ const detailOf = (id: string) => ({
   version: 8,
 });
 
-function serverAnswer(url: string, init?: RequestInit): Response {
+async function serverAnswer(url: string, init?: RequestInit): Promise<Response> {
   const accept = /^\/api\/v1\/issues\/([^/]+)\/accept$/.exec(url);
   if (accept && init?.method === 'POST') {
+    await acceptGate;
     if (acceptAnswer === 'down') {
       return json({ error: 'internal', message: 'database unavailable' }, 500);
     }
-    if (acceptAnswer === 'conflict') {
-      return json({ error: 'version_conflict', message: 'stale version', code: 'version_conflict' }, 422);
+    const { expectedVersion } = JSON.parse(String(init.body)) as { expectedVersion?: number };
+    if (expectedVersion !== SERVER_VERSION) {
+      return json({ error: 'version_conflict', message: 'stale version' }, 422);
     }
     accepted.add(decodeURIComponent(accept[1]));
     return json(detailOf(decodeURIComponent(accept[1])));
@@ -67,8 +73,9 @@ const INBOX_IDS = ['sk-6', 'sk-7', 'sk-8'];
 beforeEach(() => {
   accepted = new Set();
   acceptAnswer = 'ok';
+  acceptGate = null;
   fetchSpy.mockReset();
-  fetchSpy.mockImplementation(async (input, init) => serverAnswer(String(input), init));
+  fetchSpy.mockImplementation((input, init) => serverAnswer(String(input), init));
   vi.stubGlobal('fetch', fetchSpy);
   vi.spyOn(toaster, 'success').mockImplementation(() => undefined as never);
   vi.spyOn(toaster, 'error').mockImplementation(() => undefined as never);
@@ -103,14 +110,13 @@ describe('sk-1060 — the header counters after an accept', () => {
   });
 
   test('a refused accept re-reads the counters too', async () => {
-    acceptAnswer = 'conflict';
     const { view } = mount();
     await waitFor(() => expect(view.result.current.badge.counts.inbox).toBe(2));
     const readsBefore = countReads();
 
     await act(async () => {
       await expect(
-        view.result.current.accept.mutateAsync({ id: 'sk-7', expectedVersion: 7 }),
+        view.result.current.accept.mutateAsync({ id: 'sk-7', expectedVersion: SERVER_VERSION - 1 }),
       ).rejects.toThrow();
     });
 
@@ -122,9 +128,9 @@ describe('sk-1060 — the header counters after an accept', () => {
 /**
  * sk-1048.62 — what else an accept leaves behind (the hook's docblock): the
  * detail of the issue holds the server's answer (its `acceptedAt` and the new
- * version) without a fresh GET; the card accepted from the Inbox column stays
- * in its place, accepted, through a re-read of Inbox; a refused accept puts
- * the card back as it was and says why.
+ * version) without a fresh GET; the accept itself does not re-read Inbox (the
+ * card staying in place through a re-read is `inboxAcceptedRetention.test.tsx`);
+ * a refused accept puts the card back as it was and says why.
  */
 describe('accepting from the Inbox column', () => {
   const ROUTE = '/inbox';
@@ -213,17 +219,19 @@ describe('accepting from the Inbox column', () => {
     expect(cards(view).map(([, acc]) => acc)).toEqual([false, false, false]);
   });
 
-  test('the accepted card keeps its place, accepted, when Inbox is read again', async () => {
-    const { qc, view } = mountColumn();
+  test('a refused accept turns the card accepted at once, then back, and says why', async () => {
+    const { view } = mountColumn();
     await waitFor(() => expect(cards(view)).toHaveLength(3));
+    let open: () => void = () => {};
+    acceptGate = new Promise<void>((resolve) => { open = resolve; });
 
-    await act(() =>
-      view.result.current.accept.mutateAsync({ id: 'sk-7', expectedVersion: 7, retainOnRoute: ROUTE }),
-    );
-    const readsBefore = inboxReads();
-    await act(() => qc.invalidateQueries({ queryKey: inboxQueryKey }));
-    await waitFor(() => expect(inboxReads()).toBe(readsBefore + 1));
-
+    let settled: Promise<unknown> = Promise.resolve();
+    act(() => {
+      settled = view.result.current.accept
+        .mutateAsync({ id: 'sk-7', expectedVersion: SERVER_VERSION - 1, retainOnRoute: ROUTE })
+        .catch((e: unknown) => e);
+    });
+    // Before the server answers, the card is already shown accepted.
     await waitFor(() =>
       expect(cards(view)).toEqual([
         ['sk-6', false],
@@ -231,17 +239,10 @@ describe('accepting from the Inbox column', () => {
         ['sk-8', false],
       ]),
     );
-  });
 
-  test('a refused accept puts the card back and says why', async () => {
-    acceptAnswer = 'conflict';
-    const { view } = mountColumn();
-    await waitFor(() => expect(cards(view)).toHaveLength(3));
-
+    open();
     await act(async () => {
-      await expect(
-        view.result.current.accept.mutateAsync({ id: 'sk-7', expectedVersion: 7, retainOnRoute: ROUTE }),
-      ).rejects.toThrow();
+      expect(await settled).toBeInstanceOf(Error);
     });
     // Observers get cache changes on a later task; the error state comes
     // after every cache write of this mutation.
