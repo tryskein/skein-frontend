@@ -96,8 +96,10 @@ vi.mock('../../api/watchers', () => ({
 
 // listComments lives in api/issues (already spread above) — stub it via the
 // same factory so it doesn't hit the network.
+const { toastError } = vi.hoisted(() => ({ toastError: vi.fn() }));
+
 vi.mock('../../components/Toaster', () => ({
-  useToaster: () => ({ error: vi.fn(), success: vi.fn() }),
+  useToaster: () => ({ error: toastError, success: vi.fn() }),
 }));
 
 const ISSUE_ID = 'sk-42';
@@ -232,6 +234,10 @@ describe('useIssueDetail.changeStatus — F5 typed-error contract at the source'
       { wrapper },
     );
     await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'standing', version: 7 }));
+    // From here a re-read of the card never answers: the earlier state can
+    // only come back from the rollback, not from a refetch.
+    getIssueSpy.mockImplementation(() => new Promise<IssueDetail>(() => {}));
+    toastError.mockReset();
 
     const pending = result.current.changeStatus('closed', 'retiring');
 
@@ -244,6 +250,7 @@ describe('useIssueDetail.changeStatus — F5 typed-error contract at the source'
     expect(outcome).toEqual({ error: err });
     expect((outcome as { error: BusinessError }).error.code).toBe('standing_has_open_children');
     await waitFor(() => expect(result.current.issue).toMatchObject({ status: 'standing', version: 7 }));
+    expect(toastError).toHaveBeenCalledTimes(1);
   });
 
   test('a non-Error rejection is still surfaced as { error } (wrapped), never null', async () => {
