@@ -152,3 +152,22 @@ describe('ThemeToggle — saved themes', () => {
     await waitFor(() => expect(groups(reopened)).toEqual({ [chrome('theme.teamThemes')]: ['Harbour'] }));
   });
 });
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('ThemeToggle in Russian (chrome)', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test('the theme segment and the saved-themes group are in Russian', async () => {
+    await i18n.changeLanguage('ru');
+    renderToggle();
+    fireEvent.contextMenu(screen.getByRole('group', { name: 'Тема' }));
+    const menu = await screen.findByRole('menu');
+    expect(await within(menu).findByText('Мои темы')).toBeTruthy();
+  });
+});

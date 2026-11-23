@@ -26,6 +26,7 @@ vi.mock('../../shell/HeaderBar', () => ({
   HeaderBar: () => <div data-testid="header" />,
 }));
 
+import i18n from '../../../i18n/config';
 import { SettingsLayout } from './SettingsLayout';
 
 function Wrap({ children }: { children: ReactNode }) {
@@ -67,5 +68,26 @@ describe('SettingsLayout — one notification surface in the navigation', () => 
       .map((a) => a.getAttribute('href'));
     expect(hrefs).toContain('/settings/notifications');
     expect(hrefs).not.toContain('/settings/push');
+  });
+});
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('SettingsLayout in Russian (settings)', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test('the sections navigation is named in Russian', async () => {
+    await i18n.changeLanguage('ru');
+    render(
+      <Wrap>
+        <SettingsLayout active="notifications">body</SettingsLayout>
+      </Wrap>,
+    );
+    expect(screen.getByRole('navigation', { name: 'Разделы настроек' })).toBeTruthy();
   });
 });

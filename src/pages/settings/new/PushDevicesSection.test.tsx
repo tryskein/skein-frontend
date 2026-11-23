@@ -357,3 +357,20 @@ describe('PushDevicesSection — device list (sk-62.3.8)', () => {
     expect(push.removeDevice).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('PushDevicesSection in Russian (push)', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test('the block is titled in Russian', async () => {
+    await i18n.changeLanguage('ru');
+    renderSection();
+    expect(screen.getByText('Push на этом устройстве')).toBeTruthy();
+  });
+});

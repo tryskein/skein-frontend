@@ -327,3 +327,16 @@ describe('a successful registration', () => {
     expect(qc.getQueryData(ME_KEY)).toBeUndefined();
   });
 });
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('the Russian signup page (auth, account)', () => {
+  test('the email field and the consent are in Russian', async () => {
+    await openSignup();
+    expect(screen.getByRole('textbox', { name: /^Почта/ })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Принимаю условия использования и политику конфиденциальности' })).toBeTruthy();
+  });
+});

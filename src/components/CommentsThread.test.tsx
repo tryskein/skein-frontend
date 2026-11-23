@@ -21,6 +21,7 @@ import { addComment, CommentDTO, listComments } from '../api/issues';
 import { AuthProvider, ME_KEY } from '../auth/AuthContext';
 import type { User } from '../api/auth';
 import { CommentsThread, splitCommentsByFilter } from './CommentsThread';
+import i18n from '../i18n/config';
 
 const PROJECT_ID = 'pj-1';
 const ISSUE_ID = 'sk-1';
@@ -205,6 +206,13 @@ describe('sk-414.5 — the comment is a grid, and the thread is a list', () => {
     expect(list!.children[0].tagName).toBe('LI');
   });
 });
+
+function mixedKinds(): CommentDTO[] {
+  return [
+    makeComment({ id: 'c-directed', body: 'directed agent note', authorType: 'agent', authorKind: 'agent_directed', author: 'agent-alice' }),
+    makeComment({ id: 'c-autonomous', body: 'autonomous agent note', authorType: 'agent', authorKind: 'agent_autonomous', author: 'agent-bob' }),
+  ];
+}
 
 describe('CommentsThread author_kind filter (sk-16, lens moved in sk-414.5)', () => {
   function mixed(): CommentDTO[] {
@@ -697,5 +705,29 @@ describe('sk-878.3.1 — an api comment is in the Humans group and marked API', 
     const humansOff = splitCommentsByFilter(withApi(), false, true);
     expect(humansOff.hiddenHumans).toBe(1);
     expect(humansOff.hiddenAgents).toBe(0);
+  });
+});
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('CommentsThread in Russian (comments)', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test('the kind chips of agent comments are in Russian', async () => {
+    await i18n.changeLanguage('ru');
+    mockedList.mockResolvedValueOnce(mixedKinds());
+    render(
+      <Wrap>
+        <CommentsThread projectId={PROJECT_ID} issueId={ISSUE_ID} />
+      </Wrap>,
+    );
+    await waitFor(() => screen.getByText('directed agent note'));
+    expect(screen.getByText('по указанию')).toBeTruthy();
+    expect(screen.getByText('самостоятельно')).toBeTruthy();
   });
 });

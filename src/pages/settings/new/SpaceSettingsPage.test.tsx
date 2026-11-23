@@ -1082,3 +1082,16 @@ describe('sk-733.1 — the way back to «My spaces»', () => {
     expect(location).toBe('/settings/spaces');
   });
 });
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('the Russian space settings (spaces)', () => {
+  test('the owner sees «Пригласить»', async () => {
+    mount();
+    await loaded();
+    expect(screen.getByRole('button', { name: 'Пригласить' })).toBeTruthy();
+  });
+});
