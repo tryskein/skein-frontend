@@ -376,11 +376,12 @@ describe('dictionary parity at run time', () => {
     // An English plural pair (`_one` / `_other`) is matched by the Russian
     // integer categories (`_one` / `_few` / `_many`) — `_other` is Russian
     // only for fractions — or by one Russian string that needs no plural.
+    // A plural is judged as a whole: every Russian form a count can pick
+    // must be there, not just the one that shares the English suffix.
     const plural = /^(.*)_(one|other)$/;
     const missing = english.filter(([path]) => {
-      if (filled(path)) return false;
       const base = plural.exec(path)?.[1];
-      if (base === undefined) return true;
+      if (base === undefined) return !filled(path);
       return !(filled(base) || ['one', 'few', 'many'].every((form) => filled(`${base}_${form}`)));
     }).map(([path]) => path);
     expect(missing).toEqual([]);
