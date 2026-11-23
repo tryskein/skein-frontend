@@ -11,7 +11,7 @@
  * The stand: the real form on a `fetch` stub that models the endpoints.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -84,6 +84,12 @@ const requests = () =>
     .map((c) => ({ url: String(c[0]), method: c[1]?.method ?? 'GET', body: c[1]?.body ? JSON.parse(String(c[1].body)) : null }))
     .filter((r) => !r.url.startsWith('/api/auth/'));
 
+/** A request as path and parsed parameters, so their order is not part of a check. */
+const asQuery = (url: string) => {
+  const parsed = new URL(url, 'http://skein.test');
+  return { path: parsed.pathname, params: Object.fromEntries(parsed.searchParams) };
+};
+
 async function pickOleg() {
   const user = userEvent.setup();
   await user.type(screen.getByRole('textbox', { name: tt('invite.field') }), 'ole');
@@ -98,7 +104,10 @@ describe('InviteForm — an existing person', () => {
     const user = await pickOleg();
 
     const searches = requests().filter((r) => r.method === 'GET');
-    expect(searches.map((r) => r.url)).toContain('/api/v1/users?search=ole&external=false&limit=10');
+    expect(searches.map((r) => asQuery(r.url))).toContainEqual({
+      path: '/api/v1/users',
+      params: { search: 'ole', external: 'false', limit: '10' },
+    });
     expect(searches.some((r) => r.url.startsWith('/api/v1/users/directory'))).toBe(false);
 
     await user.click(screen.getByRole('button', { name: tt('invite.add') }));
@@ -114,7 +123,10 @@ describe('InviteForm — an existing person', () => {
     const user = await pickOleg();
 
     const searches = requests().filter((r) => r.method === 'GET');
-    expect(searches.map((r) => r.url)).toContain('/api/v1/users/directory?q=ole&limit=10');
+    expect(searches.map((r) => asQuery(r.url))).toContainEqual({
+      path: '/api/v1/users/directory',
+      params: { q: 'ole', limit: '10' },
+    });
     expect(searches.some((r) => r.url.startsWith('/api/v1/users?'))).toBe(false);
     expect(screen.queryByRole('button', { name: tt('invite.add') })).toBeNull();
 
@@ -144,30 +156,48 @@ describe('InviteForm — an existing person', () => {
   const searches = () => requests().filter((r) => r.method === 'GET' && r.url.startsWith('/api/v1/users'));
   const field = () => screen.getByRole('textbox', { name: tt('invite.field') }) as HTMLInputElement;
 
-  test('nothing is searched before typing; a typed word is searched once, trimmed, after the pause', async () => {
+  /**
+   * The search waits 250 ms after the last change (`InviteForm#q`). The
+   * clock is the test's: changes are fired directly and time is moved by
+   * hand, so «before the pause» and «after it» are exact, not a race with
+   * the typing speed.
+   */
+  function onTheTestClock(run: () => Promise<void>) {
+    return async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        await run();
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+  }
+  const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+  test('nothing is searched before the pause ends; then the last term is searched once, trimmed', onTheTestClock(async () => {
     renderForm(false);
-    const user = userEvent.setup();
     expect(searches()).toEqual([]);
 
-    await user.type(field(), '  ole ');
+    fireEvent.change(field(), { target: { value: 'ol' } });
+    await advance(200);
+    fireEvent.change(field(), { target: { value: '  ole ' } });
+    await advance(249);
+    expect(searches()).toEqual([]);
 
-    await screen.findByRole('button', { name: /oleg/ });
-    expect(searches().map((r) => r.url)).toEqual(['/api/v1/users/directory?q=ole&limit=10']);
-  });
+    await advance(1);
+    expect(searches().map((r) => asQuery(r.url))).toEqual([
+      { path: '/api/v1/users/directory', params: { q: 'ole', limit: '10' } },
+    ]);
+  }));
 
-  test('an address with @ is not searched as a name', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      renderForm(true);
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-      await user.type(field(), 'ole@acme.io');
-      await act(() => vi.advanceTimersByTimeAsync(1000));
+  test('an address with @ is not searched as a name', onTheTestClock(async () => {
+    renderForm(true);
 
-      expect(searches()).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    fireEvent.change(field(), { target: { value: 'ole@acme.io' } });
+    await advance(1000);
+
+    expect(searches()).toEqual([]);
+  }));
 
   test('«Add» without a picked person asks to pick one and sends nothing', async () => {
     renderForm(true);
