@@ -4,9 +4,8 @@
  * and leaves the field; Shift+Enter is a line break inside the title and saves
  * nothing yet.
  */
-import { afterEach, describe, expect, test, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import i18n from '../../../i18n/config';
 import { IssueTitleEdit } from './IssueTitleEdit';
 
@@ -20,40 +19,54 @@ function renderTitle(initial = 'Old title') {
 }
 
 describe('IssueTitleEdit — keyboard', () => {
-  test('Enter saves the trimmed title and leaves the field', async () => {
-    const user = userEvent.setup();
+  // The field also saves on its own 2 s after the last change
+  // (`useInlineEdit.ts#DEFAULT_DEBOUNCE_MS`). The clock is the test's, so
+  // that timer cannot fire between typing and the key under test, and the
+  // only save seen is the one the key made. Events are fired directly:
+  // user-event's own pauses run on the same (now stopped) clock.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The text is typed and the field still has it, unsaved, just short of the autosave. */
+  function typed(field: HTMLTextAreaElement, text: string) {
+    field.focus();
+    fireEvent.change(field, { target: { value: text } });
+    act(() => vi.advanceTimersByTime(1999));
+  }
+
+  test('Enter saves the trimmed title and leaves the field', () => {
     const { onSave, field } = renderTitle();
+    typed(field, '  Refund the order total  ');
+    expect(onSave).not.toHaveBeenCalled();
 
-    await user.clear(field);
-    await user.type(field, '  Refund the order total  ');
-    expect(document.activeElement).toBe(field);
-    await user.keyboard('{Enter}');
+    const notTaken = fireEvent.keyDown(field, { key: 'Enter' });
 
+    expect(notTaken).toBe(false);
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith('Refund the order total');
     expect(document.activeElement).not.toBe(field);
-    expect(field.value).not.toContain('\n');
   });
 
-  test('Shift+Enter breaks the line and saves nothing yet', async () => {
-    const user = userEvent.setup();
+  test('Shift+Enter is left to the field as a line break and saves nothing', () => {
     const { onSave, field } = renderTitle('First line');
+    field.focus();
 
-    await user.click(field);
-    await user.keyboard('{Shift>}{Enter}{/Shift}second');
+    const notTaken = fireEvent.keyDown(field, { key: 'Enter', shiftKey: true });
 
-    expect(field.value).toBe('First line\nsecond');
+    expect(notTaken).toBe(true);
     expect(document.activeElement).toBe(field);
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  test('a title of spaces only is not saved', async () => {
-    const user = userEvent.setup();
+  test('a title of spaces only is not saved', () => {
     const { onSave, field } = renderTitle();
+    typed(field, '   ');
 
-    await user.clear(field);
-    await user.type(field, '   ');
-    await user.keyboard('{Enter}');
+    fireEvent.keyDown(field, { key: 'Enter' });
 
     expect(document.activeElement).not.toBe(field);
     expect(onSave).not.toHaveBeenCalled();
