@@ -137,6 +137,7 @@ describe('ThemeToggle — saved themes', () => {
     renderToggle();
     await waitFor(() => expect(dataTheme()).toBe('custom'));
     const menu = await openMenu();
+    expect(screen.queryByRole('dialog')).toBeNull();
     fireEvent.click(await within(menu).findByRole('button', { name: 'Delete theme Midnight' }));
 
     const dialog = await screen.findByRole('dialog');
@@ -147,9 +148,24 @@ describe('ThemeToggle — saved themes', () => {
     expect(requests('DELETE', '/api/v1/themes/th-team')).toBe(0);
     await waitFor(() => expect(requests('GET', '/api/v1/me/theme')).toBeGreaterThan(prefReadsBefore));
     await waitFor(() => expect(dataTheme()).toBe('light'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     const reopened = await openMenu();
     await waitFor(() => expect(groups(reopened)).toEqual({ [chrome('theme.teamThemes')]: ['Harbour'] }));
+  });
+});
+
+describe('ThemeToggle — cancelling the delete', () => {
+  test('Cancel closes the dialog and deletes nothing', async () => {
+    renderToggle();
+    const menu = await openMenu();
+    fireEvent.click(await within(menu).findByRole('button', { name: 'Delete theme Midnight' }));
+    const dialog = await screen.findByRole('dialog');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: i18n.t('common:confirmDialog.cancel') as string }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(requests('DELETE', '/api/v1/themes/th-mine')).toBe(0);
   });
 });
 
