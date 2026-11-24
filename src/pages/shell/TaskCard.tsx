@@ -323,6 +323,12 @@ export const TaskCard = memo(function TaskCard({ item, selected, searchQuery, co
       // pane or pop-up window closes; the board's cards and the tree's
       // rows carry the same attribute.
       data-issue-id={item.id}
+      // The card opens its task in Details, and the selected card is the
+      // task Details is showing: the current item of the list, not a
+      // toggle (a second press does not deselect, so no `aria-pressed`)
+      // and not an option (the list is no listbox, and `aria-selected` is
+      // not allowed on a button).
+      aria-current={selected ? 'true' : undefined}
       onClick={() => onSelect(item)}
     >
       {isRinging ? (

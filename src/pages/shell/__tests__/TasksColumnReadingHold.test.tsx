@@ -249,7 +249,7 @@ function column(path: string, budilnikMode = false) {
           <PathProbe />
           <LiveEventsProvider>
             <Routes>
-              {['/projects/:alias', '/'].map((p) => (
+              {['/projects/:alias', '/projects/:alias/issues/:id', '/'].map((p) => (
                 <Route
                   key={p}
                   path={p}
@@ -1243,10 +1243,10 @@ describe('sk-1048.67 — the result of pasted codes', () => {
   });
 
   /** Pastes into the search box; answers whether the paste was left to the box (not taken). */
-  async function pasteInto(text: string): Promise<boolean> {
+  async function pasteInto(text: string, path = '/projects/demo'): Promise<boolean> {
     server(1, 3);
     serve();
-    await act(async () => { render(column('/projects/demo')); });
+    await act(async () => { render(column(path)); });
     await advance(500);
     const search = screen.getByRole('textbox', { name: /search/i });
     let leftToTheBox = true;
@@ -1380,5 +1380,20 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     });
 
     expect(shownPath).toBe('/issues/demo-1');
+  });
+
+  test('the card of the issue open in Details is the current one, and only it', async () => {
+    vi.mocked(lookupIdBatch).mockResolvedValueOnce({
+      items: [found('demo-1', 'Refund total'), found('demo-9', 'Invoice layout')],
+    } as Awaited<ReturnType<typeof lookupIdBatch>>);
+
+    await pasteInto('demo-9 demo-1', '/projects/demo/issues/demo-1');
+
+    expect(screen.getAllByRole('button', { current: true }).map((el) => el.getAttribute('aria-label'))).toEqual([
+      i18n.t('tasks:card.openIssue', { id: 'demo-1', title: 'Refund total' }),
+    ]);
+    expect(
+      screen.getByRole('button', { name: i18n.t('tasks:card.openIssue', { id: 'demo-9', title: 'Invoice layout' }) as string, current: false }),
+    ).toBeTruthy();
   });
 });

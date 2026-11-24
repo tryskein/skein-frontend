@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
+import i18n from '../../../i18n/config';
 import { TaskCard } from '../TaskCard';
 import {
   LIST_DEFAULT_CARD_FIELDS,
@@ -40,6 +41,7 @@ function renderCard(
   item: IssueSummary,
   isRinging = false,
   fields: number = DEFAULT_FIELDS,
+  selected = false,
 ) {
   // sk-194.5.2.8.5 — TaskCard itself no longer reads any query (the
   // ringing-reminder set is lifted to the list owner and arrives as the
@@ -54,7 +56,7 @@ function renderCard(
         <MemoryRouter>
           <TaskCard
             item={item}
-            selected={false}
+            selected={selected}
             searchQuery=""
             componentNames={new Map()}
             isRinging={isRinging}
@@ -68,6 +70,23 @@ function renderCard(
 }
 
 afterEach(() => cleanup());
+
+/**
+ * sk-1062 — the card of the task open in Details says so to assistive tech,
+ * not only by its paint: it is the current item of the list.
+ */
+describe('TaskCard — the selected card is the current one', () => {
+  const name = i18n.t('tasks:card.openIssue', { id: 'sk-1', title: 'hello world' }) as string;
+
+  test.each([
+    [true, true],
+    [false, false],
+  ])('selected=%s → current=%s', (selected, current) => {
+    renderCard(issue(), false, DEFAULT_FIELDS, selected);
+    expect(screen.getByRole('button', { name, current })).toBeTruthy();
+    expect(screen.queryByRole('button', { name, current: !current })).toBeNull();
+  });
+});
 
 describe('TaskCard — sk-53 relevance badge', () => {
   test('renders the relevance badge when score is present (search row)', () => {
