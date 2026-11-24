@@ -101,3 +101,19 @@ file contains no `${…}` placeholder, and the Dockerfile installs no entrypoint
 hook: it copies `nginx.conf` straight to `conf.d/default.conf`. An earlier
 comment in the file named a `SKEIN_BFF_URL` templated by `envsubst`; no such
 variable is read. To point the proxy somewhere else, edit the file and rebuild.
+
+## No variable for search indexing
+
+Every instance forbids indexing, in the cloud and self-hosted alike; the image
+is the same and no variable changes it. `/robots.txt` is the file
+`public/robots.txt` (`User-agent: *`, `Disallow: /`), which the image serves
+from `/usr/share/nginx/html/robots.txt` as `text/plain; charset=utf-8`
+(`location = /robots.txt` in `nginx.conf`). Every response of nginx also
+carries `X-Robots-Tag: noindex, nofollow` (both header snippets,
+`nginx-security-headers.conf` and `nginx-token-page-headers.conf`).
+
+To serve other crawling rules, mount your own file over
+`/usr/share/nginx/html/robots.txt`: a volume in compose, a ConfigMap with
+`subPath` in Kubernetes. Without a file
+at that path `/robots.txt` is a 404, not the SPA. The `X-Robots-Tag` header is
+not removed this way; that takes your own `nginx.conf` and header snippets.
