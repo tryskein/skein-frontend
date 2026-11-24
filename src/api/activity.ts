@@ -44,20 +44,20 @@ export interface ActivityActor extends PersonStatus {
 export interface ActivityEntity {
   type: ActivityEntityType;
   /** Hierarchical id for issues; uuid string for projects/components.
-   * Optional because a HARD-redacted row (external caller, inaccessible
-   * project — sk-163.18) drops this field entirely (`omitempty`); every
-   * render path MUST guard on `redacted` before dereferencing it. */
+   * Optional because a redacted row (inaccessible project, SOFT and HARD
+   * alike — sk-163.18, sk-1007) drops this field entirely (`omitempty`);
+   * every render path MUST guard on `redacted` before dereferencing it. */
   id?: string;
   /** Omitted by the backend (`omitempty`) for entities with no canonical
    * title — dep / component rows, an issue whose title JOIN missed, OR a
    * redacted row whose content was stripped server-side. */
   title?: string;
-  /** UUID of the scoping project. Optional — dropped on a HARD-redacted
-   * row (sk-163.18). Guard on `redacted`. */
+  /** UUID of the scoping project. Optional — dropped on a redacted row,
+   * SOFT and HARD alike (sk-1007). Guard on `redacted`. */
   projectId?: string;
   /** Compact slug (e.g. "demo") for breadcrumbs / route building. Omitted
    * (`omitempty`) when the project JOIN yielded no prefix, OR dropped on
-   * a HARD-redacted row (sk-163.18). */
+   * a redacted row, SOFT and HARD alike (sk-1007). */
   projectIdPrefix?: string;
 }
 
@@ -123,18 +123,20 @@ export interface ActivityEntry {
    * events.payload.changes[]. Absent for every other event type.
    */
   changes?: ActivityChange[];
-  /** UUID of the scoping project. Optional — dropped on a HARD-redacted
-   * row (sk-163.18); the feed keys off the event `id`, not `projectId`. */
+  /** UUID of the scoping project. Optional — dropped on a redacted row,
+   * SOFT and HARD alike (sk-1007); the feed keys off the event `id`, not
+   * `projectId`. */
   projectId?: string;
   /**
    * Server flags rows whose project the caller can't see. Two redaction
    * levels share this flag (sk-163.18):
-   *   - SOFT (internal war-room): `title` / `summary` stripped; issue
-   *     `id`, project prefix and `projectId` KEPT.
-   *   - HARD (external caller): the above PLUS `entity.id`,
-   *     `entity.projectIdPrefix`, `entity.projectId` and top-level
-   *     `projectId` all dropped — every stable project/task identifier
-   *     is absent from the wire, not merely blurred in CSS.
+   *   - SOFT (a participant of the space): `title` / `summary` and the
+   *     diff (`field`, `oldValue`, `newValue`, `changes`) stripped, and
+   *     `entity.id`, `entity.projectIdPrefix`, `entity.projectId` and
+   *     top-level `projectId` dropped (sk-1007) — no stable project/task
+   *     identifier reaches the wire. The space id, actor, type and time
+   *     are kept.
+   *   - HARD (external caller): the above PLUS the space id dropped.
    * The frontend renders redacted rows with a 🔒 in place of the id /
    * prefix and an inactive (non-navigable) link. `DashboardFeedEntry`
    * aliases this type and inherits the field.

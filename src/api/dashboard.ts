@@ -139,12 +139,12 @@ export async function getDashboardFeed(q: FeedQuery = {}): Promise<DashboardFeed
  * fires when an agent lock is >25 min old (auto-release ~5 min away).
  */
 export interface InProgressRow {
-  /** Hierarchical issue id. Optional — dropped on a HARD-redacted row
-   * (sk-163.18); guard on `redacted` and key by a composite instead. */
+  /** Hierarchical issue id. Optional — dropped on a redacted row, SOFT and
+   * HARD alike (sk-1007); guard on `redacted` and key by a composite instead. */
   issueId?: string;
-  /** Project UUID. Optional — dropped on a HARD-redacted row. */
+  /** Project UUID. Optional — dropped on a redacted row, SOFT and HARD alike. */
   projectId?: string;
-  /** Compact project slug. Optional — dropped on a HARD-redacted row. */
+  /** Compact project slug. Optional — dropped on a redacted row, SOFT and HARD alike. */
   projectPrefix?: string;
   title: string;
   /** Known wire IssueType, or any string for forward-compat. */
@@ -165,12 +165,13 @@ export interface InProgressRow {
   /**
    * Server flags rows whose project the caller can't see. Two redaction
    * levels share this flag (sk-163.18):
-   *   - SOFT (internal war-room): `title` stripped; `issueId`,
-   *     `projectPrefix`, `projectId` KEPT.
-   *   - HARD (external caller): the above PLUS `issueId`,
-   *     `projectPrefix`, `projectId` and `lockedBySession` all dropped
-   *     from the wire. `assignee` / `status` / `priority` / timestamps
-   *     are KEPT (the accepted "people + shape" exposure).
+   *   - SOFT (a participant of the space): `title` stripped and
+   *     `issueId`, `projectPrefix`, `projectId` dropped from the wire
+   *     (sk-1007); `spaceId` and `lockedBySession` KEPT.
+   *   - HARD (external caller): the above PLUS `spaceId` and
+   *     `lockedBySession` dropped.
+   * Both levels KEEP `assignee` / `type` / `status` / `priority` /
+   * timestamps / `staleLock` (the accepted "people + shape" exposure).
    * The frontend renders a 🔒 in place of the id / prefix, colours the
    * row by a constant bucket (not the empty prefix), and keys the row by
    * a composite of kept fields + index (issueId is absent).
