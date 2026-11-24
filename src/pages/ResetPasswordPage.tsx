@@ -28,10 +28,12 @@ import {
  * cookie came in. So the page shows `reset.done` as soon as the 204 arrives
  * and then reads «who is signed in?» afresh (`useAuth().rereadSession`, which
  * drops a read sent with the cookie from before the submit). The link under
- * `reset.done` follows only the answer of that read: it opens the app when
- * the answer names a user. While the read is pending, when it names nobody
- * and when it fails, the link offers to sign in, whatever the auth context
- * knew before the submit. `reset.done` only says that the password has
+ * `reset.done` opens the app only while the auth context still names the
+ * user that read confirmed; the confirmation is that read's answer, never
+ * what the context knew before the submit. While the read is pending, when
+ * it names nobody, when it fails, and once the context names nobody else or
+ * someone else (the session ended later: a 401, a logout on deactivation),
+ * the link offers to sign in. `reset.done` only says that the password has
  * changed, so it is true either way. A dead link ("Link expired") offers a
  * new one.
  *
@@ -41,7 +43,7 @@ import {
 export function ResetPasswordPage() {
   const { t } = useTranslation('auth');
   const { token = '' } = useParams<{ token: string }>();
-  const { rereadSession } = useAuth();
+  const { user, rereadSession } = useAuth();
   const config = useAuthConfig();
   useNoReferrer();
   const [password, setPassword] = useState('');
@@ -50,8 +52,9 @@ export function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<'form' | 'done' | 'expired'>('form');
   const [submitting, setSubmitting] = useState(false);
-  // Whether the read of `/me` after the 204 confirmed a signed-in user.
-  const [signedIn, setSignedIn] = useState(false);
+  // The user the read of `/me` after the 204 confirmed, if any.
+  const [confirmedUserId, setConfirmedUserId] = useState<string | null>(null);
+  const signedIn = confirmedUserId !== null && user?.id === confirmedUserId;
 
   const title = t('reset.title');
   if (config.isLoading) {
@@ -104,9 +107,9 @@ export function ResetPasswordPage() {
     // so the link follows that session and not the one known before the
     // submit. A failed read leaves the link on the sign-in.
     try {
-      setSignedIn((await rereadSession()) !== null);
+      setConfirmedUserId((await rereadSession())?.id ?? null);
     } catch {
-      setSignedIn(false);
+      setConfirmedUserId(null);
     }
   };
 

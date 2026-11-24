@@ -7,11 +7,12 @@
  * (`api/auth.ts#completePasswordReset`). The success view appears with the
  * 204; its link opens the app only when a read of `/me` made after the 204
  * names a user, and offers to sign in otherwise — also while that read is
- * pending or after it failed, whoever the page knew before the submit.
+ * pending or after it failed, whoever the page knew before the submit, and
+ * again once the session that read confirmed has ended.
  *
- * The real `AuthProvider` and page; stubbed is `api/auth` at the module
- * boundary: `/me` answers `server.before` until the reset and then what
- * `server.afterReset` names, and a test may hold single reads.
+ * The real `AuthProvider`, app query client and page; stubbed is `api/auth`
+ * at the module boundary: `/me` answers `server.before` until the reset and
+ * then what `server.afterReset` names, and a test may hold single reads.
  */
 import type { TOptions } from 'i18next';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -21,8 +22,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import i18n from '../i18n/config';
 import type { User } from '../api/auth';
-import { ApiError } from '../api/client';
+import { ApiError, UnauthorizedError } from '../api/client';
 import { currentAppearance, noteSignedOut } from '../auth/appearance';
+import { createAppQueryClient } from '../lib/appQueryClient';
 
 function person(id: string, username: string): User {
   return { id, email: `${username}@example.test`, username, name: username, role: 'user', createdAt: null, lastLoginAt: null };
@@ -43,6 +45,13 @@ async function answerMe(): Promise<User | null> {
   if (!server.reset) return server.before;
   if (server.afterReset === 'fails') throw new ApiError(500, 'HTTP 500');
   return server.afterReset === 'owner' ? OWNER : null;
+}
+/** The answers `/me` has given, in call order. */
+let answers: Promise<User | null>[] = [];
+function trackedAnswer(): Promise<User | null> {
+  const answer = answerMe();
+  answers.push(answer);
+  return answer;
 }
 const meApi = vi.fn<(signal?: AbortSignal) => Promise<User | null>>();
 const completePasswordReset = vi.fn(async (_token: string, _password: string) => {
@@ -88,15 +97,26 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-/** Lets every pending promise continuation run. */
-async function settle() {
+/**
+ * Waits until `answer` has settled, then for one macrotask: the
+ * continuations of that answer (the query, the page's handler) have run by
+ * then. Used before checking that a state did NOT change after an answer;
+ * a state that must appear is awaited with `waitFor` instead.
+ */
+async function afterSettled(answer: Promise<unknown>) {
   await act(async () => {
+    await answer.catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
-function renderReset() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+/** Waits for the `n`-th read of `/me` and then as `afterSettled`. */
+async function afterAnswer(n: number) {
+  await waitFor(() => expect(answers.length).toBeGreaterThanOrEqual(n));
+  await afterSettled(answers[n - 1]);
+}
+
+function renderReset(client: QueryClient = createAppQueryClient()) {
   return render(
     <MantineProvider>
       <QueryClientProvider client={client}>
@@ -123,12 +143,20 @@ async function submitNewPassword() {
 const openAppLink = () => screen.queryByRole('link', { name: t('auth:reset.openApp') });
 const signInLink = () => screen.queryByRole('link', { name: t('auth:links.signIn') });
 
+/** The success view replaced the form. */
+async function expectSuccessView() {
+  await screen.findByRole('status');
+  expect(screen.queryByLabelText(new RegExp(`^${t('auth:reset.passwordLabel')}`), { selector: 'input' })).toBeNull();
+  expect(screen.queryByRole('link', { name: t('auth:reset.requestNew') })).toBeNull();
+}
+
 beforeEach(() => {
   server.before = null;
   server.afterReset = 'owner';
   server.reset = false;
   vi.clearAllMocks();
-  meApi.mockReset().mockImplementation(answerMe);
+  answers = [];
+  meApi.mockReset().mockImplementation(trackedAnswer);
   noteSignedOut();
 });
 
@@ -145,16 +173,14 @@ describe('ResetPasswordPage — success after the 204', () => {
     server.afterReset = after;
     renderReset();
     // The page holds the answer from before the submit.
-    await waitFor(() => expect(meApi).toHaveBeenCalledTimes(1));
-    await settle();
+    await afterAnswer(1);
     await submitNewPassword();
     // The read after the reset has answered.
-    await waitFor(() => expect(meApi).toHaveBeenCalledTimes(2));
-    await settle();
+    await afterAnswer(2);
 
-    expect(screen.getByRole('status').textContent).toBe(t('auth:reset.done'));
+    await expectSuccessView();
     if (link === 'openApp') {
-      expect(openAppLink()?.getAttribute('href')).toBe('/');
+      await waitFor(() => expect(openAppLink()?.getAttribute('href')).toBe('/'));
       expect(signInLink()).toBeNull();
     } else {
       expect(signInLink()?.getAttribute('href')).toBe('/login');
@@ -170,11 +196,13 @@ describe('ResetPasswordPage — success after the 204', () => {
     // The form is ready while the first read of /me is still out.
     await submitNewPassword();
     await waitFor(() => expect(completePasswordReset).toHaveBeenCalledTimes(1));
-    await settle();
+    // The read after the reset has answered: the owner.
+    await afterAnswer(1);
+    await waitFor(() => expect(openAppLink()?.getAttribute('href')).toBe('/'));
 
     // That read answers now, with the state from before the reset: nobody.
     early.resolve(null);
-    await settle();
+    await afterSettled(early.promise);
 
     expect(openAppLink()?.getAttribute('href')).toBe('/');
     expect(signInLink()).toBeNull();
@@ -183,22 +211,42 @@ describe('ResetPasswordPage — success after the 204', () => {
 
   test('the success view appears with the 204 and offers the sign-in until the read after it confirms a user', async () => {
     renderReset();
-    await waitFor(() => expect(meApi).toHaveBeenCalledTimes(1));
-    await settle();
+    await afterAnswer(1);
     const after = deferred<User | null>();
     meApi.mockImplementationOnce(() => after.promise);
     await submitNewPassword();
     await waitFor(() => expect(meApi).toHaveBeenCalledTimes(2));
-    await settle();
 
-    expect(screen.getByRole('status').textContent).toBe(t('auth:reset.done'));
+    await expectSuccessView();
     expect(screen.queryByRole('button', { name: t('auth:reset.submitting') })).toBeNull();
     expect(signInLink()?.getAttribute('href')).toBe('/login');
     expect(openAppLink()).toBeNull();
 
     after.resolve(OWNER);
-    await settle();
-    expect(openAppLink()?.getAttribute('href')).toBe('/');
+    await waitFor(() => expect(openAppLink()?.getAttribute('href')).toBe('/'));
     expect(signInLink()).toBeNull();
+  });
+
+  test('the link turns to the sign-in when the session the read confirmed ends later', async () => {
+    const client = createAppQueryClient();
+    renderReset(client);
+    await afterAnswer(1);
+    await submitNewPassword();
+    await waitFor(() => expect(openAppLink()?.getAttribute('href')).toBe('/'));
+
+    // Another request of the page meets a 401: the session has ended.
+    await act(async () => {
+      await client
+        .fetchQuery({
+          queryKey: ['profile'],
+          queryFn: async () => {
+            throw new UnauthorizedError();
+          },
+        })
+        .catch(() => undefined);
+    });
+
+    await waitFor(() => expect(signInLink()?.getAttribute('href')).toBe('/login'));
+    expect(openAppLink()).toBeNull();
   });
 });
