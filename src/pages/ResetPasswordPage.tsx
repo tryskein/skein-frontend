@@ -25,10 +25,11 @@ import {
  * `api/auth.ts#completePasswordReset`): every session of the account ends,
  * API keys keep working, the cookie this browser sent is revoked whoever it
  * belonged to, and the 204 sets a cookie of the owner's new session, whatever
- * cookie came in. Success says "Password changed"; the link under it is
- * chosen by `user` as loaded before the submit (open the app if someone was
- * signed in here, otherwise sign in), not by the session the 204 issued. A
- * dead link ("Link expired") offers a new one.
+ * cookie came in. Success shows `reset.done`; the link under it is chosen
+ * from the current auth context (`useAuth().user`: open the app if someone is
+ * signed in, otherwise sign in). Reset completion does not refresh that
+ * context, so the link follows the session known before the submit, not the
+ * session the 204 issued. A dead link ("Link expired") offers a new one.
  *
  * Leaving is a document load (see `InvitePage.tsx`): this document carries
  * the token pages' headers.
