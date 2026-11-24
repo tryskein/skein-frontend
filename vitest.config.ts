@@ -18,5 +18,14 @@ export default defineConfig({
     globals: true,
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
+    // An error thrown outside any test (a timer or a rejected promise that
+    // outlives its test) reaches the main process as a serialized copy.
+    // StrykerJS cannot turn that copy into text, so its mutation report
+    // loses the message; print it here so the run log keeps it. Returning
+    // nothing leaves the error counted as before: the run still fails.
+    onUnhandledError(error) {
+      const { name, message, stack } = error as Partial<Error>;
+      console.error('[unhandled error]', name, message, stack);
+    },
   },
 });
