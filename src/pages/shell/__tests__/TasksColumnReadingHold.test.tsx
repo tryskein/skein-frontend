@@ -1374,6 +1374,12 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     const notFound = list.getByRole('listitem', { name: tt('blob.notFoundAria', { code: 'demo-5' }) });
     expect(within(notFound).queryAllByRole('button')).toEqual([]);
     expect(within(notFound).queryAllByRole('link')).toEqual([]);
+    // Nor does the item itself act: clicking it opens nothing.
+    const before = shownPath;
+    await act(async () => {
+      fireEvent.click(notFound);
+    });
+    expect(shownPath).toBe(before);
 
     await act(async () => {
       fireEvent.click(list.getByRole('button', { name: tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' }) }));

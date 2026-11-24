@@ -247,6 +247,13 @@ function openTheQueueCard(container: HTMLElement): void {
   fireEvent.click(within(column).getByRole('button', { name: /Open issue sk-1/i }));
 }
 
+/** The Tasks column; the Queues column carries a card of the same issue. */
+function tasksColumn(container: HTMLElement): HTMLElement {
+  const column = container.querySelector('.col-tasks');
+  if (!(column instanceof HTMLElement)) throw new Error('the Tasks column is not rendered');
+  return column;
+}
+
 beforeEach(() => {
   tasksRows = [ISSUE];
   window.localStorage.clear();
@@ -301,9 +308,10 @@ describe('sk-405 — opening a queue card leaves Projects and Tasks standing', (
     );
     openTheQueueCard(container);
 
-    const selected = container.querySelector('.task-card.selected');
-    expect(selected).not.toBeNull();
-    expect(selected?.textContent).toContain('Sample inbox issue');
+    // sk-1062 — the opened card is the current item of the Tasks list, and
+    // the only one: found by its accessible state, not by its paint.
+    const current = within(tasksColumn(container)).getAllByRole('button', { current: true });
+    expect(current.map((el) => el.getAttribute('aria-label'))).toEqual(['Open issue sk-1: Sample inbox issue']);
   });
 
   test('desktop: an issue outside the current selection leaves the Tasks list untouched', () => {
@@ -322,7 +330,7 @@ describe('sk-405 — opening a queue card leaves Projects and Tasks standing', (
     expect(container.querySelector('.col-tasks')).not.toBeNull();
     expect(container.querySelectorAll('.task-card')).toHaveLength(1);
     expect(container.querySelector('.task-card')?.textContent).toContain('Some other task');
-    expect(container.querySelector('.task-card.selected')).toBeNull();
+    expect(within(tasksColumn(container)).queryAllByRole('button', { current: true })).toEqual([]);
     // …and the queue still marks it, so the user is not left with no
     // indication of what is open.
     expect(container.querySelector('.inbox-card.selected')).not.toBeNull();
