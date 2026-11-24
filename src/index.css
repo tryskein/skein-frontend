@@ -7036,6 +7036,12 @@ a.search-result-title:focus-visible {
   gap: 6px;
 }
 
+/* The list-item wrapper of a found chip: a flex box, so the button inside
+   sits without the inline baseline gap and the row keeps its height. */
+.blob-chip-item {
+  display: flex;
+}
+
 .blob-chip {
   display: inline-flex;
   align-items: center;

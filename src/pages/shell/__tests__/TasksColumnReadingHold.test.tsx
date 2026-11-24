@@ -1267,9 +1267,20 @@ describe('sk-1048.67 — the result of pasted codes', () => {
       .map((el) => el.getAttribute('aria-label'));
   };
 
+  /**
+   * The chips, one per item of the chips list, in screen order: a found chip
+   * is a button inside its item (named by the button), a not-found chip is a
+   * plain item with no control in it (named by the item).
+   */
   const chips = () =>
     within(screen.getByRole('list', { name: tt('blob.chipsAria') })).getAllByRole('listitem')
-      .map((el) => [el.tagName, el.getAttribute('aria-label')]);
+      .map((li) => {
+        const control = within(li).queryAllByRole('button');
+        expect(within(li).queryAllByRole('link')).toEqual([]);
+        return control.length > 0
+          ? ['button', ...control.map((b) => b.getAttribute('aria-label'))]
+          : ['item', li.getAttribute('aria-label')];
+      });
 
   test('found and not-found codes: the counts, the chips in paste order and the found cards', async () => {
     vi.mocked(lookupIdBatch).mockResolvedValueOnce({
@@ -1283,9 +1294,9 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     expect(screen.getByText(tt('blob.extracted', { count: 3 }))).toBeTruthy();
     expect(screen.getByText(tt('blob.foundSummary', { found: 2, notFound: 1 }))).toBeTruthy();
     expect(chips()).toEqual([
-      ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-9', title: 'Invoice layout' })],
-      ['SPAN', tt('blob.notFoundAria', { code: 'demo-5' })],
-      ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
+      ['button', tt('blob.openChipWithTitle', { code: 'demo-9', title: 'Invoice layout' })],
+      ['item', tt('blob.notFoundAria', { code: 'demo-5' })],
+      ['button', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
     ]);
     // The cards of the found issues, in paste order.
     expect(shownCards([['demo-1', 'Refund total'], ['demo-9', 'Invoice layout']])).toEqual([
@@ -1304,8 +1315,8 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     expect(screen.getByText(tt('blob.extracted', { count: 2 }))).toBeTruthy();
     // A found issue without a title is still named by its code.
     expect(chips()).toEqual([
-      ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
-      ['BUTTON', tt('blob.openChip', { code: 'demo-2' })],
+      ['button', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
+      ['button', tt('blob.openChip', { code: 'demo-2' })],
     ]);
     expect(screen.queryByText(tt('blob.foundSummary', { found: 2, notFound: 0 }))).toBeNull();
     expect(shownCards([['demo-1', 'Refund total']])).toHaveLength(1);
@@ -1321,7 +1332,7 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     await pasteInto('demo-7 demo-8');
 
     expect(screen.getByText(tt('blob.foundSummary', { found: 0, notFound: 2 }))).toBeTruthy();
-    expect(chips().map(([tag]) => tag)).toEqual(['SPAN', 'SPAN']);
+    expect(chips().map(([kind]) => kind)).toEqual(['item', 'item']);
     expect(screen.getByText(tt('blob.emptyNoMatches'))).toBeTruthy();
     expect(shownCards([['demo-7', 'title demo-7'], ['demo-8', 'title demo-8']])).toEqual([]);
   });
@@ -1360,10 +1371,12 @@ describe('sk-1048.67 — the result of pasted codes', () => {
     } as Awaited<ReturnType<typeof lookupIdBatch>>);
     await pasteInto('demo-1 demo-5');
     const list = within(screen.getByRole('list', { name: tt('blob.chipsAria') }));
-    expect(list.getByRole('listitem', { name: tt('blob.notFoundAria', { code: 'demo-5' }) }).tagName).toBe('SPAN');
+    const notFound = list.getByRole('listitem', { name: tt('blob.notFoundAria', { code: 'demo-5' }) });
+    expect(within(notFound).queryAllByRole('button')).toEqual([]);
+    expect(within(notFound).queryAllByRole('link')).toEqual([]);
 
     await act(async () => {
-      fireEvent.click(list.getByRole('listitem', { name: tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' }) }));
+      fireEvent.click(list.getByRole('button', { name: tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' }) }));
     });
 
     expect(shownPath).toBe('/issues/demo-1');

@@ -123,24 +123,28 @@ export function BlobCodesResult({
         <div className="blob-result-chips" role="list" aria-label={t('blob.chipsAria')}>
           {chips.map((chip) =>
             chip.found ? (
-              <button
-                key={chip.code}
-                type="button"
-                role="listitem"
-                className="blob-chip blob-chip-found"
-                title={chip.item?.title ?? chip.code}
-                aria-label={
-                  chip.item?.title
-                    ? t('blob.openChipWithTitle', {
-                        code: chip.code,
-                        title: chip.item.title,
-                      })
-                    : t('blob.openChip', { code: chip.code })
-                }
-                onClick={() => openCode(chip.code)}
-              >
-                {chip.code}
-              </button>
+              // The list item and the control are two elements: a
+              // `role` on the <button> itself would replace its button
+              // role, and assistive tech would announce a list item that
+              // gives no hint it opens the task.
+              <span key={chip.code} role="listitem" className="blob-chip-item">
+                <button
+                  type="button"
+                  className="blob-chip blob-chip-found"
+                  title={chip.item?.title ?? chip.code}
+                  aria-label={
+                    chip.item?.title
+                      ? t('blob.openChipWithTitle', {
+                          code: chip.code,
+                          title: chip.item.title,
+                        })
+                      : t('blob.openChip', { code: chip.code })
+                  }
+                  onClick={() => openCode(chip.code)}
+                >
+                  {chip.code}
+                </button>
+              </span>
             ) : (
               <span
                 key={chip.code}
