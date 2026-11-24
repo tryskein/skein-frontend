@@ -106,6 +106,15 @@ interface AuthContextValue {
    * out and push is not touched.
    */
   logout: (kind: LogoutKind, owner?: Appearance | null) => Promise<LogoutResult>;
+  /**
+   * Reads «who is signed in?» afresh after the server replaced this
+   * browser's session cookie (a completed password reset). A read of `/me`
+   * still in flight was sent with the previous cookie: it is cancelled, and
+   * its answer reaches neither the cache nor the appearance store. Resolves
+   * with the answer of the new read; rejects when that read fails, and the
+   * context then keeps its previous answer.
+   */
+  rereadSession: () => Promise<User | null>;
 }
 
 /**
@@ -165,17 +174,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Every answer goes through the appearance store as it arrives, before it
   // reaches the cache: an asynchronous push step of the previous appearance
   // is stale from that moment (`auth/appearance.ts`).
+  //
+  // The query's abort signal reaches the request. A read that was cancelled
+  // or replaced (`rereadSession`, a refetch that cancels the running one)
+  // may still get its answer; it is dropped before the appearance store
+  // sees it, as the cache drops it.
   const meReadReason = useRef<MeReadReason>('load');
-  const meQuery = useQuery<User | null>({
-    queryKey: ME_KEY,
-    queryFn: async () => {
+  const readMe = useCallback(
+    async ({ signal }: { signal: AbortSignal }): Promise<User | null> => {
       const reason = meReadReason.current;
       meReadReason.current = 'load';
-      const user = await meApi();
+      const user = await meApi(signal);
+      signal.throwIfAborted();
       const previous = queryClient.getQueryData<User | null>(ME_KEY);
       noteMeAnswer(user?.id ?? null, previous === undefined ? undefined : (previous?.id ?? null), reason);
       return user;
     },
+    [queryClient],
+  );
+  const meQuery = useQuery<User | null>({
+    queryKey: ME_KEY,
+    queryFn: readMe,
     retry: false,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -391,6 +410,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [loginMutation],
   );
 
+  // `fetchQuery` alone would join a read already in flight when the cache
+  // holds no answer yet (only a query with data cancels its running fetch on
+  // a refetch), and that read carries the cookie from before the change.
+  const rereadSession = useCallback(async (): Promise<User | null> => {
+    await queryClient.cancelQueries({ queryKey: ME_KEY, exact: true });
+    return queryClient.fetchQuery<User | null>({
+      queryKey: ME_KEY,
+      queryFn: readMe,
+      retry: false,
+      staleTime: 0,
+      gcTime: Infinity,
+    });
+  }, [queryClient, readMe]);
+
   const logout = useCallback(
     async (kind: LogoutKind, owner: Appearance | null = null) => {
       // Started here, in the caller's click: the appearance is taken and the
@@ -411,8 +444,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       appearance,
       login,
       logout,
+      rereadSession,
     }),
-    [meQuery.data, meQuery.isLoading, meQuery.isSuccess, appearance, login, logout],
+    [meQuery.data, meQuery.isLoading, meQuery.isSuccess, appearance, login, logout, rereadSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

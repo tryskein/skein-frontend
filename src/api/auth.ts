@@ -329,11 +329,12 @@ export async function checkSessionApi(): Promise<SessionCheck> {
 /**
  * GET /api/auth/me. Returns null when the user is not authenticated
  * instead of throwing — the AuthProvider keeps `null` as a stable
- * "logged out" state.
+ * "logged out" state. `signal` aborts the request: the query that reads
+ * `/me` passes its own, so a cancelled read does not keep running.
  */
-export async function meApi(): Promise<User | null> {
+export async function meApi(signal?: AbortSignal): Promise<User | null> {
   try {
-    return await apiJson<User>('/api/auth/me');
+    return await apiJson<User>('/api/auth/me', { signal });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return null;

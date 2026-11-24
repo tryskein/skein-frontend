@@ -18,7 +18,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { MantineProvider } from '@mantine/core';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ApiError, BusinessError } from '../api/client';
 import type { RuntimeAuthConfig } from '../api/auth';
 import i18n from '../i18n/config';
@@ -275,20 +274,16 @@ describe('row 253 — "Forgot password?" follows the mail switch', () => {
     expect(forgotLink()).toBeNull();
   });
 
-  // The reset page re-reads the session through the query client after a
-  // completed reset, so the routes render inside one, as in the app.
   function renderRoute(path: string) {
     return render(
       <MantineProvider>
-        <QueryClientProvider client={new QueryClient()}>
-          <MemoryRouter initialEntries={[path]}>
-            <Routes>
-              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-              <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
-              <Route path="/login" element={<div data-testid="login-route" />} />
-            </Routes>
-          </MemoryRouter>
-        </QueryClientProvider>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+            <Route path="/login" element={<div data-testid="login-route" />} />
+          </Routes>
+        </MemoryRouter>
       </MantineProvider>,
     );
   }
