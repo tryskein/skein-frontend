@@ -121,7 +121,7 @@ export const ru = {
       passwordLabel: 'Новый пароль',
       submit: 'Сохранить',
       submitting: 'Сохраняем…',
-      done: 'Пароль изменён. Войдите с новым паролем.',
+      done: 'Пароль изменён.',
       requestNew: 'Запросить новую ссылку',
       openApp: 'Открыть Skein',
     },

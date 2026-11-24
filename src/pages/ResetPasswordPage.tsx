@@ -2,8 +2,9 @@ import { FormEvent, useState } from 'react';
 import { Button, PasswordInput, Stack } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useParams } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { AccountErrorCode, completePasswordReset } from '../api/auth';
-import { useAuth } from '../auth/AuthContext';
+import { ME_KEY, useAuth } from '../auth/AuthContext';
 import { useAuthConfig } from '../lib/useAuthConfig';
 import { MailOffNote } from './ForgotPasswordPage';
 import {
@@ -25,11 +26,12 @@ import {
  * `api/auth.ts#completePasswordReset`): every session of the account ends,
  * API keys keep working, the cookie this browser sent is revoked whoever it
  * belonged to, and the 204 sets a cookie of the owner's new session, whatever
- * cookie came in. Success shows `reset.done`; the link under it is chosen
- * from the current auth context (`useAuth().user`: open the app if someone is
- * signed in, otherwise sign in). Reset completion does not refresh that
- * context, so the link follows the session known before the submit, not the
- * session the 204 issued. A dead link ("Link expired") offers a new one.
+ * cookie came in. So after the 204 the page re-reads «who is signed in?»
+ * (`ME_KEY`) before it shows `reset.done`, and the link under it is chosen
+ * from the refreshed auth context (`useAuth().user`): open the app for the
+ * owner the 204 signed in. When that re-read names nobody or fails, the link
+ * offers to sign in; `reset.done` only says that the password has changed, so
+ * it is true either way. A dead link ("Link expired") offers a new one.
  *
  * Leaving is a document load (see `InvitePage.tsx`): this document carries
  * the token pages' headers.
@@ -38,6 +40,7 @@ export function ResetPasswordPage() {
   const { t } = useTranslation('auth');
   const { token = '' } = useParams<{ token: string }>();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const config = useAuthConfig();
   useNoReferrer();
   const [password, setPassword] = useState('');
@@ -82,6 +85,11 @@ export function ResetPasswordPage() {
     setSubmitting(true);
     try {
       await completePasswordReset(token, password);
+      // The 204 set the cookie of the owner's new session: read whose it is,
+      // so the link below follows that session and not the one known before
+      // the submit. A failed re-read does not throw; the context keeps its
+      // previous answer.
+      await queryClient.refetchQueries({ queryKey: ME_KEY, exact: true });
       setState('done');
     } catch (err) {
       const code = refusalCode(err);

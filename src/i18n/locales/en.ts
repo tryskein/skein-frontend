@@ -156,7 +156,7 @@ export const en = {
       passwordLabel: 'New password',
       submit: 'Save',
       submitting: 'Saving…',
-      done: 'The password has been changed. Sign in with the new password.',
+      done: 'The password has been changed.',
       requestNew: 'Request a new link',
       openApp: 'Open Skein',
     },
