@@ -1020,6 +1020,13 @@ const KanbanCard = memo(function KanbanCard({
       // sk-551.4 — where focus returns when this issue's pane closes
       // (`Shell.tsx#restoreFocusAfterPane`). Not on the drag ghost.
       data-issue-id={overlay ? undefined : item.id}
+      // The card opens its task in Details, and the selected card is the
+      // task Details is showing: the current item of the board, as on the
+      // list's `TaskCard`. Not a toggle (a second press does not deselect,
+      // so no `aria-pressed`) and not an option (the board is no listbox
+      // or grid, and `aria-selected` is not allowed on a button). On a
+      // multi-value axis every copy of the open task is current.
+      aria-current={selected ? 'true' : undefined}
       onClick={() => onSelect(item)}
     >
       <span className="kanban-card-title" title={item.title}>

@@ -415,6 +415,21 @@ describe('KanbanBoard — a card is a task you can open', () => {
     const card = screen.getByRole('button', { name: /Open issue a/ });
     expect(within(card).getByText('blocked')).toBeTruthy();
   });
+
+  // sk-1085 — the card of the task open in Details says so to assistive
+  // tech, not only by its paint: it is the current item of the board.
+  test('the card of the task open in Details is the current one, and only it', () => {
+    renderBoard({ items: [issue({ id: 'a' }), issue({ id: 'b' })], selectedIssueId: 'b' });
+    expect(screen.getByRole('button', { name: /Open issue b/, current: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Open issue a/, current: false })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Open issue a/, current: true })).toBeNull();
+  });
+
+  test('with nothing open in Details no card is current', () => {
+    renderBoard({ items: [issue({ id: 'a' })], selectedIssueId: null });
+    expect(screen.getByRole('button', { name: /Open issue a/, current: false })).toBeTruthy();
+    expect(screen.queryByRole('button', { current: true })).toBeNull();
+  });
 });
 
 describe('KanbanBoard — paging', () => {
