@@ -83,7 +83,7 @@ not change the nginx port (see `docs/env-reference.md`).
 | e2e | enabled, manual only | Playwright + Chromium against a live stack of the three images plus Postgres, Redis, NATS and Garage (S3), no mocks. One suite for the whole product | from the top of `skein/`: `./scripts/e2e-test.sh` | `./scripts/e2e-test.sh -- -g '<test title pattern>'` | `browser/e2e/**/*.spec.ts`, seeding `browser/e2e/support/liveApi.ts`, stack `skein/docker-compose.e2e.yml` |
 | smoke (image contract) | not used | — | — | — | — |
 | mutation | enabled, advisory | StrykerJS. The output is the list of surviving mutants, not a score | `npm run test:mutation` (fixed `mutate` slice of the config) | changed lines only, see "Project specifics" | `stryker.config.mjs`, reports in `reports/mutation/` |
-| source-reading checks | not used | none are added; existing ones are kept as they are | — | — | — |
+| source-reading checks | allowed for one case only: en/ru dictionary parity in src/i18n/i18n.test.tsx; no others are added | — | — | — | — |
 | artifact contract | not used | — | — | — | — |
 
 ### Running on the test VMs (progon)

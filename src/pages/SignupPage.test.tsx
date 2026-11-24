@@ -35,6 +35,10 @@ const api = vi.hoisted(() => ({
     createdAt: null, lastLoginAt: null,
   })),
   confirmEmail: vi.fn(async (_token: string) => undefined),
+  signupByInvitation: vi.fn(async (_token: string, _input: unknown) => ({
+    id: 'u-inv', email: 'guest@client.io', username: 'guest', name: '', role: 'user',
+    createdAt: null, lastLoginAt: null, space: { id: 'sp1', slug: 'acme', name: 'Acme' },
+  })),
 }));
 
 vi.mock('../auth/AuthContext', async (importOriginal) => {
@@ -53,6 +57,7 @@ vi.mock('../api/auth', async (importOriginal) => {
     getAuthConfig: async () => world.config,
     signupApi: api.signupApi,
     confirmEmail: api.confirmEmail,
+    getUsernameSuggestions: async () => ({ suggestions: ['guest'] }),
   };
 });
 vi.mock('../api/invitations', async (importOriginal) => {
@@ -62,10 +67,15 @@ vi.mock('../api/invitations', async (importOriginal) => {
     getInvitationPreview: async () => ({
       status: 'invalid', space: null, inviterUsername: null, email: null, hasAccount: null,
     }),
+    signupByInvitation: api.signupByInvitation,
   };
 });
 
 import App from '../App';
+import type { RuntimeAuthConfig } from '../api/auth';
+import { ME_KEY } from '../auth/AuthContext';
+import { SignupForm, type SignupInvitation } from './SignupPage';
+import { ruOnly } from '../test/ruText';
 
 function config(over: Record<string, unknown> = {}) {
   return {
@@ -251,5 +261,83 @@ describe('row 252 — the consent checkbox is required', () => {
     fireEvent.click(signupButton());
     await waitFor(() => expect(api.signupApi).toHaveBeenCalledTimes(1));
     expect(api.signupApi.mock.calls[0][0]).toMatchObject({ termsAccepted: true });
+  });
+});
+
+// ─────────────────────────── The answer of a successful registration ───────────────────────────
+
+/**
+ * What a successful answer does (the docblocks of `SignupPage` and
+ * `SignupForm`): an open registration makes the answered user the session's
+ * user — the `ME_KEY` slot every `useAuth` reads — and reports the account
+ * as signed up; `SignupPage` turns that report into the app at `/`. A
+ * registration by invitation reports the answer and leaves the session to
+ * the document load of `InvitePage`, so it does not write `ME_KEY`.
+ */
+describe('a successful registration', () => {
+  function renderForm(invitation?: SignupInvitation) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const onSignedUp = vi.fn();
+    render(
+      <MantineProvider>
+        <QueryClientProvider client={qc}>
+          <MemoryRouter>
+            <SignupForm config={{ ...config(), authMode: 'local' } as RuntimeAuthConfig} invitation={invitation} onSignedUp={onSignedUp} />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </MantineProvider>,
+    );
+    return { qc, onSignedUp };
+  }
+
+  test('open registration: the answered user becomes the session and the account is reported signed up', async () => {
+    const { qc, onSignedUp } = renderForm();
+    fillForm();
+    fireEvent.click(consentBox());
+    fireEvent.click(signupButton());
+
+    await waitFor(() => expect(onSignedUp).toHaveBeenCalledTimes(1));
+    const answered = await api.signupApi.mock.results[0].value;
+    expect(onSignedUp).toHaveBeenCalledWith(answered);
+    expect(qc.getQueryData(ME_KEY)).toEqual({
+      id: 'u-new', email: 'dev@client.io', username: 'dev', name: '', role: 'user',
+      createdAt: null, lastLoginAt: null,
+    });
+  });
+
+  test('registration by invitation: the answer is reported and the session is left to the page load', async () => {
+    const { qc, onSignedUp } = renderForm({
+      token: 'tok-9',
+      email: 'guest@client.io',
+      space: { id: 'sp1', slug: 'acme', name: 'Acme' },
+    });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('textbox', { name: new RegExp(`^${t('auth:signup.usernameLabel')}`) }) as HTMLInputElement).value,
+      ).toBe('guest'),
+    );
+    fireEvent.change(screen.getByLabelText(new RegExp(`^${t('auth:signup.passwordLabel')}`)), {
+      target: { value: 'correct horse battery' },
+    });
+    fireEvent.click(consentBox());
+    fireEvent.click(screen.getByRole('button', { name: t('auth:invite.signupSubmit', { name: 'Acme' }) }));
+
+    await waitFor(() => expect(onSignedUp).toHaveBeenCalledTimes(1));
+    expect(api.signupByInvitation).toHaveBeenCalledWith('tok-9', expect.objectContaining({ username: 'guest' }));
+    expect(onSignedUp.mock.calls[0][0]).toMatchObject({ id: 'u-inv', space: { slug: 'acme' } });
+    expect(qc.getQueryData(ME_KEY)).toBeUndefined();
+  });
+});
+
+/**
+ * sk-1048.74 — with Russian selected this surface shows the Russian text of
+ * its dictionary section, not the English fallback: a section emptied in
+ * `ru.ts` would quietly fall back to English and pass every English test.
+ */
+describe('the Russian signup page (auth, account)', () => {
+  test('the email field and the consent are in Russian', async () => {
+    await openSignup();
+    expect(screen.getByRole('textbox', { name: new RegExp(`^${ruOnly('auth', 'emailLabel')}`) })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: ruOnly('account', 'consent').replace(/<\/?[a-z]+>/g, '') })).toBeTruthy();
   });
 });

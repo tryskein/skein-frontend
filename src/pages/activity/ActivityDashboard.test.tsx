@@ -126,6 +126,7 @@ import {
   _resetDashboardBusForTests,
 } from '../../lib/dashboardEventBus';
 import { resetAfterAccessLoss } from '../../lib/accessLoss';
+import { ruOnly } from '../../test/ruText';
 
 const mockedScoring = vi.mocked(getDashboardScoring);
 const mockedFeed = vi.mocked(getDashboardFeed);
@@ -2004,6 +2005,23 @@ describe('ActivityDashboard — live declaration', () => {
 // the owner's «API» label next to its name — in the throughput matrix header
 // and in the axis legend.
 describe('ActivityDashboard — sk-878.3.1 the directed axis is labelled API', () => {
+  test('sk-1048.74 — in Russian the legend explains API in Russian (dashboard)', async () => {
+    await i18n.changeLanguage('ru');
+    try {
+      mockedScoring.mockResolvedValue(scoring());
+      mockedFeed.mockResolvedValue(feedSample());
+      render(
+        <Wrap>
+          <ActivityDashboard />
+        </Wrap>,
+      );
+      const legends = await screen.findAllByRole('complementary', { name: 'Axis legend' });
+      for (const legend of legends) expect(legend.textContent).toContain(ruOnly('dashboard', 'axis.apiLegend'));
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
   test('the directed column and the legend name API', async () => {
     mockedScoring.mockResolvedValue(scoring());
     mockedFeed.mockResolvedValue(feedSample());

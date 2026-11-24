@@ -96,6 +96,7 @@ import i18n, { DEFAULT_LANGUAGE } from '../../../i18n/config';
 import { NewNotificationsPage } from './NotificationsPage';
 import type { ReasonPrefs } from '../../../api/notification-reasons';
 import type { ReviewPrefs } from '../../../api/review-prefs';
+import { ruOnly } from '../../../test/ruText';
 
 function Wrap({ children }: { children: ReactNode }) {
   const qc = new QueryClient({
@@ -418,6 +419,53 @@ describe('NotificationsPage — reason × channel form', () => {
  * whole suite green. Both are properties of the page, so they are pinned
  * here.
  */
+/**
+ * sk-1048.78 — in Russian every reason × channel switch is named by both
+ * halves: the reason (the server's label) and the channel (the Russian
+ * channel word). Two switches of different reasons and channels therefore
+ * answer to different names.
+ */
+describe('NotificationsPage — the switches in Russian', () => {
+  afterEach(async () => {
+    if (i18n.language !== DEFAULT_LANGUAGE) await i18n.changeLanguage(DEFAULT_LANGUAGE);
+  });
+
+  test('each switch is named by its reason and its own channel', async () => {
+    // One reason with both channels, set differently, so the two switches of
+    // the reason can only be told apart by the channel in their names.
+    getReasonPrefsSpy.mockResolvedValue({
+      ...PREFS,
+      reasons: [{
+        key: 'mention',
+        label: 'Mention',
+        hint: 'someone wrote @me',
+        feed: { applicable: true, audience: 'mentioned', enabled: false },
+        push: { applicable: true, audience: 'mentioned', enabled: true },
+      }],
+    });
+    await i18n.changeLanguage('ru');
+    render(<Wrap><NewNotificationsPage /></Wrap>);
+    await waitFor(() => expect(screen.getByText('Mention')).toBeTruthy());
+
+    const feedWord = ruOnly('notifications', 'reasons.channels.feed');
+    // «Push» is the same word in both languages: read from the Russian
+    // dictionary, without the «differs from English» check.
+    const pushWord = i18n.getFixedT('ru', 'notifications')('reasons.channels.push') as string;
+    const switches = screen.getAllByRole('switch').filter((el) =>
+      (el.getAttribute('aria-label') ?? '').includes('Mention'),
+    );
+    expect(switches).toHaveLength(2);
+    const byChannel = (word: string) => {
+      const found = switches.filter((el) => (el.getAttribute('aria-label') ?? '').includes(word));
+      expect(found, word).toHaveLength(1);
+      return found[0] as HTMLInputElement;
+    };
+    expect(byChannel(feedWord).checked).toBe(false);
+    expect(byChannel(pushWord).checked).toBe(true);
+    expect(byChannel(feedWord)).not.toBe(byChannel(pushWord));
+  });
+});
+
 describe('the review panel is on the page, and it is not inside the reason form', () => {
   const reviewSave = () =>
     screen.getByRole('button', { name: 'Save review settings' });

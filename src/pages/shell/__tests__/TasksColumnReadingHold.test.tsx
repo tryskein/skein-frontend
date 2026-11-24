@@ -18,14 +18,15 @@
  * when a shorter list is shown at a clamped offset.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import * as signalr from '@microsoft/signalr';
 import i18n from '../../../i18n/config';
 
 import type { FetchIssueTreeArgs, IssueSummary, IssueTreeResponse, ListIssuesParams, ListIssuesResult } from '../../../api/issues';
+import { lookupIdBatch, type SearchItem } from '../../../api/search';
 
 const P = 'proj-uuid-1';
 
@@ -233,11 +234,19 @@ function UiState() {
   return null;
 }
 
+/** The path the router is on — read by the pasted-codes cases. */
+let shownPath = '';
+function PathProbe() {
+  shownPath = useLocation().pathname;
+  return null;
+}
+
 function column(path: string, budilnikMode = false) {
   return (
     <MantineProvider forceColorScheme="light">
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={[path]}>
+          <PathProbe />
           <LiveEventsProvider>
             <Routes>
               {['/projects/:alias', '/'].map((p) => (
@@ -1207,5 +1216,156 @@ describe('sk-763 — the Tasks column applies the updates of a held list', () =>
     calls = [];
     await returnToTab();
     expect(calls).toEqual([undefined]);
+  });
+});
+
+/**
+ * sk-1048.67 — what the column shows for pasted codes (sk-47.2,
+ * `BlobCodesResult`): a paste with issue codes replaces the board with the
+ * count of the codes taken, how many of them were found and not found, one
+ * chip per code in paste order — a found one opens its issue, a not-found one
+ * says so — and a card per found issue. While the codes resolve, when none
+ * resolves and when the lookup fails, the panel says that instead.
+ *
+ * The stand is the real column with the real `useBlobMode`; the batch lookup
+ * (`lookupIdBatch`) answers as the server would: only the found, visible rows.
+ */
+describe('sk-1048.67 — the result of pasted codes', () => {
+  const found = (id: string, title: string): SearchItem => ({
+    kind: 'issue', id, projectId: P, projectName: 'Demo', title, snippet: '', score: 1, exactMatch: true,
+    status: 'open', priority: 2, type: 'task', pinned: false, assignee: null, updatedAt: ts(1),
+  });
+  const tt = (key: string, opts: Record<string, unknown> = {}) => i18n.t(`tasks:${key}`, opts) as string;
+
+  beforeEach(() => {
+    vi.mocked(lookupIdBatch).mockReset();
+    vi.mocked(lookupIdBatch).mockResolvedValue({ items: [] } as Awaited<ReturnType<typeof lookupIdBatch>>);
+  });
+
+  /** Pastes into the search box; answers whether the paste was left to the box (not taken). */
+  async function pasteInto(text: string): Promise<boolean> {
+    server(1, 3);
+    serve();
+    await act(async () => { render(column('/projects/demo')); });
+    await advance(500);
+    const search = screen.getByRole('textbox', { name: /search/i });
+    let leftToTheBox = true;
+    await act(async () => {
+      leftToTheBox = fireEvent.paste(search, { clipboardData: { getData: () => text } });
+    });
+    await advance(300);
+    return leftToTheBox;
+  }
+
+  /** The found issues' cards, by their accessible names, in screen order. */
+  const shownCards = (expected: Array<[string, string]>) => {
+    const named = expected.map(([id, title]) =>
+      screen.queryByRole('button', { name: i18n.t('tasks:card.openIssue', { id, title }) as string }),
+    );
+    return named.filter((el): el is HTMLElement => el !== null)
+      .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+      .map((el) => el.getAttribute('aria-label'));
+  };
+
+  const chips = () =>
+    within(screen.getByRole('list', { name: tt('blob.chipsAria') })).getAllByRole('listitem')
+      .map((el) => [el.tagName, el.getAttribute('aria-label')]);
+
+  test('found and not-found codes: the counts, the chips in paste order and the found cards', async () => {
+    vi.mocked(lookupIdBatch).mockResolvedValueOnce({
+      items: [found('demo-1', 'Refund total'), found('demo-9', 'Invoice layout')],
+    } as Awaited<ReturnType<typeof lookupIdBatch>>);
+
+    await pasteInto('see demo-9, demo-5 and demo-1 please');
+
+    // Every pasted code is asked for once; the order of the request is the cache's business.
+    expect([...vi.mocked(lookupIdBatch).mock.lastCall![0]].sort()).toEqual(['demo-1', 'demo-5', 'demo-9']);
+    expect(screen.getByText(tt('blob.extracted', { count: 3 }))).toBeTruthy();
+    expect(screen.getByText(tt('blob.foundSummary', { found: 2, notFound: 1 }))).toBeTruthy();
+    expect(chips()).toEqual([
+      ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-9', title: 'Invoice layout' })],
+      ['SPAN', tt('blob.notFoundAria', { code: 'demo-5' })],
+      ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
+    ]);
+    // The cards of the found issues, in paste order.
+    expect(shownCards([['demo-1', 'Refund total'], ['demo-9', 'Invoice layout']])).toEqual([
+      i18n.t('tasks:card.openIssue', { id: 'demo-9', title: 'Invoice layout' }),
+      i18n.t('tasks:card.openIssue', { id: 'demo-1', title: 'Refund total' }),
+    ]);
+  });
+
+  test('every code found: the count, and no not-found summary', async () => {
+    vi.mocked(lookupIdBatch).mockResolvedValueOnce({
+      items: [found('demo-1', 'Refund total'), found('demo-2', '')],
+    } as Awaited<ReturnType<typeof lookupIdBatch>>);
+
+    await pasteInto('demo-1 demo-2');
+
+    expect(screen.getByText(tt('blob.extracted', { count: 2 }))).toBeTruthy();
+    // A found issue without a title is still named by its code.
+    expect(chips()).toEqual([
+      ['BUTTON', tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' })],
+      ['BUTTON', tt('blob.openChip', { code: 'demo-2' })],
+    ]);
+    expect(screen.queryByText(tt('blob.foundSummary', { found: 2, notFound: 0 }))).toBeNull();
+    expect(shownCards([['demo-1', 'Refund total']])).toHaveLength(1);
+    // The untitled issue's card: its name is the open-issue phrase with an
+    // empty title, which the accessible-name computation trims.
+    const untitled = (i18n.t('tasks:card.openIssue', { id: 'demo-2', title: '' }) as string).trim();
+    expect(screen.getByRole('button', { name: untitled })).toBeTruthy();
+  });
+
+  test('no code resolves: every chip is not found and the panel says none matched', async () => {
+    vi.mocked(lookupIdBatch).mockResolvedValueOnce({ items: [] } as Awaited<ReturnType<typeof lookupIdBatch>>);
+
+    await pasteInto('demo-7 demo-8');
+
+    expect(screen.getByText(tt('blob.foundSummary', { found: 0, notFound: 2 }))).toBeTruthy();
+    expect(chips().map(([tag]) => tag)).toEqual(['SPAN', 'SPAN']);
+    expect(screen.getByText(tt('blob.emptyNoMatches'))).toBeTruthy();
+    expect(shownCards([['demo-7', 'title demo-7'], ['demo-8', 'title demo-8']])).toEqual([]);
+  });
+
+  test('while the codes resolve the panel says so', async () => {
+    vi.mocked(lookupIdBatch).mockImplementationOnce(() => new Promise(() => {}));
+
+    await pasteInto('demo-1 demo-2');
+
+    expect(screen.getByText(tt('blob.resolving'))).toBeTruthy();
+    expect(screen.getByText(tt('blob.extracted', { count: 2 }))).toBeTruthy();
+  });
+
+  test('a failed lookup is said, not shown as «none matched»', async () => {
+    vi.mocked(lookupIdBatch).mockRejectedValueOnce(new Error('network down'));
+
+    await pasteInto('demo-1 demo-2');
+
+    expect(screen.getByText(tt('blob.resolveFailed'))).toBeTruthy();
+    expect(screen.queryByText(tt('blob.emptyNoMatches'))).toBeNull();
+  });
+
+  test('a paste without codes leaves the board and opens no panel', async () => {
+    const leftToTheBox = await pasteInto('nothing to see here');
+
+    // The paste is the browser's to put into the box: nothing took it.
+    expect(leftToTheBox).toBe(true);
+    expect(screen.queryByRole('list', { name: tt('blob.chipsAria') })).toBeNull();
+    expect(vi.mocked(lookupIdBatch)).not.toHaveBeenCalled();
+    // The board is still there with its own tasks.
+    expect(screen.getByText('title demo-1')).toBeTruthy();
+  });
+  test('a found chip opens its issue; a not-found one is not a control', async () => {
+    vi.mocked(lookupIdBatch).mockResolvedValueOnce({
+      items: [found('demo-1', 'Refund total')],
+    } as Awaited<ReturnType<typeof lookupIdBatch>>);
+    await pasteInto('demo-1 demo-5');
+    const list = within(screen.getByRole('list', { name: tt('blob.chipsAria') }));
+    expect(list.getByRole('listitem', { name: tt('blob.notFoundAria', { code: 'demo-5' }) }).tagName).toBe('SPAN');
+
+    await act(async () => {
+      fireEvent.click(list.getByRole('listitem', { name: tt('blob.openChipWithTitle', { code: 'demo-1', title: 'Refund total' }) }));
+    });
+
+    expect(shownPath).toBe('/issues/demo-1');
   });
 });

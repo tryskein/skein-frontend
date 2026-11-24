@@ -164,6 +164,44 @@ describe('sk-285.2.19 (step 4) — the order INSIDE each parent', () => {
     ]);
   });
 
+  test('«priority-updated» orders siblings P0 first, then the freshest first — and its reverse mirrors that', () => {
+    // Its own fixture: a priority that disagrees with the dates (the P1
+    // root is older than the P2 one, so priority must win), and siblings
+    // of one priority with three different dates (so the date must
+    // decide among them).
+    const rows: DfsRow[] = [
+      dfs(0, 'root-a', { priority: 2, updatedAt: '2026-03-01T00:00:00Z' }),
+      dfs(1, 'root-a.1', { priority: 3, updatedAt: '2026-01-01T00:00:00Z' }),
+      dfs(1, 'root-a.2', { priority: 1, updatedAt: '2026-01-02T00:00:00Z' }),
+      dfs(0, 'root-b', { priority: 1, updatedAt: '2026-01-01T00:00:00Z' }),
+      dfs(1, 'root-b.1', { priority: 2, updatedAt: '2026-01-10T00:00:00Z' }),
+      dfs(1, 'root-b.2', { priority: 2, updatedAt: '2026-03-10T00:00:00Z' }),
+      dfs(1, 'root-b.3', { priority: 0, updatedAt: '2026-01-05T00:00:00Z' }),
+      dfs(1, 'root-b.4', { priority: 2, updatedAt: '2026-02-10T00:00:00Z' }),
+    ];
+
+    expect(ids(sortDfsBlocks(rows, compareIssuesBy('priority-updated', 'asc')))).toEqual([
+      'root-b', // P1 before P2, although root-a is the fresher one
+      'root-b.3', // P0 first
+      'root-b.2', // then the P2 siblings, freshest first: Mar,
+      'root-b.4', // Feb,
+      'root-b.1', // Jan
+      'root-a',
+      'root-a.2', // P1 before P3
+      'root-a.1',
+    ]);
+    expect(ids(sortDfsBlocks(rows, compareIssuesBy('priority-updated', 'desc')))).toEqual([
+      'root-a',
+      'root-a.1',
+      'root-a.2',
+      'root-b',
+      'root-b.1',
+      'root-b.4',
+      'root-b.2',
+      'root-b.3',
+    ]);
+  });
+
   test('reversing a key mirrors it — tiebreaker included', () => {
     const asc = ids(sortDfsBlocks(TREE, compareIssuesBy('id', 'asc')));
     const desc = ids(sortDfsBlocks(TREE, compareIssuesBy('id', 'desc')));

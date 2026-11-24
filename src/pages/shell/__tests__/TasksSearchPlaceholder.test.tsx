@@ -34,6 +34,7 @@ import { vi } from 'vitest';
 
 import { TaskFilters, type TaskFiltersProps } from '../TaskFilters';
 import i18n, { DEFAULT_LANGUAGE } from '../../../i18n/config';
+import { ruOnly } from '../../../test/ruText';
 
 /** The maintainers' sentence, sk-407. Repaired typo: «Поис» → «Поиск» ("Searc" → "Search"). */
 const RU_PLACEHOLDER = 'Поиск по тексту или коду задачи';
@@ -128,5 +129,38 @@ describe('sk-407 — the Tasks search placeholder', () => {
     const en = placeholderOf().toLowerCase();
     expect(en, 'the English placeholder must name the task text').toMatch(/text/);
     expect(en, 'the English placeholder must name the task code').toMatch(/code/);
+  });
+});
+
+/**
+ * sk-1048.76 — the Russian panel is found by its Russian accessible names.
+ * A field's NAME is what a screen reader announces and what a speech-input
+ * user says; the placeholder is a hint that disappears on typing, so an
+ * empty name with a filled placeholder is a nameless field.
+ */
+describe('the Russian filter panel by accessible name', () => {
+  test('search, status and assignee answer to their Russian names', async () => {
+    await act(async () => {
+      await i18n.changeLanguage('ru');
+    });
+    render(
+      <MantineProvider>
+        <TaskFilters
+          {...props()}
+          collapsed={false}
+          showAssigneeRow
+          assigneeOptions={[{ username: 'oleg', label: 'Oleg' }]}
+        />
+      </MantineProvider>,
+    );
+
+    const search = screen.getByRole('textbox', { name: ruOnly('filters', 'searchAria') }) as HTMLInputElement;
+    // The exact sentence is the sk-407 case above; here the placeholder is
+    // the Russian dictionary's, not the English fallback.
+    expect(search.placeholder).toBe(ruOnly('filters', 'searchPlaceholder'));
+    // The name is not the placeholder: both are announced, for different things.
+    expect(search.getAttribute('aria-label')).not.toBe(search.placeholder);
+    expect(screen.getByRole('textbox', { name: ruOnly('filters', 'labels.status') })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: ruOnly('filters', 'labels.assignee') })).toBeTruthy();
   });
 });

@@ -60,6 +60,8 @@ import type { IssueDetail } from '../../../api/issues';
 import { BusinessError } from '../../../api/client';
 import { LayoutProvider } from '../../../lib/useLayoutState';
 import { DetailsHeader } from './DetailsHeader';
+import i18n from '../../../i18n/config';
+import { ruOnly } from '../../../test/ruText';
 
 function Wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({
@@ -889,5 +891,64 @@ describe('DetailsHeader — sk-489 close outcome (row 57)', () => {
     expect(
       screen.getByRole('button', { name: /currently invented_by_a_newer_server/i }),
     ).toBeTruthy();
+  });
+});
+
+/**
+ * sk-1048.77 — the card header in Russian: the priority and the status
+ * controls answer to Russian accessible names that carry the issue's actual
+ * priority and status, and a status blocked by dependencies says so.
+ */
+describe('DetailsHeader — Russian accessible names', () => {
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  test.each([
+    ['in progress', { ...makeIssue({ status: 'in_progress' }), priority: 1 }, 'header.statusAria'],
+    ['blocked', { ...makeIssue({ status: 'open', isBlocked: true }), priority: 3 }, 'header.statusAriaBlocked'],
+  ])('%s', async (_case, issue, statusKey) => {
+    const priorityName = ruOnly('details', 'header.priorityAria', { priority: issue.priority });
+    const statusName = ruOnly('details', statusKey, { status: issue.status });
+    expect(priorityName).toContain(`P${issue.priority}`);
+    expect(statusName).toContain(issue.status);
+    await i18n.changeLanguage('ru');
+    render(
+      <Wrapper>
+        <DetailsHeader issue={issue as IssueDetail} isWatching={false} watchToggling={false} {...noopHandlers} />
+      </Wrapper>,
+    );
+
+    expect(screen.getByRole('button', { name: priorityName })).toBeTruthy();
+    expect(screen.getByRole('button', { name: statusName })).toBeTruthy();
+  });
+
+  test('the same status says whether it is blocked', async () => {
+    await i18n.changeLanguage('ru');
+    const statusNameOf = (isBlocked: boolean) => {
+      const { unmount } = render(
+        <Wrapper>
+          <DetailsHeader
+            issue={{ ...makeIssue({ status: 'open', isBlocked }), priority: 2 } as IssueDetail}
+            isWatching={false}
+            watchToggling={false}
+            {...noopHandlers}
+          />
+        </Wrapper>,
+      );
+      const name = screen
+        .getAllByRole('button')
+        .map((b) => b.getAttribute('aria-label') ?? '')
+        .find((label) => label === ruOnly('details', isBlocked ? 'header.statusAriaBlocked' : 'header.statusAria', { status: 'open' }));
+      unmount();
+      return name;
+    };
+
+    const free = statusNameOf(false);
+    const blocked = statusNameOf(true);
+    expect(free).toContain('open');
+    expect(blocked).toContain('open');
+    // Blocked is said: the two names of one status are not the same.
+    expect(blocked).not.toBe(free);
   });
 });

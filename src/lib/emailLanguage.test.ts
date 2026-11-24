@@ -7,6 +7,10 @@ describe('emailLanguage', () => {
   test.each([
     ['ru', 'ru'],
     ['ru-RU', 'ru'],
+    // The language is the part BEFORE the region: Russian spoken in
+    // Ukraine is Russian, English in Russia is English.
+    ['ru-UA', 'ru'],
+    ['en-RU', 'en'],
     ['RU', 'ru'],
     ['en', 'en'],
     ['en-GB', 'en'],
