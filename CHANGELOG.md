@@ -2,6 +2,21 @@
 
 All notable changes to **skein-frontend** (React 19 + Vite + TypeScript + Mantine 7 SPA).
 
+## [2.1.0] - 2026-11-24
+
+- Push notifications belong to the person who turned them on: no silent
+  subscription on sign-in, and logging out turns push off for this device
+  (sk-984.2).
+- Clearer push messages in settings and the banner, and the missing Russian
+  translations (sk-984.2.6.4).
+- The Inbox counter updates right after you accept an issue (sk-1060).
+- Password forms ask for at least 12 characters (sk-977.7.20).
+- The email about a new API key comes in your language (sk-977.7.49).
+
+### Upgrade notes
+
+- Requires skein-api 2.1.0 (sk-984.2).
+
 ## [2.0.0] - 2026-11-22
 
 - API keys page. A key gets explicit permissions (`read`, `write` or `manage`,
