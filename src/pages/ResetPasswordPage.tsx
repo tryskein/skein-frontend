@@ -21,12 +21,14 @@ import {
  * `/reset-password/:token` (screens 2.8, spec US-9), public; the gates of
  * `/forgot-password` (`keycloak` → `/login`, mail off → the honest text).
  *
- * The answer is 204 with no session (lead's decision in sk-674.18: "password
- * reset → 204 without auto sign-in"): every other session of the account ends,
- * API keys keep working, a session of the same account in this browser
- * stays. So success says "Password changed" and offers to sign in — or to
- * open the app for a person still signed in here. A dead link ("Link
- * expired") offers a new one.
+ * The answer is 204 with a NEW session of the link's owner (see
+ * `api/auth.ts#completePasswordReset`): every session of the account ends,
+ * API keys keep working, the cookie this browser sent is revoked whoever it
+ * belonged to, and the 204 sets a cookie of the owner's new session, whatever
+ * cookie came in. Success says "Password changed"; the link under it is
+ * chosen by `user` as loaded before the submit (open the app if someone was
+ * signed in here, otherwise sign in), not by the session the 204 issued. A
+ * dead link ("Link expired") offers a new one.
  *
  * Leaving is a document load (see `InvitePage.tsx`): this document carries
  * the token pages' headers.
