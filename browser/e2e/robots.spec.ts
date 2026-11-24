@@ -16,7 +16,7 @@
 import { expect, test } from '@playwright/test';
 import { runTag } from './support/liveApi';
 
-test.describe('sk-982 — the instance forbids indexing', () => {
+test.describe('sk-982 — the instance serves disallow-all and noindex directives', () => {
   test('/robots.txt is plain UTF-8 text that disallows everything, not the SPA', async ({ request }) => {
     const response = await request.get('/robots.txt');
     expect(response.status()).toBe(200);

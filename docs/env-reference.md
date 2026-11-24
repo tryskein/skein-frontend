@@ -104,13 +104,18 @@ variable is read. To point the proxy somewhere else, edit the file and rebuild.
 
 ## No variable for search indexing
 
-Every instance forbids indexing, in the cloud and self-hosted alike; the image
+Every instance asks crawlers to stay out, in the cloud and self-hosted alike; the image
 is the same and no variable changes it. `/robots.txt` is the file
 `public/robots.txt` (`User-agent: *`, `Disallow: /`), which the image serves
 from `/usr/share/nginx/html/robots.txt` as `text/plain; charset=utf-8`
 (`location = /robots.txt` in `nginx.conf`). Every response of nginx also
 carries `X-Robots-Tag: noindex, nofollow` (both header snippets,
 `nginx-security-headers.conf` and `nginx-token-page-headers.conf`).
+
+A crawler that honours `Disallow: /` never fetches a page, so it never sees the
+`noindex` header either. If other sites link to an instance, a search engine
+may still list its bare URL, without a title or a snippet. Removing such an
+entry needs crawling allowed for a while, so the engine can read `noindex`.
 
 To serve other crawling rules, mount your own file over
 `/usr/share/nginx/html/robots.txt`: a volume in compose, a ConfigMap with
