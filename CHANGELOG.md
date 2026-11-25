@@ -2,6 +2,20 @@
 
 All notable changes to **skein-frontend** (React 19 + Vite + TypeScript + Mantine 7 SPA).
 
+## [2.2.0] - 2026-11-25
+
+- The instance is closed to search engines: `robots.txt` disallows
+  crawling, responses carry `X-Robots-Tag: noindex, nofollow` (sk-982).
+- After a password reset the page offers to open Skein, not to sign in
+  again: the reset already signs you in (sk-1081).
+- Screen readers announce the open task card as current and a found
+  pasted-code chip as a button (sk-1085, sk-1062, sk-1061).
+
+### Upgrade notes
+
+- Indexing is always off. For other rules mount your own `robots.txt`; see
+  `docs/env-reference.md` (sk-982).
+
 ## [2.1.0] - 2026-11-24
 
 - Push notifications belong to the person who turned them on: no silent
